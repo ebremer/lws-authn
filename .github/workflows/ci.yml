@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-integration-test:
+    runs-on: ubuntu-latest   # GitHub-hosted runners include Docker, which the integration test needs
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # `mvn verify` packages the shaded provider JAR, then the Failsafe plugin runs LwsAuthIT,
+      # which deploys that JAR into a real Keycloak 26.7.0 container and exercises every suite.
+      - name: Build and run integration tests
+        run: mvn -B -ntp verify
+
+      - name: Upload provider JAR
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lws-authn-jar
+          path: target/lws-authn-0.1.0.jar

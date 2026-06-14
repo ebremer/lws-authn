@@ -1,0 +1,604 @@
+# Installing Keycloak + the `lws-authn` OpenID Connect provider on Ubuntu
+
+Step-by-step instructions to install [Keycloak](https://www.keycloak.org/) and the **`lws-authn`**
+provider — the LWS OpenID Connect ("lws-oidc") authentication suite — on an Ubuntu server that
+**already has a recent JDK installed**.
+
+The single provider JAR actually ships **all four** LWS 1.0 authentication suites (OpenID Connect,
+self-signed CID, SAML 2.0, self-signed `did:key`). This guide focuses on standing up the **OpenID
+Connect** suite, which mounts at `…/realms/{realm}/lws`; the other endpoints (`lws-ssi-cid`,
+`lws-saml`, `lws-ssi-did-key`) come along in the same JAR at no extra effort.
+
+The result is a Keycloak server running as a hardened `systemd` service behind an HTTPS reverse
+proxy, with the LWS provider registered and verified end-to-end.
+
+---
+
+## Contents
+
+1. [Before you begin](#1-before-you-begin)
+2. [Install system packages](#2-install-system-packages)
+3. [Verify Java](#3-verify-java)
+4. [Create a service account](#4-create-a-service-account)
+5. [Download & install Keycloak](#5-download--install-keycloak)
+6. [Build the `lws-authn` provider](#6-build-the-lws-authn-provider)
+7. [Deploy the provider JAR](#7-deploy-the-provider-jar)
+8. [Smoke test in dev mode](#8-smoke-test-in-dev-mode)
+9. [Configure Keycloak for production](#9-configure-keycloak-for-production)
+10. [Build the optimized image](#10-build-the-optimized-image)
+11. [Run Keycloak as a systemd service](#11-run-keycloak-as-a-systemd-service)
+12. [Terminate TLS with nginx + certbot](#12-terminate-tls-with-nginx--certbot)
+13. [Verify the OpenID Connect suite end-to-end](#13-verify-the-openid-connect-suite-end-to-end)
+14. [Production checklist](#14-production-checklist)
+15. [Troubleshooting](#15-troubleshooting)
+16. [Upgrading & uninstalling](#16-upgrading--uninstalling)
+
+Throughout, replace **`id.example.com`** with your server's public hostname and every
+**`CHANGE_ME…`** with a real secret.
+
+### Version matrix
+
+| Component | Version | Notes |
+|-----------|---------|-------|
+| Keycloak server | **26.7.0** | **Must match** `keycloak.version` in the provider's `pom.xml`. |
+| `lws-authn` provider | **0.1.0** | Produces `lws-authn-0.1.0.jar`. |
+| JDK (Keycloak runtime) | **21** | Keycloak 26.x is built and tested on OpenJDK 21. |
+| JDK (build) | **21+** | Any JDK ≥ 21 builds it; it compiles to Java 21 bytecode. |
+
+```bash
+# Handy shell variables used in the commands below
+export KC_VERSION=26.7.0
+export PROVIDER_VERSION=0.1.0
+export KC_HOSTNAME=id.example.com     # your public hostname
+```
+
+---
+
+## 1. Before you begin
+
+You need:
+
+- An Ubuntu server (22.04 LTS or 24.04 LTS) with `sudo` access.
+- A JDK already installed (this guide assumes so — see [step 3](#3-verify-java)).
+- A public DNS **A/AAAA record** pointing `id.example.com` at the server (required for TLS and so
+  the LWS WebIDs this server mints are publicly dereferenceable).
+- Outbound internet access (to download Keycloak and Maven dependencies).
+
+> **Why the hostname matters for LWS.** The OpenID Connect suite derives each user's WebID and the
+> issuer (`iss`) from Keycloak's front-end URL, e.g.
+> `https://id.example.com/realms/{realm}/lws/cid/{userId}`. A verifier (an LWS/Solid server) fetches
+> that WebID over the network. If the hostname isn't stable and publicly resolvable, tokens minted on
+> one host won't validate when the document is fetched from another. Set it correctly in
+> [step 9](#9-configure-keycloak-for-production).
+
+---
+
+## 2. Install system packages
+
+```bash
+sudo apt update
+sudo apt install -y git maven curl jq unzip
+```
+
+- `git` + `maven` — to clone and build the provider ([step 6](#6-build-the-lws-authn-provider)). Skip
+  these if you build the JAR elsewhere and copy it over.
+- `curl` + `jq` — used by the end-to-end verification ([step 13](#13-verify-the-openid-connect-suite-end-to-end)).
+
+> Installing `maven` from apt may pull in a default JDK as a dependency. That's harmless — it does not
+> change your default `java`, and Maven will use whatever JDK is on `PATH` (confirm with `mvn -v`).
+
+---
+
+## 3. Verify Java
+
+Your server already has a JDK. Confirm it:
+
+```bash
+java -version
+```
+
+- **Building** the provider works on any JDK **21 or newer** (it targets Java 21 bytecode via
+  `maven.compiler.release=21`), so your "latest Java" is fine for the build.
+- **Running Keycloak 26.x** is officially validated on **OpenJDK 21**.
+
+If your latest Java is newer than 21 (e.g. 24/25) and Keycloak later refuses to start or logs an
+unsupported-JVM warning, install OpenJDK 21 **alongside** your existing JDK and pin it for the
+Keycloak service only (this does not touch your system default):
+
+```bash
+sudo apt install -y openjdk-21-jdk
+# Note the path — you'll reference it as JAVA_HOME in the systemd unit (step 11):
+ls -d /usr/lib/jvm/java-21-openjdk-*    # e.g. /usr/lib/jvm/java-21-openjdk-amd64
+```
+
+---
+
+## 4. Create a service account
+
+Run Keycloak under a dedicated, unprivileged system user rather than root:
+
+```bash
+sudo groupadd --system keycloak
+sudo useradd  --system --gid keycloak \
+              --home-dir /opt/keycloak --shell /usr/sbin/nologin keycloak
+```
+
+---
+
+## 5. Download & install Keycloak
+
+Download the distribution that matches the provider's build (`26.7.0`) and unpack it under `/opt`,
+using a version-independent symlink so future upgrades are a one-line switch:
+
+```bash
+cd /tmp
+curl -fL -O "https://github.com/keycloak/keycloak/releases/download/${KC_VERSION}/keycloak-${KC_VERSION}.tar.gz"
+
+sudo tar -xzf "keycloak-${KC_VERSION}.tar.gz" -C /opt
+sudo ln -sfn "/opt/keycloak-${KC_VERSION}" /opt/keycloak
+sudo chown -R keycloak:keycloak "/opt/keycloak-${KC_VERSION}"
+```
+
+> Optional integrity check: the release page publishes a SHA-256; compare it against
+> `sha256sum keycloak-${KC_VERSION}.tar.gz` before unpacking.
+
+`/opt/keycloak` is now `$KC_HOME`. Verify it launches:
+
+```bash
+sudo -u keycloak /opt/keycloak/bin/kc.sh --version
+```
+
+---
+
+## 6. Build the `lws-authn` provider
+
+You need the file **`lws-authn-0.1.0.jar`**. Pick one option.
+
+### Option A — build on the server (recommended, self-contained)
+
+```bash
+git clone https://github.com/ebremer/lws-authn.git /tmp/lws-authn
+cd /tmp/lws-authn
+mvn -v        # confirm Java 21+
+mvn clean package
+```
+
+This produces a single, self-contained provider JAR:
+
+```
+/tmp/lws-authn/target/lws-authn-0.1.0.jar
+```
+
+Apache Jena and its dependencies are shaded in and `commons-codec` is relocated, so the JAR drops
+cleanly onto Keycloak's classpath. `mvn clean package` runs the unit tests but **not** the
+Docker-based integration test (that's bound to `mvn verify`). To skip tests for a faster build, add
+`-DskipTests`.
+
+### Option B — copy a JAR you built elsewhere
+
+If you already ran `mvn clean package` on another machine, copy the artifact over:
+
+```bash
+scp target/lws-authn-0.1.0.jar you@id.example.com:/tmp/
+```
+
+---
+
+## 7. Deploy the provider JAR
+
+Keycloak loads provider JARs from `$KC_HOME/providers/`:
+
+```bash
+sudo cp /tmp/lws-authn/target/lws-authn-${PROVIDER_VERSION}.jar /opt/keycloak/providers/
+sudo chown keycloak:keycloak /opt/keycloak/providers/lws-authn-${PROVIDER_VERSION}.jar
+```
+
+> Adjust the source path if you used Option B (e.g. `/tmp/lws-authn-0.1.0.jar`).
+
+You'll register it with the server via `kc.sh build` in [step 10](#10-build-the-optimized-image)
+(or immediately, in the dev-mode smoke test below).
+
+---
+
+## 8. Smoke test in dev mode
+
+Before layering on a database and TLS, confirm the provider **loads** — this isolates "is the JAR
+installed correctly?" from "is my production config right?". Dev mode uses an in-memory H2 database
+and plain HTTP, so nothing else needs to be configured.
+
+```bash
+sudo -u keycloak env \
+  PATH="/usr/local/bin/graalvm/bin:$PATH" \
+  KC_BOOTSTRAP_ADMIN_USERNAME=admin \
+  KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
+  /opt/keycloak/bin/kc.sh start-dev
+```
+
+On startup Keycloak augments itself with the new JAR. Watch the log for the LWS providers being
+registered — you should see the four realm-resource providers and the protocol mapper:
+
+```
+lws (org.keycloak.services.resource.RealmResourceProviderFactory)
+lws-ssi-cid (org.keycloak.services.resource.RealmResourceProviderFactory)
+lws-saml (org.keycloak.services.resource.RealmResourceProviderFactory)
+lws-ssi-did-key (org.keycloak.services.resource.RealmResourceProviderFactory)
+lws-webid-sub-mapper (org.keycloak.protocol.ProtocolMapper)
+```
+
+From another shell on the server, confirm the OpenID endpoint is mounted (the master realm has no
+users, so a `400`/`404`-style JSON error here is expected and still proves the route is live):
+
+```bash
+curl -s http://localhost:8080/realms/master/lws/verify -d 'credential=x' | head
+```
+
+Stop the dev server with `Ctrl-C`. Now configure it properly.
+
+---
+
+## 9. Configure Keycloak for production
+
+### 9a. Provision a PostgreSQL database
+
+The dev H2 database is not for production. Install PostgreSQL and create a database:
+
+```bash
+sudo apt install -y postgresql
+sudo -u postgres psql -c "CREATE USER keycloak WITH PASSWORD 'CHANGE_ME_DB';"
+sudo -u postgres psql -c "CREATE DATABASE keycloak OWNER keycloak;"
+```
+
+### 9b. Write `keycloak.conf`
+
+Edit `/opt/keycloak/conf/keycloak.conf` (owned by `keycloak`) with the non-secret configuration. The
+database password and other secrets are injected as environment variables in
+[step 11](#11-run-keycloak-as-a-systemd-service), so they never sit in this file.
+
+```properties
+# ---- Database (db vendor is a build-time option) ----
+db=postgres
+db-url=jdbc:postgresql://localhost:5432/keycloak
+db-username=keycloak
+# db-password comes from the KC_DB_PASSWORD environment variable (systemd)
+
+# ---- Hostname (CRITICAL for LWS) ----
+# The provider derives every WebID and the issuer from this URL.
+hostname=https://id.example.com
+
+# ---- Reverse-proxy TLS termination (see step 12) ----
+# Keycloak serves plain HTTP on 8080; nginx terminates HTTPS in front of it.
+proxy-headers=xforwarded
+http-enabled=true
+
+# ---- Health endpoints (build-time option; used by systemd/monitoring) ----
+health-enabled=true
+```
+
+Set ownership and lock down the file:
+
+```bash
+sudo chown keycloak:keycloak /opt/keycloak/conf/keycloak.conf
+sudo chmod 640 /opt/keycloak/conf/keycloak.conf
+```
+
+> **Direct TLS instead of a proxy?** If you'd rather have Keycloak terminate HTTPS itself, drop the
+> two proxy lines and instead point it at a certificate:
+> ```properties
+> https-certificate-file=/etc/keycloak/tls/tls.crt
+> https-certificate-key-file=/etc/keycloak/tls/tls.key
+> ```
+> Keycloak then listens on `:8443`. The reverse-proxy topology in [step 12](#12-terminate-tls-with-nginx--certbot)
+> is the more common choice on Ubuntu and is assumed for the rest of this guide.
+
+### 9c. Plan the SSRF allow-list (important for OpenID `/verify`)
+
+The OpenID verifier dereferences URLs taken from the credential — the subject's WebID (`sub`) and the
+issuer's discovery document. A built-in SSRF guard **blocks any host that resolves to a loopback,
+private, link-local, or otherwise reserved address** (including the `169.254.169.254` cloud-metadata
+endpoint).
+
+Because this Keycloak **hosts its own** controlled identifier documents, its OpenID `/verify`
+dereferences **itself**. That's fine when `id.example.com` resolves to a public IP the server can
+reach. But if the server reaches its own hostname over an internal/loopback address (single-box
+setups, split-horizon DNS, or NAT hairpin problems), the guard will block `/verify` unless you
+allow-list that host.
+
+You opt specific hosts back in with a comma-separated list, via **either**:
+
+- environment variable `LWS_AUTHN_ALLOWED_INTERNAL_HOSTS`, or
+- JVM system property `lws.authn.allowedInternalHosts`.
+
+We wire the environment variable into the systemd unit in the next steps. For a single-box install
+where the server can't reach its own public IP, set it to your hostname (and/or `127.0.0.1`); leave
+it empty otherwise. Residual risks the guard does **not** cover: DNS rebinding and HTTP redirects to
+an internal target.
+
+---
+
+## 10. Build the optimized image
+
+Whenever you add/remove a provider JAR or change a build-time option (`db`, `health-enabled`, …), run
+`kc.sh build`. Do it as the `keycloak` user so it can write into the install directory:
+
+```bash
+sudo -u keycloak /opt/keycloak/bin/kc.sh build
+```
+
+The output re-lists the registered providers — confirm the `lws`, `lws-ssi-cid`, `lws-saml`,
+`lws-ssi-did-key` resources and the `lws-webid-sub-mapper` mapper appear, exactly as in
+[step 8](#8-smoke-test-in-dev-mode).
+
+---
+
+## 11. Run Keycloak as a systemd service
+
+### 11a. Secrets file
+
+Put secrets in a root-only environment file (not in `keycloak.conf`):
+
+```bash
+sudo install -d -m 750 -o keycloak -g keycloak /etc/keycloak
+sudo tee /etc/keycloak/keycloak.env >/dev/null <<'EOF'
+# Database password (maps to db-password)
+KC_DB_PASSWORD=CHANGE_ME_DB
+
+# LWS SSRF allow-list — see step 9c. Leave empty unless the server must
+# dereference its own documents over a loopback/internal address.
+LWS_AUTHN_ALLOWED_INTERNAL_HOSTS=
+
+# First boot ONLY: seed the temporary admin, then comment these out and
+# restart (see step 11c).
+KC_BOOTSTRAP_ADMIN_USERNAME=admin
+KC_BOOTSTRAP_ADMIN_PASSWORD=CHANGE_ME_ADMIN
+EOF
+sudo chmod 600 /etc/keycloak/keycloak.env
+```
+
+> `KC_DB_PASSWORD` is Keycloak's environment-variable form of the `db-password` option (uppercase,
+> `KC_` prefix, dashes → underscores). `LWS_AUTHN_ALLOWED_INTERNAL_HOSTS` is read directly by the
+> provider.
+
+### 11b. Unit file
+
+Create `/etc/systemd/system/keycloak.service`:
+
+```ini
+[Unit]
+Description=Keycloak (with lws-authn LWS provider)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+User=keycloak
+Group=keycloak
+EnvironmentFile=/etc/keycloak/keycloak.env
+# Pin JAVA_HOME ONLY if you installed a dedicated JDK 21 in step 3:
+# Environment=JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+ExecStart=/opt/keycloak/bin/kc.sh start --optimized
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=102400
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`start --optimized` skips the auto-build and boots straight from the image you produced in
+[step 10](#10-build-the-optimized-image) — the correct, fast production start.
+
+### 11c. Start it
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now keycloak
+sudo systemctl status keycloak --no-pager
+sudo journalctl -u keycloak -f          # follow the startup log
+```
+
+Once it's up, log in to the admin console at `https://id.example.com/admin/` (after
+[step 12](#12-terminate-tls-with-nginx--certbot)) with the bootstrap credentials, create a
+**permanent** admin user under the *master* realm, then **remove the two `KC_BOOTSTRAP_ADMIN_*`
+lines** from `/etc/keycloak/keycloak.env` and `sudo systemctl restart keycloak`. The bootstrap
+account is meant to be temporary.
+
+---
+
+## 12. Terminate TLS with nginx + certbot
+
+Run nginx in front of Keycloak to handle HTTPS. Keycloak listens on `127.0.0.1:8080`; nginx serves
+`443` and forwards the `X-Forwarded-*` headers that `proxy-headers=xforwarded` tells Keycloak to
+trust.
+
+```bash
+sudo apt install -y nginx
+```
+
+Create `/etc/nginx/sites-available/keycloak`:
+
+```nginx
+server {
+    listen 80;
+    server_name id.example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+        proxy_set_header X-Forwarded-Port  $server_port;
+    }
+}
+```
+
+Enable it and obtain a certificate (certbot rewrites the block for HTTPS and adds an HTTP→HTTPS
+redirect):
+
+```bash
+sudo ln -s /etc/nginx/sites-available/keycloak /etc/nginx/sites-enabled/keycloak
+sudo nginx -t && sudo systemctl reload nginx
+
+sudo apt install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d id.example.com
+```
+
+Lock the firewall down to the proxy (keep `8080` internal):
+
+```bash
+sudo ufw allow OpenSSH
+sudo ufw allow 'Nginx Full'      # 80 + 443
+sudo ufw enable
+```
+
+Confirm discovery is served over your public hostname:
+
+```bash
+curl -s https://id.example.com/realms/master/.well-known/openid-configuration | jq .issuer
+# -> "https://id.example.com/realms/master"
+```
+
+---
+
+## 13. Verify the OpenID Connect suite end-to-end
+
+This proves the `lws-oidc` suite works: a user's `sub` becomes a dereferenceable WebID, and the
+credential passes the provider's `/verify` endpoint (the same algorithm an LWS server runs).
+
+### Fast path — the bundled demo script
+
+The repo ships a script that idempotently provisions a realm (`lws-demo`), a client (`lws-app`), the
+**LWS WebID Subject** mapper, and a user (`alice`), then obtains an ID Token, dereferences the WebID,
+and runs it through `/verify`:
+
+```bash
+cd /tmp/lws-authn      # your clone from step 6
+KC_URL=https://id.example.com \
+ADMIN_USER=admin ADMIN_PASS=CHANGE_ME_ADMIN \
+bash scripts/lws-demo.sh
+```
+
+A successful run ends with **`valid: true`** and prints the WebID — that is a working LWS identity
+issued by your server.
+
+### Manual path
+
+1. In the admin console, **create realm** `lws-demo`.
+2. **Clients → Create** `lws-app` (OpenID Connect). Enable *Direct access grants* so you can fetch a
+   token by script (turn it off for real apps — use the Authorization Code flow).
+3. **Clients → lws-app → Client scopes → `lws-app-dedicated` → Add mapper → By configuration → LWS
+   WebID Subject.** Leave *WebID user attribute* blank (Keycloak hosts the WebID).
+4. **Users → Create** `alice`; under **Credentials** set a non-temporary password.
+5. Fetch a token and verify:
+
+```bash
+BASE=https://id.example.com/realms/lws-demo
+
+ID_TOKEN=$(curl -s -X POST "$BASE/protocol/openid-connect/token" \
+  -d grant_type=password -d client_id=lws-app -d scope=openid \
+  -d username=alice -d password=CHANGE_ME | jq -r .id_token)
+
+# The sub is a WebID (a fetchable URL), not an opaque UUID:
+echo "$ID_TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq '{sub, iss}'
+
+# Run the full validation (dereference sub -> locate OpenIdProvider service -> OIDC discovery -> verify signature):
+curl -s -X POST "$BASE/lws/verify" --data-urlencode "credential=$ID_TOKEN" | jq
+```
+
+Expect:
+
+```json
+{
+  "valid": true,
+  "subject": "https://id.example.com/realms/lws-demo/lws/cid/…",
+  "issuer":  "https://id.example.com/realms/lws-demo",
+  "checks": {
+    "signingAlgorithmNotNone": true,
+    "subjectDereferenced": true,
+    "openIdProviderServiceLocated": true,
+    "issuerDiscoveryMatches": true,
+    "jwksResolved": true,
+    "signatureValid": true,
+    "notExpired": true
+  }
+}
+```
+
+If `subjectDereferenced` is `false`, the server couldn't fetch its own WebID — revisit the hostname
+([step 9b](#9b-write-keycloakconf)) and the SSRF allow-list ([step 9c](#9c-plan-the-ssrf-allow-list-important-for-openid-verify)).
+
+---
+
+## 14. Production checklist
+
+- **Hostname** — `hostname=https://id.example.com` is set and publicly resolvable, so WebIDs and
+  discovery are stable and dereferenceable.
+- **HTTPS everywhere** — TLS terminated at nginx (or Keycloak directly); HTTP→HTTPS redirect on.
+- **Database** — PostgreSQL, not H2; the DB password lives only in the root-only env file.
+- **Bootstrap admin removed** — a permanent admin exists; `KC_BOOTSTRAP_ADMIN_*` deleted from the env
+  file.
+- **SSRF allow-list** — empty unless the server must dereference its own documents over an internal
+  address, in which case it lists exactly those hosts.
+- **Firewall** — only `22/80/443` exposed; Keycloak's `8080` stays on loopback.
+- **Direct Access Grants off** for real clients (it's on in the demo only to make it scriptable).
+- **Audience** — if your LWS/resource server checks `aud`, add a Keycloak **Audience** mapper or use
+  Resource Indicators (RFC 8707) / Token Exchange (RFC 8693, token type
+  `urn:ietf:params:oauth:token-type:id_token`).
+- **Backups** — back up the PostgreSQL database and `/opt/keycloak/conf/`.
+
+---
+
+## 15. Troubleshooting
+
+| Symptom | Likely cause & fix |
+|---------|--------------------|
+| LWS providers not listed after `kc.sh build` | JAR not in `/opt/keycloak/providers/` or not owned by `keycloak`. Re-copy (step 7) and rebuild (step 10). |
+| Service won't start; JVM/JDK error in the log | "Latest Java" isn't accepted by Keycloak 26. Install OpenJDK 21 (step 3) and set `JAVA_HOME` in the unit (step 11b). |
+| `kc.sh` complains about H2/dev at startup | `start --optimized` ran but a build-time option changed. Re-run `kc.sh build` (step 10), then restart. |
+| WebID / discovery URLs use the wrong host or `http` | `hostname` unset/wrong, or nginx isn't forwarding `X-Forwarded-*`. Fix `keycloak.conf` (step 9b) and the proxy headers (step 12); rebuild if needed. |
+| `/lws/verify` → `subjectDereferenced: false` or a blocked-host error | The server can't reach its own WebID, or the SSRF guard blocked an internal address. Ensure the public hostname is reachable from the box, or set `LWS_AUTHN_ALLOWED_INTERNAL_HOSTS` (step 9c/11a) and restart. |
+| `directAccessGrantsEnabled`/token request returns `invalid_client` | The client isn't public or Direct Access Grants is off. For the demo client, enable both. |
+
+Useful commands:
+
+```bash
+sudo journalctl -u keycloak -f                       # live logs
+sudo -u keycloak /opt/keycloak/bin/kc.sh show-config # effective configuration
+curl -s https://id.example.com/health/ready          # readiness (health-enabled=true)
+```
+
+---
+
+## 16. Upgrading & uninstalling
+
+**Upgrade the provider JAR** (same Keycloak version): rebuild the JAR (step 6), replace it in
+`providers/`, then:
+
+```bash
+sudo -u keycloak /opt/keycloak/bin/kc.sh build
+sudo systemctl restart keycloak
+```
+
+**Upgrade Keycloak itself**: the provider must be built against the matching `keycloak.version`. Bump
+`keycloak.version` in `pom.xml`, rebuild the provider, install the new Keycloak distribution
+(step 5), re-point the `/opt/keycloak` symlink, redeploy the JAR (step 7), `kc.sh build`, restart.
+
+**Uninstall**:
+
+```bash
+sudo systemctl disable --now keycloak
+sudo rm /etc/systemd/system/keycloak.service && sudo systemctl daemon-reload
+sudo rm -rf /opt/keycloak /opt/keycloak-${KC_VERSION} /etc/keycloak
+# Optionally drop the database:
+sudo -u postgres psql -c "DROP DATABASE keycloak;" -c "DROP USER keycloak;"
+```
+
+---
+
+### Reference
+
+- Provider README, per-suite walkthroughs, and demo scripts: [`README.md`](README.md),
+  [`docs/`](docs/), [`scripts/`](scripts/).
+- LWS OpenID Connect authentication spec:
+  <https://w3c.github.io/lws-protocol/lws10-authn-openid/>.

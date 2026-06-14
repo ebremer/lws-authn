@@ -1,0 +1,4 @@
+com.ebremer.lws.authn.openid.resource.LWSResourceProviderFactory
+com.ebremer.lws.authn.ssicid.resource.SsiCidResourceProviderFactory
+com.ebremer.lws.authn.saml.resource.SamlResourceProviderFactory
+com.ebremer.lws.authn.ssididkey.resource.DidKeyResourceProviderFactory

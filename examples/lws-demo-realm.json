@@ -1,0 +1,50 @@
+{
+  "realm": "lws-demo",
+  "enabled": true,
+  "displayName": "LWS demo",
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "clients": [
+    {
+      "clientId": "lws-app",
+      "name": "LWS demo app",
+      "description": "Public client for trying out LWS authentication. Direct Access Grants is enabled only to make the walkthrough easy to script; turn it off for anything real.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": ["*"],
+      "webOrigins": ["*"],
+      "fullScopeAllowed": true,
+      "protocolMappers": [
+        {
+          "name": "lws-webid-sub",
+          "protocol": "openid-connect",
+          "protocolMapper": "lws-webid-sub-mapper",
+          "consentRequired": false,
+          "config": {
+            "lws.webid.attribute": "",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "alice",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Alice",
+      "lastName": "Example",
+      "email": "alice@example.org",
+      "credentials": [
+        { "type": "password", "value": "alice", "temporary": false }
+      ]
+    }
+  ]
+}

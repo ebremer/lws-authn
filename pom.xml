@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>com.ebremer</groupId>
+    <artifactId>lws-authn</artifactId>
+    <version>0.1.0</version>
+    <packaging>jar</packaging>
+
+    <name>lws-authn</name>
+    <description>Keycloak provider implementing the LWS 1.0 OpenID Connect Authentication Suite
+        (https://w3c.github.io/lws-protocol/lws10-authn-openid/).</description>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- Keycloak 26.x runs on JDK 21; Apache Jena 6 requires JDK 21. Target 21 so the
+             compiled provider loads inside the Keycloak runtime regardless of the build JDK. -->
+        <maven.compiler.release>21</maven.compiler.release>
+        <keycloak.version>26.7.0</keycloak.version>
+        <jena.version>6.1.0</jena.version>
+    </properties>
+
+    <dependencies>
+        <!-- ============================================================== -->
+        <!-- Keycloak SPIs: supplied by the server at runtime (scope=provided) -->
+        <!-- ============================================================== -->
+        <dependency>
+            <groupId>org.keycloak</groupId>
+            <artifactId>keycloak-core</artifactId>
+            <version>${keycloak.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.keycloak</groupId>
+            <artifactId>keycloak-server-spi</artifactId>
+            <version>${keycloak.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.keycloak</groupId>
+            <artifactId>keycloak-server-spi-private</artifactId>
+            <version>${keycloak.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.keycloak</groupId>
+            <artifactId>keycloak-services</artifactId>
+            <version>${keycloak.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <!-- Keycloak's SAML processing library (XML signature validation, parsing). Part of the
+             Keycloak server runtime, so provided. -->
+        <dependency>
+            <groupId>org.keycloak</groupId>
+            <artifactId>keycloak-saml-core</artifactId>
+            <version>${keycloak.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <!-- Jakarta REST (JAX-RS) annotations: provided by Keycloak's RESTEasy -->
+        <dependency>
+            <groupId>jakarta.ws.rs</groupId>
+            <artifactId>jakarta.ws.rs-api</artifactId>
+            <version>3.1.0</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- ============================================================== -->
+        <!-- Apache Jena: RDF handling for controlled identifier documents.   -->
+        <!-- Shaded into the provider JAR by the maven-shade-plugin below.     -->
+        <!-- ============================================================== -->
+        <dependency>
+            <groupId>org.apache.jena</groupId>
+            <artifactId>jena-arq</artifactId>
+            <version>${jena.version}</version>
+        </dependency>
+        <!-- Apache Jena 6 requires commons-codec >= 1.19 (for MurmurHash3). Keycloak's provided
+             SPI deps transitively pull the much older 1.11, which Maven's nearest-wins would
+             otherwise bundle. Pin the version Jena needs so the bundled copy is correct. -->
+        <dependency>
+            <groupId>commons-codec</groupId>
+            <artifactId>commons-codec</artifactId>
+            <version>1.20.0</version>
+        </dependency>
+
+        <!-- ============================================================== -->
+        <!-- Test only: integration test that deploys this provider into a    -->
+        <!-- real Keycloak via Testcontainers. Needs Docker; runs in          -->
+        <!-- `mvn verify` and is skipped automatically when Docker is absent. -->
+        <!-- ============================================================== -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.11.4</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.github.dasniko</groupId>
+            <artifactId>testcontainers-keycloak</artifactId>
+            <version>4.2.1</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- (Jackson is available to tests via keycloak-core's provided transitive dependency.) -->
+        <!-- BouncyCastle: self-signed certificate generation for the SAML verifier unit test. -->
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcpkix-jdk18on</artifactId>
+            <version>1.84</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <testResources>
+            <testResource>
+                <directory>src/test/resources</directory>
+            </testResource>
+            <!-- Put the demo realm on the test classpath so the IT imports the same realm the
+                 manual smoke test used (single source of truth, no duplicated fixture). -->
+            <testResource>
+                <directory>examples</directory>
+                <includes>
+                    <include>lws-demo-realm.json</include>
+                </includes>
+            </testResource>
+        </testResources>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+            </plugin>
+
+            <!-- Run *IT integration tests (Testcontainers) in the integration-test phase, after the
+                 provider JAR is packaged. `mvn verify` builds the jar then runs the IT against a real
+                 Keycloak container. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <version>3.5.2</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Package the provider together with all non-provided dependencies (Apache Jena and
+                 its transitive libraries) into a single, self-contained provider JAR.
+
+                 commons-codec is RELOCATED: Apache Jena 6 requires commons-codec >= 1.19 (for
+                 MurmurHash3, used even by the Turtle parser), but Keycloak ships an older copy on its
+                 runtime classpath. Relocating guarantees Jena binds to the bundled 1.20 regardless of
+                 Keycloak's version, with no classpath conflict in either direction. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.6.0</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <!-- protobuf-java is excluded only: Keycloak ships its own copy (so bundling
+                                 ours caused a split-package warning), and Jena resolves it from Keycloak
+                                 at runtime via parent-classloader delegation. libthrift is NOT excluded —
+                                 Keycloak has no copy, and Jena's RIOT writer registry fails to initialise
+                                 (breaking even Turtle) if it is absent. Both formats are unused by LWS. -->
+                            <artifactSet>
+                                <excludes>
+                                    <exclude>com.google.protobuf:protobuf-java</exclude>
+                                </excludes>
+                            </artifactSet>
+                            <relocations>
+                                <relocation>
+                                    <pattern>org.apache.commons.codec</pattern>
+                                    <shadedPattern>com.ebremer.lws.authn.openid.shaded.commons.codec</shadedPattern>
+                                </relocation>
+                            </relocations>
+                            <transformers>
+                                <!-- Merge META-INF/services so Jena's RIOT subsystems all register. -->
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                            </transformers>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                        <exclude>module-info.class</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
