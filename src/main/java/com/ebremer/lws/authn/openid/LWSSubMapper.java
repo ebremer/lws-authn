@@ -141,7 +141,19 @@ public class LWSSubMapper extends AbstractOIDCProtocolMapper
         if (attribute != null && !attribute.isBlank()) {
             String value = user.getFirstAttribute(attribute);
             if (value != null && !value.isBlank()) {
-                return value;
+                // Trimmed, because this value is about to become a claim that every verifier
+                // treats as a URI. Surrounding whitespace is invisible in the Keycloak admin
+                // console and survives a copy-paste, and returning it verbatim emitted a `sub`
+                // of " https://example.org/id/agent" — which is not an absolute URL, so a
+                // conforming verifier cannot dereference it and MUST refuse the credential.
+                // The failure is silent and total: the OP issues a token that looks right, and
+                // every LWS server rejects it as invalid_token with nothing to point at.
+                // A blank-after-trim value is treated as no value at all, exactly as an unset
+                // attribute already is, and falls through to the Keycloak-hosted WebID.
+                String webId = value.trim();
+                if (!webId.isEmpty()) {
+                    return webId;
+                }
             }
         }
         return hostedWebId(token, session, userSession.getRealm(), user);
