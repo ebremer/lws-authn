@@ -1,6 +1,8 @@
 /*
  * Copyright Erich Bremer.
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * JAX-RS resource for the self-signed did:key suite:
  *
  *   POST {…}/lws-ssi-did-key/verify   verify a self-issued did:key JWT as an LWS credential
@@ -9,8 +11,6 @@
  * subject itself.
  */
 package com.ebremer.lws.authn.ssididkey.resource;
-
-import java.io.IOException;
 
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.FormParam;
@@ -23,8 +23,9 @@ import jakarta.ws.rs.core.Response;
 
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.services.resource.RealmResourceProvider;
-import org.keycloak.util.JsonSerialization;
 
+import com.ebremer.lws.authn.config.EndpointSettings;
+import com.ebremer.lws.authn.http.JsonResponses;
 import com.ebremer.lws.authn.ssididkey.DidKeyConstants;
 import com.ebremer.lws.authn.ssididkey.verify.DidKeyVerificationResult;
 import com.ebremer.lws.authn.ssididkey.verify.SelfSignedDidKeyVerifier;
@@ -36,11 +37,11 @@ import com.ebremer.lws.authn.verify.VerifyAccess;
 public class DidKeyResourceProvider implements RealmResourceProvider {
 
     private final KeycloakSession session;
-    private final VerifyAccess access;
+    private final EndpointSettings settings;
 
-    public DidKeyResourceProvider(KeycloakSession session, VerifyAccess access) {
+    public DidKeyResourceProvider(KeycloakSession session, EndpointSettings settings) {
         this.session = session;
-        this.access = access;
+        this.settings = settings;
     }
 
     @Override
@@ -60,7 +61,12 @@ public class DidKeyResourceProvider implements RealmResourceProvider {
      * credential to verify in {@code public} access mode.
      *
      * <p>The optional {@code audience} parameter names the target authorization server, which the
-     * suite requires the credential's {@code aud} to include.</p>
+     * suite requires the credential's {@code aud} to include; a deployment can supply one for every
+     * request with the {@code audience} setting.</p>
+     *
+     * <p><strong>An invalid credential is a {@code 200}</strong> carrying {@code "valid": false}, not a
+     * {@code 401}: the request was authorized and this is its answer. A {@code 401} from this endpoint
+     * means the <em>caller</em> was refused, and carries a {@code WWW-Authenticate} challenge.</p>
      */
     @POST
     @Path(DidKeyConstants.VERIFY_PATH)
@@ -69,6 +75,10 @@ public class DidKeyResourceProvider implements RealmResourceProvider {
     public Response verify(@FormParam("credential") String credential,
                            @FormParam("audience") String expectedAudience,
                            @HeaderParam("Authorization") String authorization) {
+        if (!settings.isEnabled(session.getContext().getRealm())) {
+            return JsonResponses.notEnabled();
+        }
+        VerifyAccess access = settings.getVerifyAccess();
         Response denied = access.check(session, authorization);
         if (denied != null) {
             return denied;
@@ -78,18 +88,11 @@ public class DidKeyResourceProvider implements RealmResourceProvider {
             token = VerifyAccess.bearerToken(authorization);
         }
         if (token == null || token.isBlank()) {
-            return Response.status(Response.Status.BAD_REQUEST)
-                    .entity("{\"error\":\"missing 'credential' form parameter or Bearer token\"}")
-                    .type(MediaType.APPLICATION_JSON).build();
+            return JsonResponses.badRequest("missing 'credential' form parameter or Bearer token");
         }
 
-        DidKeyVerificationResult result = new SelfSignedDidKeyVerifier().verify(token, expectedAudience);
-        try {
-            return Response.ok(JsonSerialization.writeValueAsPrettyString(result), MediaType.APPLICATION_JSON)
-                    .status(result.isValid() ? Response.Status.OK : Response.Status.UNAUTHORIZED)
-                    .build();
-        } catch (IOException e) {
-            return Response.serverError().build();
-        }
+        DidKeyVerificationResult result =
+                new SelfSignedDidKeyVerifier().verify(token, settings.audienceFor(expectedAudience));
+        return JsonResponses.of(Response.Status.OK, result);
     }
 }

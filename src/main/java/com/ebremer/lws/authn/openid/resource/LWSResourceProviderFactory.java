@@ -1,6 +1,8 @@
 /*
  * Copyright Erich Bremer.
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Factory for the LWS realm resource provider. Mounting id "lws" exposes the endpoints under
  * {issuer}/lws (i.e. {frontendUrl}/realms/{realm}/lws).
  */
@@ -13,7 +15,7 @@ import org.keycloak.services.resource.RealmResourceProvider;
 import org.keycloak.services.resource.RealmResourceProviderFactory;
 
 import com.ebremer.lws.authn.openid.LWSConstants;
-import com.ebremer.lws.authn.verify.VerifyAccess;
+import com.ebremer.lws.authn.config.EndpointSettings;
 
 /**
  * @author Erich Bremer
@@ -21,19 +23,19 @@ import com.ebremer.lws.authn.verify.VerifyAccess;
 public class LWSResourceProviderFactory implements RealmResourceProviderFactory {
 
     /**
-     * Access policy for the verify endpoint. Held on the factory because {@link Config.Scope} is only
-     * offered here, and read eagerly so a misconfiguration is logged at startup rather than per request.
+     * This provider's settings. Held on the factory because {@link Config.Scope} is only offered here,
+     * and read eagerly so a misconfiguration is logged at startup rather than once per request.
      */
-    private volatile VerifyAccess verifyAccess = VerifyAccess.defaults();
+    private volatile EndpointSettings settings = EndpointSettings.defaults(LWSConstants.RESOURCE_PROVIDER_ID);
 
     @Override
     public RealmResourceProvider create(KeycloakSession session) {
-        return new LWSResourceProvider(session, verifyAccess);
+        return new LWSResourceProvider(session, settings);
     }
 
     @Override
     public void init(Config.Scope config) {
-        this.verifyAccess = VerifyAccess.from(config);
+        this.settings = EndpointSettings.from(LWSConstants.RESOURCE_PROVIDER_ID, config);
     }
 
     @Override

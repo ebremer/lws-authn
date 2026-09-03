@@ -1,6 +1,8 @@
 /*
  * Copyright Erich Bremer.
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * JAX-RS resource for the self-signed CID suite:
  *
  *   GET  {…}/lws-ssi-cid/cid/{userId}   the user's controlled identifier document, publishing the
@@ -26,16 +28,15 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
 import org.apache.jena.riot.RDFFormat;
-import com.ebremer.lws.authn.rdf.RdfContentNegotiation;
 import org.jboss.logging.Logger;
 import org.keycloak.models.KeycloakSession;
-import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
-import org.keycloak.services.Urls;
 import org.keycloak.services.resource.RealmResourceProvider;
-import org.keycloak.urls.UrlType;
 import org.keycloak.util.JsonSerialization;
 
+import com.ebremer.lws.authn.config.EndpointSettings;
+import com.ebremer.lws.authn.http.CidEndpoint;
+import com.ebremer.lws.authn.http.JsonResponses;
 import com.ebremer.lws.authn.jose.PublicJwk;
 import com.ebremer.lws.authn.ssicid.SsiCidConstants;
 import com.ebremer.lws.authn.ssicid.cid.SelfSignedControlledIdentifierDocument;
@@ -51,11 +52,11 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
     private static final Logger log = Logger.getLogger(SsiCidResourceProvider.class);
 
     private final KeycloakSession session;
-    private final VerifyAccess access;
+    private final EndpointSettings settings;
 
-    public SsiCidResourceProvider(KeycloakSession session, VerifyAccess access) {
+    public SsiCidResourceProvider(KeycloakSession session, EndpointSettings settings) {
         this.session = session;
-        this.access = access;
+        this.settings = settings;
     }
 
     @Override
@@ -71,6 +72,8 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
     /**
      * Serves the user's controlled identifier document, publishing each public JWK held in the
      * {@code lws_jwk} user attribute as an {@code authentication} verification method.
+     *
+     * <p>See {@link CidEndpoint} for why this endpoint is unauthenticated and what bounds that.</p>
      */
     @GET
     @Path(SsiCidConstants.CID_PATH + "/{userId}")
@@ -78,32 +81,30 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
     public Response getControlledIdentifierDocument(@PathParam("userId") String userId,
                                                     @HeaderParam("Accept") String accept,
                                                     @HeaderParam("If-None-Match") String ifNoneMatch) {
-        // Negotiated before anything is looked up: if we cannot serve a syntax the client accepts,
-        // there is nothing useful to do with the user record.
-        String contentType = RdfContentNegotiation.best(accept);
-        if (contentType == null) {
-            return notAcceptable();
-        }
-        RealmModel realm = session.getContext().getRealm();
-        UserModel user = session.users().getUserById(realm, userId);
-        if (user == null) {
-            // Typed for the same reason as the 406 above: Keycloak rejects a response with no content
-            // type and returns 500 instead.
-            return Response.status(Response.Status.NOT_FOUND)
-                    .entity("{\"error\":\"not_found\"}")
-                    .type(MediaType.APPLICATION_JSON)
-                    .build();
-        }
+        return CidEndpoint.serve(session, settings, SsiCidConstants.CID_PATH, userId, accept, ifNoneMatch,
+                (user, issuer, webId, contentType) -> {
+                    SelfSignedControlledIdentifierDocument cid =
+                            new SelfSignedControlledIdentifierDocument(webId, publishableJwks(user));
+                    return switch (contentType) {
+                        case SsiCidConstants.TURTLE -> cid.toRdf(RDFFormat.TURTLE);
+                        case SsiCidConstants.N_TRIPLES -> cid.toRdf(RDFFormat.NTRIPLES);
+                        case SsiCidConstants.RDF_XML -> cid.toRdf(RDFFormat.RDFXML);
+                        default -> cid.toJsonLd();
+                    };
+                });
+    }
 
-        String issuer = Urls.realmIssuer(session.getContext().getUri(UrlType.FRONTEND).getBaseUri(), realm.getName());
-        String webId = issuer + "/" + SsiCidConstants.RESOURCE_PROVIDER_ID + "/" + SsiCidConstants.CID_PATH + "/" + user.getId();
-
-        // Only the public half of a key may ever appear here (CID 1.0: a publicKeyJwk map "MUST NOT
-        // include any members of the private information class, such as `d`"). The attribute is
-        // operator-managed free text, so one mis-pasted key pair would otherwise publish an agent's
-        // private key at this world-readable URL. A JWK carrying private material is dropped outright,
-        // with a warning, rather than trimmed: the key is already compromised and quietly serving its
-        // public half would hide that from the operator.
+    /**
+     * The user's registered JWKs, filtered to the ones that may be published.
+     *
+     * <p>Only the public half of a key may ever appear here (CID 1.0: a publicKeyJwk map "MUST NOT
+     * include any members of the private information class, such as `d`"). The attribute is
+     * operator-managed free text, so one mis-pasted key pair would otherwise publish an agent's
+     * private key at this world-readable URL. A JWK carrying private material is dropped outright,
+     * with a warning, rather than trimmed: the key is already compromised and quietly serving its
+     * public half would hide that from the operator.</p>
+     */
+    private static List<JsonNode> publishableJwks(UserModel user) {
         List<JsonNode> jwks = new ArrayList<>();
         user.getAttributeStream(SsiCidConstants.JWK_ATTRIBUTE).forEach(value -> {
             JsonNode node;
@@ -118,16 +119,7 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
                     log.warnf("Refusing to publish a '%s' value on user %s: %s",
                             SsiCidConstants.JWK_ATTRIBUTE, user.getId(), PublicJwk.describeRejection(node)));
         });
-
-        SelfSignedControlledIdentifierDocument cid = new SelfSignedControlledIdentifierDocument(webId, jwks);
-
-        String body = switch (contentType) {
-            case SsiCidConstants.TURTLE -> cid.toRdf(RDFFormat.TURTLE);
-            case SsiCidConstants.N_TRIPLES -> cid.toRdf(RDFFormat.NTRIPLES);
-            case SsiCidConstants.RDF_XML -> cid.toRdf(RDFFormat.RDFXML);
-            default -> cid.toJsonLd();
-        };
-        return serve(contentType, body, ifNoneMatch);
+        return jwks;
     }
 
     /**
@@ -138,7 +130,12 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
      *
      * <p>The optional {@code audience} parameter names the target authorization server, which the
      * suite requires the credential's {@code aud} to include. Without it only the presence of an
-     * audience restriction can be checked.</p>
+     * audience restriction can be checked, so a deployment can supply one for every request with the
+     * {@code audience} setting.</p>
+     *
+     * <p><strong>An invalid credential is a {@code 200}</strong> carrying {@code "valid": false}, not a
+     * {@code 401}: the request was authorized and this is its answer. A {@code 401} from this endpoint
+     * means the <em>caller</em> was refused, and carries a {@code WWW-Authenticate} challenge.</p>
      */
     @POST
     @Path(SsiCidConstants.VERIFY_PATH)
@@ -147,6 +144,10 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
     public Response verify(@FormParam("credential") String credential,
                            @FormParam("audience") String expectedAudience,
                            @HeaderParam("Authorization") String authorization) {
+        if (!settings.isEnabled(session.getContext().getRealm())) {
+            return JsonResponses.notEnabled();
+        }
+        VerifyAccess access = settings.getVerifyAccess();
         Response denied = access.check(session, authorization);
         if (denied != null) {
             return denied;
@@ -156,52 +157,11 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
             token = VerifyAccess.bearerToken(authorization);
         }
         if (token == null || token.isBlank()) {
-            return Response.status(Response.Status.BAD_REQUEST)
-                    .entity("{\"error\":\"missing 'credential' form parameter or Bearer token\"}")
-                    .type(MediaType.APPLICATION_JSON).build();
+            return JsonResponses.badRequest("missing 'credential' form parameter or Bearer token");
         }
 
-        SsiCidVerificationResult result = new SelfSignedCidVerifier(session).verify(token, expectedAudience);
-        try {
-            return Response.ok(JsonSerialization.writeValueAsPrettyString(result), MediaType.APPLICATION_JSON)
-                    .status(result.isValid() ? Response.Status.OK : Response.Status.UNAUTHORIZED)
-                    .build();
-        } catch (IOException e) {
-            return Response.serverError().build();
-        }
-    }
-
-    /**
-     * Serves a negotiated representation with the cache headers a controlled identifier document
-     * should carry. {@code Vary: Accept} because the body depends on it; an {@code ETag} and
-     * {@code Cache-Control} because both suite drafts encourage verifiers to cache these documents "to
-     * reduce unnecessary network requests and the associated metadata leakage", which they can only do
-     * if the server says how.
-     */
-    private static Response serve(String contentType, String body, String ifNoneMatch) {
-        String entityTag = RdfContentNegotiation.entityTag(body);
-        Response.ResponseBuilder response = RdfContentNegotiation.matches(ifNoneMatch, entityTag)
-                ? Response.notModified(entityTag)
-                : Response.ok(body, contentType).tag(entityTag);
-        return response
-                .header("Vary", "Accept")
-                .header("Cache-Control", "public, max-age=" + RdfContentNegotiation.CACHE_SECONDS)
-                .build();
-    }
-
-    /**
-     * 406 naming the syntaxes on offer, rather than silently serving one that was not asked for.
-     *
-     * <p>Carries a body deliberately: Keycloak's {@code DefaultSecurityHeadersProvider} logs
-     * "MediaType not set" and turns any response without a content type into a 500, so an empty 406
-     * never reaches the client as a 406.</p>
-     */
-    private static Response notAcceptable() {
-        return Response.status(Response.Status.NOT_ACCEPTABLE)
-                .entity("{\"error\":\"not_acceptable\",\"supported\":[\""
-                        + String.join("\",\"", RdfContentNegotiation.SUPPORTED) + "\"]}")
-                .type(MediaType.APPLICATION_JSON)
-                .header("Vary", "Accept")
-                .build();
+        SsiCidVerificationResult result =
+                new SelfSignedCidVerifier(session).verify(token, settings.audienceFor(expectedAudience));
+        return JsonResponses.of(Response.Status.OK, result);
     }
 }

@@ -22,6 +22,9 @@ import org.keycloak.representations.AccessToken;
 import org.keycloak.services.managers.AppAuthManager;
 import org.keycloak.services.managers.AuthenticationManager;
 
+import com.ebremer.lws.authn.config.Settings;
+import com.ebremer.lws.authn.http.JsonResponses;
+
 /**
  * Decides whether a caller may use a {@code …/verify} endpoint, and at what rate.
  *
@@ -95,10 +98,10 @@ public final class VerifyAccess {
      * one), in which case only the system-property and environment fallbacks apply.
      */
     public static VerifyAccess from(Config.Scope scope) {
-        String access = setting(scope, "access", "lws.authn.verify.access", "LWS_AUTHN_VERIFY_ACCESS", "bearer");
-        String secret = setting(scope, "secret", "lws.authn.verify.secret", "LWS_AUTHN_VERIFY_SECRET", null);
-        String role = setting(scope, "role", "lws.authn.verify.role", "LWS_AUTHN_VERIFY_ROLE", null);
-        String rate = setting(scope, "rate-limit", "lws.authn.verify.rateLimit", "LWS_AUTHN_VERIFY_RATE_LIMIT",
+        String access = Settings.get(scope, "access", "lws.authn.verify.access", "LWS_AUTHN_VERIFY_ACCESS", "bearer");
+        String secret = Settings.get(scope, "secret", "lws.authn.verify.secret", "LWS_AUTHN_VERIFY_SECRET", null);
+        String role = Settings.get(scope, "role", "lws.authn.verify.role", "LWS_AUTHN_VERIFY_ROLE", null);
+        String rate = Settings.get(scope, "rate-limit", "lws.authn.verify.rateLimit", "LWS_AUTHN_VERIFY_RATE_LIMIT",
                 String.valueOf(DEFAULT_RATE_LIMIT));
 
         Mode mode;
@@ -198,20 +201,32 @@ public final class VerifyAccess {
     }
 
     /**
-     * Builds the denial. A 401 or 403 carries {@code WWW-Authenticate} as RFC 9110 §15.5.2 requires,
-     * which also lets a client tell "you are not allowed to call this endpoint" apart from "the
-     * credential you asked me to check is invalid" — the two are otherwise both 401 here.
+     * Builds the denial. A 401 or 403 carries {@code WWW-Authenticate} as RFC 9110 §15.5.2 requires:
+     * "the server generating a 401 response MUST send a WWW-Authenticate header field".
+     *
+     * <p>A 401 from this class always means <em>the caller</em> may not use the endpoint. It never
+     * means the credential under test was rejected — that is a {@code 200} carrying
+     * {@code "valid": false}, because the request was authorized and answered.</p>
      */
     private Response error(Response.Status status, String code, String description,
                            KeycloakSession session, boolean challenge) {
         Response.ResponseBuilder response = Response.status(status)
-                .entity("{\"error\":\"" + code + "\",\"error_description\":\"" + description + "\"}")
+                .entity(JsonResponses.json(JsonResponses.errorBody(code, description)))
                 .type(MediaType.APPLICATION_JSON);
         if (challenge) {
-            response.header("WWW-Authenticate", "Bearer realm=\"" + realmName(session) + "\", error=\"" + code
-                    + "\", error_description=\"" + description + "\"");
+            response.header("WWW-Authenticate", "Bearer realm=\"" + quoted(realmName(session))
+                    + "\", error=\"" + quoted(code) + "\", error_description=\"" + quoted(description) + "\"");
         }
         return response.build();
+    }
+
+    /**
+     * Escapes a value for an RFC 9110 §11.2 {@code quoted-string}. Every value used here is a constant
+     * or a realm name today, but a header assembled by concatenation is exactly what {@link
+     * JsonResponses} exists to stop happening to the body.
+     */
+    private static String quoted(String value) {
+        return value == null ? "" : value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     private static String realmName(KeycloakSession session) {
@@ -223,7 +238,12 @@ public final class VerifyAccess {
         }
     }
 
-    private static String callerKey(KeycloakSession session) {
+    /**
+     * The key a rate limiter buckets a request under: the caller's remote address, or {@code unknown}
+     * when the connection cannot be read. Shared with the {@code cid/{userId}} endpoints so one client
+     * is one bucket however it arrives.
+     */
+    public static String callerKey(KeycloakSession session) {
         try {
             String remote = session.getContext().getConnection() == null
                     ? null : session.getContext().getConnection().getRemoteAddr();
@@ -231,21 +251,6 @@ public final class VerifyAccess {
         } catch (RuntimeException e) {
             return "unknown";
         }
-    }
-
-    private static String setting(Config.Scope scope, String scopeKey, String systemProperty,
-                                  String environmentVariable, String fallback) {
-        if (scope != null) {
-            String value = scope.get(scopeKey);
-            if (value != null && !value.isBlank()) {
-                return value;
-            }
-        }
-        String value = System.getProperty(systemProperty);
-        if (value == null || value.isBlank()) {
-            value = System.getenv(environmentVariable);
-        }
-        return value == null || value.isBlank() ? fallback : value;
     }
 
     private static String blankToNull(String value) {

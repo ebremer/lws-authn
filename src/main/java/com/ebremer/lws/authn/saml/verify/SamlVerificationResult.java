@@ -1,6 +1,8 @@
 /*
  * Copyright Erich Bremer.
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Result of validating a signed SAML 2.0 assertion as an LWS authentication credential.
  */
 package com.ebremer.lws.authn.saml.verify;

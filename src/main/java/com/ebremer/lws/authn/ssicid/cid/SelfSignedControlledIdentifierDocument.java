@@ -1,6 +1,8 @@
 /*
  * Copyright Erich Bremer.
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Controlled identifier document (W3C CID 1.0) for the self-signed identity suite: it publishes the
  * subject's public key(s) as {@code authentication} verification methods of type {@code JsonWebKey}.
  */
@@ -26,6 +28,7 @@ import org.apache.jena.riot.RDFFormat;
 import org.apache.jena.vocabulary.RDF;
 import org.keycloak.util.JsonSerialization;
 
+import com.ebremer.lws.authn.jose.KeyIdFragment;
 import com.ebremer.lws.authn.jose.PublicJwk;
 import com.ebremer.lws.authn.ssicid.SsiCidConstants;
 
@@ -60,6 +63,8 @@ public final class SelfSignedControlledIdentifierDocument {
      *                      anyone, so no caller can make it emit private key material, whatever it
      *                      passes in. Callers that want to tell an operator <em>why</em> a key was
      *                      dropped should filter first and log {@link PublicJwk#describeRejection}.
+     *                      A JWK whose {@code kid} cannot be a legal IRI fragment (see
+     *                      {@link KeyIdFragment}) is still published, under a synthesized identifier.
      */
     public SelfSignedControlledIdentifierDocument(String id, List<JsonNode> publicKeyJwks) {
         this.id = id;
@@ -67,15 +72,28 @@ public final class SelfSignedControlledIdentifierDocument {
                 : publicKeyJwks.stream().map(PublicJwk::sanitize).flatMap(java.util.Optional::stream).toList();
     }
 
+    /**
+     * The identifier of the {@code n}-th published verification method.
+     *
+     * <p>CID 1.0 requires every verification method to have an {@code id} that "MUST be a string
+     * conforming to URL syntax", so one is always produced. The {@code kid} supplies the fragment when
+     * it can be percent-encoded into one ({@link KeyIdFragment}); when it cannot — absent, blank,
+     * absurdly long, or not well-formed text — the position stands in, which is positional and so
+     * shifts if keys are added or removed, but is a conforming identifier where there was none.
+     * A verifier selects by the JWK's own {@code kid} first in any case.</p>
+     */
+    private String methodId(JsonNode jwk, int index) {
+        return KeyIdFragment.methodId(id, jwk.path("kid").asText(null))
+                .orElseGet(() -> id + "#key-" + (index + 1));
+    }
+
     /** Compact JSON-LD form (the canonical document; the JWK is naturally a JSON object). */
     public String toJsonLd() {
         List<Object> methods = new ArrayList<>();
-        for (JsonNode jwk : publicKeyJwks) {
+        for (int i = 0; i < publicKeyJwks.size(); i++) {
+            JsonNode jwk = publicKeyJwks.get(i);
             Map<String, Object> method = new LinkedHashMap<>();
-            String kid = jwk.path("kid").asText(null);
-            if (kid != null) {
-                method.put("id", id + "#" + kid);
-            }
+            method.put("id", methodId(jwk, i));
             method.put("type", "JsonWebKey");
             method.put("controller", id);
             method.put("publicKeyJwk", jwk);
@@ -104,9 +122,9 @@ public final class SelfSignedControlledIdentifierDocument {
         Property publicKeyJwk = model.createProperty(SsiCidConstants.SEC_PUBLIC_KEY_JWK);
         RDFDatatype jsonType = TypeMapper.getInstance().getSafeTypeByName(SsiCidConstants.RDF_JSON);
 
-        for (JsonNode jwk : publicKeyJwks) {
-            String kid = jwk.path("kid").asText(null);
-            Resource method = kid != null ? model.createResource(id + "#" + kid) : model.createResource();
+        for (int i = 0; i < publicKeyJwks.size(); i++) {
+            JsonNode jwk = publicKeyJwks.get(i);
+            Resource method = model.createResource(methodId(jwk, i));
             method.addProperty(RDF.type, model.createResource(SsiCidConstants.JSON_WEB_KEY_TYPE));
             method.addProperty(controller, subject);
             method.addProperty(publicKeyJwk, model.createTypedLiteral(jwk.toString(), jsonType));

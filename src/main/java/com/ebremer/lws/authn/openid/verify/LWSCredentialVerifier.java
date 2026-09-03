@@ -1,6 +1,8 @@
 /*
  * Copyright Erich Bremer.
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Validates an ID Token as an LWS authentication credential, per
  * https://w3c.github.io/lws-protocol/lws10-authn-openid/#authentication-credential-validation
  *
@@ -300,6 +302,17 @@ public class LWSCredentialVerifier {
                 return null;
             }
             return model;
+        } catch (RdfParsing.UnsupportedSyntaxException wrongSyntax) {
+            // Distinguished from the generic failure below because it is actionable and gives nothing
+            // away: the media type is one the remote server chose to advertise publicly, and naming it
+            // is the difference between "your document is not RDF" and "something went wrong".
+            log.debugf("[%s] sub <%s> was served as '%s', which is not an RDF syntax this verifier reads",
+                    result.getTraceId(), sub, wrongSyntax.getContentType());
+            OutboundHttp.recordFailure(sub);
+            result.check("subjectDereferenced", false);
+            result.error("The document at 'sub' <" + sub + "> was served as '" + wrongSyntax.getContentType()
+                    + "', which is not an RDF syntax this verifier reads");
+            return null;
         } catch (Exception e) {
             // The cause can name the address the host resolved to, so it is logged, not returned.
             log.debugf(e, "[%s] could not dereference or parse sub <%s>", result.getTraceId(), sub);
@@ -311,12 +324,21 @@ public class LWSCredentialVerifier {
     }
 
     /**
-     * Builds a Jena model from a compact JSON-LD controlled identifier document, without invoking a
-     * full JSON-LD processor (which would couple this provider to a specific Titanium version that
-     * conflicts with the one Keycloak ships). Handles the standardized CID shape used by this and
-     * other LWS implementations: a subject {@code id} with one or more {@code service} entries each
-     * carrying {@code type} and {@code serviceEndpoint}. Exotic JSON-LD framings that remap these
-     * terms are not expanded.
+     * Builds a Jena model from a compact JSON-LD controlled identifier document by reading the key
+     * names directly, without a JSON-LD processor.
+     *
+     * <p>This is the <em>fallback</em>, not the normal path. Since P2-1 a document is processed
+     * properly by Jena's JSON-LD 1.1 reader (Titanium, relocated into the shaded JAR — the version
+     * conflict with Keycloak's copy that this comment used to cite as the reason for hand-rolling was
+     * settled by relocation, not avoidance). What is left for this method is the one case the
+     * processor cannot handle: a document naming an {@code @context} this provider does not bundle,
+     * which {@link RdfParsing#parse} refuses to guess at rather than fetch. Reading the standardized
+     * shape by name is the only interpretation available without those term definitions.</p>
+     *
+     * <p>Handles the shape used by this and other LWS implementations: a subject {@code id} with one
+     * or more {@code service} entries each carrying {@code type} and {@code serviceEndpoint}. Exotic
+     * JSON-LD framings that remap these terms are not expanded — by construction, since expanding them
+     * is precisely what needs the context that was unavailable.</p>
      *
      * <p>The document's {@code id} must be present and equal to {@code sub}. Defaulting a missing
      * {@code id} to the subject, as this once did, would accept a document that never claimed to

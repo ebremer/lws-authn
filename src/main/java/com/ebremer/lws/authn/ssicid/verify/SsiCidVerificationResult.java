@@ -1,6 +1,8 @@
 /*
  * Copyright Erich Bremer.
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Result of validating a self-issued JWT as an LWS authentication credential (self-signed CID suite).
  */
 package com.ebremer.lws.authn.ssicid.verify;

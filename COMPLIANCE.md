@@ -1,244 +1,231 @@
-# LWS Protocol Compliance: lws-authn
+# Conformance: `lws-authn`
 
-**Date:** 2026-07-09  
-**Scope:** Whether `lws-authn` correctly implements the four W3C LWS authentication suites (aside from known security bugs).  
-**Related:** code review findings (summarized under *Residual issues* below)
+**What this document is:** the conformance statement for `lws-authn` — which normative requirements
+each suite enforces, which are deferred to the relying party, and what is supported. It is written for
+someone integrating against this provider, who needs to know what a `"valid": true` actually asserts.
 
-## Short answer
+**Last reviewed:** 3 September 2026, against the drafts below and the code at that commit.
 
-**Yes** — aside from the known security bugs and a few claim-level gaps, `lws-authn` correctly implements **all four LWS 1.0 authentication suites** as a Keycloak 26 provider: OpenID Connect, Self-signed Controlled Identifier (SSI CID), SAML 2.0, and Self-signed `did:key`. It is **not** an LWS storage server (that is `lws-server`); it is the **identity / credential** side of the ecosystem—OP/IdP support, CID hosting where required, and suite verifiers.
-
-The suite documents are still **unofficial proposals**, so “correct” means matching the published **MUST** validation algorithms and data models, not a frozen Rec conformance certificate.
-
----
-
-## What this project implements
-
-From the [LWS protocol set](https://w3c.github.io/lws-protocol/):
-
-| Spec | Role in `lws-authn` |
-|------|---------------------|
-| **authn-openid** | Keycloak as OpenID Provider; WebID `sub` mapper; hosted CID with `OpenIdProvider` service; credential verifier |
-| **authn-ssi-cid** | Hosted CID with `publicKeyJwk` authentication methods; self-issued JWT verifier |
-| **authn-saml** | Verifier for signed SAML 2.0 Response/Assertion with **out-of-band** IdP certificate |
-| **authn-ssi-did-key** | Verifier for self-issued JWT whose subject is a `did:key` (key decoded from the identifier) |
-
-**Not in scope for this repo** (by design): LWS Core storage CRUD, notifications, search/type index, access grants. Those live in `lws-server`.
-
-| Suite | Keycloak role | Credential | How the verifier gets the key | Endpoint prefix |
-|-------|---------------|------------|-------------------------------|-----------------|
-| OpenID Connect | OP + CID host + verifier | ID Token JWT; `sub` = WebID | OIDC Discovery on `iss` (via CID service) | `/realms/{realm}/lws` |
-| Self-signed CID | CID host + verifier | Self-issued JWT; `sub==iss==client_id` | `publicKeyJwk` in subject CID by `kid` | `/realms/{realm}/lws-ssi-cid` |
-| SAML 2.0 | Verifier (+ optional IdP use of Keycloak SAML) | Signed SAML 2.0 | Out-of-band IdP certificate | `/realms/{realm}/lws-saml` |
-| Self-signed `did:key` | Verifier only | Self-issued JWT; `sub` = `did:key` | Decoded from the `did:key` itself | `/realms/{realm}/lws-ssi-did-key` |
-
-SPI surface: four `RealmResourceProviderFactory` ids (`lws`, `lws-ssi-cid`, `lws-saml`, `lws-ssi-did-key`) + OIDC `ProtocolMapper` (`lws-webid-sub-mapper`). META-INF/services registration is complete.
+Item ids like **P0-3** refer to [`TODO.md`](TODO.md), which carries the reasoning and the history.
+Where this document says a check exists, it names the field that appears in the `checks` object of the
+verify response, so a claim here can be tested against a real response.
 
 ---
 
-## OpenID Connect suite — yes (core algorithm)
+## Specification status
 
-Spec: [lws10-authn-openid](https://w3c.github.io/lws-protocol/lws10-authn-openid/)
+These are **W3C Working Drafts**, not Recommendations. Conformance here means "matches the published
+normative requirements", not a Rec-level conformance certificate — the text can still change.
 
-### Present and aligned
+| Document | Latest published version |
+|---|---|
+| Linked Web Storage Protocol 1.0 (core) | W3C Working Draft **21 August 2026** |
+| LWS 1.0 Authn Suite: Self-signed Identity (Controlled Identifiers) | W3C Working Draft **21 August 2026** |
+| LWS 1.0 Authn Suite: OpenID Connect | W3C Working Draft 3 August 2026 |
+| LWS 1.0 Authn Suite: SAML 2.0 | W3C Working Draft 3 August 2026 |
+| LWS 1.0 Authn Suite: Self-signed Identity using `did:key` | W3C Working Draft 3 August 2026 |
+| Linked Web Storage Vocabulary | Group Note draft, 21 August 2026 |
+| Controlled Identifiers (CID) 1.0 | **W3C Recommendation, 15 May 2025** |
 
-| Requirement | Implementation |
-|-------------|----------------|
-| ID Token MUST NOT use `alg: none` | Enforced in `LWSCredentialVerifier` |
-| `sub` / `iss` for subject and issuer | Required; fail if missing |
-| Trust via CID: dereference `sub` | `OutboundHttp` + `SsrfGuard`; RDF/JSON-LD parse |
-| Service type `lws:OpenIdProvider` with `serviceEndpoint == iss` | SPARQL ASK (parameterized) / compact JSON-LD path |
-| OIDC Discovery + JWKS + signature | Discovery issuer match, JWKS by `kid`/`alg`, Keycloak `SignatureProvider` |
-| Algorithm–key pinning (hardening) | `algMatchesKey` (blocks HS* confusion against OP public keys) |
-| Expiry | Explicit `exp` required; `isActive()` window |
-| Issuance: `sub` as WebID | `LWSSubMapper` (hosted CID or attribute) |
-| Hosted CID with OpenIdProvider service | `GET …/lws/cid/{userId}` content-negotiated |
-| Token type URI `…token-type:id_token` | Documented / constants |
+Also incorporated by reference and enforced here: OpenID Connect Core 1.0 §3.1.3.7, RFC 7515 (JWS),
+RFC 7517 (JWK), RFC 8725 (JWT BCP), RFC 9110 (HTTP semantics), SAML 2.0 Core.
 
-### Gaps / softness
+## Scope
 
-| Gap | Nature |
-|-----|--------|
-| Serialization MUST use **`azp`** as LWS client id | Not required on verify |
-| **`aud`** | Intentionally not validated (documented; left to RP / resource indicators / token exchange) |
-| Full OIDC Core §3.1.3.7 | Partial (sig + iss + exp; not full RP audience binding) |
-| CID `id` equals `sub` | Weaker on compact JSON-LD path than ideal |
-| Fetch-before-signature | Spec-required for cold trust; enables SSRF/DoS residual (see review) |
+`lws-authn` is the **identity and credential** side of LWS: an OpenID Provider, a host for controlled
+identifier documents, and a verifier for each suite. It is **not** an LWS storage server — core CRUD,
+notifications, search and access grants live in `lws-server`.
 
-**Verdict:** Trust chain and validation shape match the suite. Audience/`azp` are the main intentional or incomplete claim pieces.
+| Suite | Keycloak's role | Credential | How the verifier gets the key | Endpoint prefix | Token type |
+|---|---|---|---|---|---|
+| OpenID Connect | OP + CID host + verifier | ID Token (JWT), `sub` = WebID | OIDC Discovery on `iss`, found via the CID service | `/realms/{realm}/lws` | `…token-type:id_token` |
+| Self-signed CID | CID host + verifier | self-issued JWT, `sub`==`iss`==`client_id` | `publicKeyJwk` in the subject's CID, by `kid` | `/realms/{realm}/lws-ssi-cid` | `…token-type:jwt` |
+| SAML 2.0 | verifier | signed SAML 2.0 Response | out-of-band IdP certificate supplied by the caller | `/realms/{realm}/lws-saml` | `…token-type:saml2` |
+| Self-signed `did:key` | verifier | self-issued JWT, `sub` = `did:key` | decoded from the identifier itself | `/realms/{realm}/lws-ssi-did-key` | `…token-type:jwt` |
 
----
-
-## Self-signed Controlled Identifier — yes (core algorithm)
-
-Spec: [lws10-authn-ssi-cid](https://w3c.github.io/lws-protocol/lws10-authn-ssi-cid/)
-
-### Present and aligned
-
-| Requirement | Implementation |
-|-------------|----------------|
-| `alg` MUST NOT be `none` | Enforced |
-| `sub == iss == client_id` | Enforced |
-| Dereference `sub` to CID | Same outbound stack as OpenID |
-| Select verification method by JWT `kid` | `selectByKid` over `authentication` / `verificationMethod` / RDF |
-| Validate signature (RFC 7515) | Keycloak `SignatureProvider` + JWK |
-| Require `exp` | Explicit (not “missing exp = never expires”) |
-| Require `aud` present | Enforced (presence; not a configured AS match) |
-| Hosted CID with `publicKeyJwk` | `SsiCidResourceProvider` + document builder |
-| Token type `…token-type:jwt` | Documented / constants |
-
-### Gaps / softness
-
-| Gap | Nature |
-|-----|--------|
-| Serialization **`iat` MUST** | Not hard-required |
-| **`aud` MUST include the target AS** | Presence only; no expected-audience param like SAML |
-| CID **`id` equals `sub`** | Not asserted as clearly as on `lws-server` SSI path |
-| `algMatchesKey` pin | OpenID has it; SSI CID lacks the same explicit pin (fail-closed in practice today via Keycloak) |
-| Compact JSON-LD without full expansion | Spec-shaped docs work; exotic contexts may fail interop |
-
-**Verdict:** Core self-issued JWT + CID key selection algorithm is correct and close to the suite text.
+SPI surface: four `RealmResourceProviderFactory` ids (`lws`, `lws-ssi-cid`, `lws-saml`,
+`lws-ssi-did-key`) plus the OIDC `ProtocolMapper` `lws-webid-sub-mapper`.
 
 ---
 
-## SAML 2.0 suite — yes (protocol model); strong verifier hardening
+## Core §4: what every credential must carry
 
-Spec: [lws10-authn-saml](https://w3c.github.io/lws-protocol/lws10-authn-saml/)
+Core §4.1 requires *subject* (URI), *issuer* (URI) and *client* on every credential, RECOMMENDS an
+audience restriction naming the authorization server, §4.2 requires a signature, and §4.3 requires each
+suite to be associated with a token type URI.
 
-### Present and aligned
+| Requirement | OpenID | SSI CID | SAML | did:key |
+|---|---|---|---|---|
+| subject REQUIRED | `subjectPresent` | `selfIssued` | `NameID` from the covered assertion | `subjectIsDidKey` |
+| issuer REQUIRED | `issuerPresent` | `selfIssued` | `issuerPresent` | `selfIssued` |
+| client REQUIRED | `clientPresent` (`azp`) | `selfIssued` (`client_id`) | `recipientPresent` | `selfIssued` (`client_id`) |
+| audience restriction | `audienceMatched` | `audiencePresent` + `audienceMatched` | `audiencePresent` + `audienceMatched` | `audiencePresent` + `audienceMatched` |
+| signed (§4.2) | `signatureValid` | `signatureValid` | `signatureValid` | `signatureValid` |
+| token type URI (§4.3) | reported as `tokenType` on every result | | | |
 
-| Requirement | Implementation |
-|-------------|----------------|
-| Credential MUST be signed | Signature required on Response or Assertion |
-| Trust out of band | Caller supplies IdP PEM certificate (suite model) |
-| Validate signature (SAML Core §5) | Keycloak `AssertionUtil` + local checks |
-| `NameID` → subject | Read only from cryptographically covered assertion |
-| `Issuer` → issuer | From verified assertion |
-| `Recipient` → client | Extracted from `SubjectConfirmationData` when present |
-| Audience | Required present, or match optional expected audience |
-| Validity window | Requires `NotOnOrAfter`; clock skew; unparseable → reject |
-| XXE hardening | DTD disallowed, secure processing, no external entities |
-| Signature wrapping (XSW) | Ref must cover signed element ID; single assertion under signed Response; claims only from covered tree |
-| Token type `…token-type:saml2` | Documented / constants |
+Every result also reports the LWS `client` and the suite's `tokenType`, ready for an RFC 8693 exchange,
+and fails closed when the client identifier is absent.
 
-### Gaps / softness
-
-| Gap | Nature |
-|-----|--------|
-| **Caller-supplied trust material** | Any caller can get `valid: true` for a self-signed assertion + matching cert — correct as a crypto utility, dangerous if misread as “this Keycloak deployment attested the IdP” |
-| Spec validation section is thin | Implementation is **stricter** than the minimum MUST text (good) |
-| Recipient not always required | Extracted; suite serialization says MUST for tokens; validation section does not force it |
-
-**Verdict:** Protocol model (OOB trust + signature + NameID mapping) is correct. Operational footgun is trust semantics of the public verify API, not missing SAML steps.
+> **Note on `client`:** core §4.1 says the client identifier **SHOULD** be a URI. This provider requires
+> the claim but does not require it to be a URI, because SHOULD is not MUST and Keycloak client ids are
+> conventionally bare strings. See *Known divergences* below.
 
 ---
 
-## Self-signed `did:key` — yes (core algorithm; cleanest suite)
+## OpenID Connect suite
 
-Spec: [lws10-authn-ssi-did-key](https://w3c.github.io/lws-protocol/lws10-authn-ssi-did-key/)
+**Enforced.** `alg` is never `none`; no unsupported `crit`; `typ`, when present, names a JWT;
+`sub` and `iss` present; `azp` present (`clientPresent`). `sub` is dereferenced over the guarded HTTP
+stack and the document must have an `id` equal to `sub` (`subjectDereferenced`, `subjectIdMatches`) —
+on *both* the RDF and the JSON-LD path; the JSON-LD path used to default a missing `id` to the subject,
+accepting a document that never claimed to describe it. The document must declare a
+`https://www.w3.org/ns/lws#OpenIdProvider` service whose `serviceEndpoint` equals `iss`
+(`openIdProviderServiceLocated`), located by parameterized SPARQL so an attacker-controlled `sub`
+cannot inject. Discovery on `iss` must return a configuration whose `issuer` matches
+(`issuerDiscoveryMatches`) and a `jwks_uri` (`jwksResolved`). The `alg` is pinned to the discovered key
+type (`algorithmMatchesKey`) — the classic HS256-against-an-RSA-public-key confusion. Signature
+(`signatureValid`) and an explicit `exp` (`notExpired`; a missing `exp` is not "never expires").
 
-### Present and aligned
+**Enforced when the caller asks.** OpenID Connect Core §3.1.3.7 steps 3–5, which the suite
+incorporates by reference: pass `client_id` and `aud` must list it (`audienceContainsClient`) and `azp`
+must equal it (`authorizedPartyMatchesClient`); pass `audience` and the credential must be restricted
+to it (`audienceMatched`).
 
-| Requirement | Implementation |
-|-------------|----------------|
-| `alg` MUST NOT be `none` | Enforced |
-| `sub` MUST be `did:key:` | Enforced |
-| `sub == iss == client_id` | Enforced |
-| Decode public key from identifier (no network) | `DidKey` multibase + multicodec (Ed25519, P-256) |
-| Validate JWT signature | Pure JDK (EdDSA / ES256 P1363) |
-| Require `exp` | Explicit |
-| Require `aud` | Presence required |
-| Pin JWT `alg` to key type | Enforced |
-| Token type `…token-type:jwt` | Documented / constants |
+**Deferred to the relying party — read this.** Without `client_id`/`audience` the credential is fully
+validated but **nothing binds it to you**: a token minted for a different relying party by the same
+issuer will pass. Supply them wherever the result is treated as an authentication, or set the
+deployment-wide `audience` so a caller that forgets cannot silently accept one. Restrict audiences at
+issuance too (Resource Indicators, RFC 8707).
 
-### Gaps / softness
+## Self-signed Controlled Identifier suite
 
-| Gap | Nature |
-|-----|--------|
-| Serialization **`iat` MUST** | Not hard-required |
-| **`aud` MUST include the target AS** | Presence only |
-| Full multicodec zoo | Practical subset (Ed25519 / P-256), not every codec |
+**Enforced.** `alg` never `none`; no unsupported `crit`; `typ` names a JWT if present;
+`sub == iss == client_id` (`selfIssued`); a `kid` is present (`keyIdPresent`) — no fallback to "the
+only key", because the credential says which key signed it. `sub` is dereferenced and the document's
+`id` must equal it. A verification method is selected by `kid` and is usable only if it is a
+`JsonWebKey` the subject **controls** (`verificationMethodFound`), published for signing and consistent
+with the token's algorithm (`verificationMethodUsableForSigning`, `algorithmMatchesKey`). Signature
+(`signatureValid`), explicit `exp` (`notExpired`), required `iat` (`issuedAtPresent`), and an audience
+that is present and — when one is configured or supplied — matched (`audiencePresent`,
+`audienceMatched`).
 
-**Verdict:** Closest suite to a complete, self-contained implementation of the draft.
+**Optional.** `notReplayed`: a bounded `jti` cache, off by default. No suite mandates replay
+protection, and refusing a second look at a live credential is only correct for a caller that treats
+one verification as one use.
+
+**Hosting.** `GET …/lws-ssi-cid/cid/{userId}` publishes each registered public JWK as an
+`authentication` verification method. Only public members are ever served — a value carrying private
+key material is refused outright and logged, never trimmed and published. Every method carries the
+`id` CID 1.0 requires, with the `kid` percent-encoded into the fragment.
+
+## SAML 2.0 suite
+
+**Enforced.** The IdP certificate's own validity window (`certificateValid`; overridable only by an
+explicit `allowExpiredCertificate`, for offline analysis, never a live decision).
+`<samlp:Status>` must be Success (`statusSuccess`). A signature must be present and valid
+(`signaturePresent`, `signatureValid`) and must **reference the signed element by its own `ID`**
+(`signatureCoversSignedElement`); a signed Response must contain exactly one assertion
+(`singleAssertion`). Claims are read **only from the cryptographically covered assertion**, located by
+precise direct-child navigation rather than a document-wide search an injected element could win — the
+signature-wrapping (XSW) defence. `<Issuer>` required (`issuerPresent`). The bearer
+`<SubjectConfirmationData>` is checked for method, `Recipient` and `NotOnOrAfter`
+(`bearerSubjectConfirmation`, `recipientPresent`, `subjectConfirmationWithinWindow`). `<Conditions>`
+window with clock skew (`withinValidityWindow`), and audience (`audiencePresent`, `audienceMatched`).
+XML is parsed with DTDs **disallowed** and external entities disabled, independent of any caller or
+library configuration.
+
+**Deferred to the relying party — read this.** SAML trust is out of band, so **the caller supplies the
+certificate**. This endpoint answers *"is this Response signed by the certificate you gave me"*, not
+*"does this deployment trust that IdP"*. Anyone can therefore obtain `"valid": true` for an assertion
+they signed themselves with a certificate they also supplied. That is the API behaving correctly.
+**Pin the expected certificate on your side**; do not treat this endpoint as a trust decision.
+
+## Self-signed `did:key` suite
+
+**Enforced.** `alg` never `none`; no unsupported `crit`; `typ` names a JWT if present;
+`sub == iss == client_id` (`selfIssued`) and `sub` is a `did:key` (`subjectIsDidKey`). The public key
+is decoded from the identifier with **no network access** (`keyDecodedFromDid`), and the identifier
+must be **canonically encoded** — the decoded key is re-encoded and must reproduce it, so one key
+cannot have two identifiers. `alg` pinned to the key type (`algorithmMatchesKey`), signature
+(`signatureValid`), explicit `exp` (`notExpired`), required `iat` (`issuedAtPresent`), audience
+present and matched. `notReplayed` optional, as above.
+
+**Supported key types:** Ed25519, P-256, P-384, P-521. Curve parameters come from the JDK rather than
+being transcribed, so the set is one table row per curve. **Not supported:** secp256k1 (the JDK cannot
+without BouncyCastle) and RSA. No BouncyCastle is used at runtime, so this works under both default and
+FIPS Keycloak crypto.
 
 ---
 
-## Cross-cutting protocol quality
+## Supported formats
 
-### Strengths
+**RDF syntaxes**, both served and parsed: JSON-LD (`application/ld+json`), Turtle (`text/turtle`),
+N-Triples (`application/n-triples`), RDF/XML (`application/rdf+xml`). Verifiers request Turtle first.
 
-- Fail-closed verifiers (early fail, broad catch → invalid).
-- Parameterized SPARQL for attacker-controlled IRIs (injection regression tested).
-- SSRF baseline for CID/discovery/JWKS (`SsrfGuard` + timeouts + body size cap).
-- OpenID algorithm–key pinning and did:key alg pin.
-- SAML XXE + XSW defenses with unit tests.
-- Packaging: Jena shaded/relocated for Keycloak classpath safety.
-- IT smoke against real Keycloak (`LwsAuthIT`) plus focused unit tests (SSRF, SAML XSW/XXE, did:key, SPARQL injection).
+JSON-LD is processed by Jena's **JSON-LD 1.1 reader**, so a conforming document verifies whatever shape
+it is written in — aliased terms, an `@graph` wrapper, referenced rather than embedded verification
+methods, additional contexts. **Contexts are resolved from copies bundled in the JAR and never
+fetched**: a processor left to itself would request every `@context` URL a credential's document names,
+which is an unvetted outbound fetch during verification and a dependency on `w3.org` being reachable
+for anything to verify at all. A document naming a context this provider does not bundle is refused as
+unverifiable rather than guessed at, with a key-reading fallback for the standardized compact shape.
 
-### Residual issues
+A document declaring a content type that is not an RDF syntax is **refused by name**, not handed to the
+Turtle parser.
 
-These are **security/ops**, not “wrong suite invented”:
-
-1. **DNS rebinding SSRF** residual on unauthenticated OpenID/SSI CID verify (resolve-once vs connect-time DNS).
-2. **WebID attribute trust** on issuance (`LWSSubMapper`) if user-writable attributes are enabled.
-3. **SAML verify trust model** (caller-supplied cert) can be misused by RPs.
-4. **Internal IP leakage** in client-facing block errors.
-5. Unauthenticated verify → **outbound amplification / DoS** (fetch before signature).
-6. No **jti** replay cache; OpenID **aud** deferred by design.
+**Signature algorithms:** whatever Keycloak's `SignatureProvider` offers for the JWT suites (RS*, PS*,
+ES256/384/512, EdDSA), constrained by the published key; `SHA256withRSA` and the JDK's EdDSA/ECDSA for
+`did:key`. `alg: none` is refused everywhere.
 
 ---
 
-## Scorecard
+## Known divergences and deliberate choices
 
-| Suite / area | Correct core model? | Completeness | Main residual issues |
-|--------------|---------------------|--------------|----------------------|
-| **OpenID** | Yes | High shape / medium claim-strict | `aud`/`azp`; DNS rebinding on fetch; WebID attribute issuance |
-| **SSI CID** | Yes | High | `iat`/AS-bound `aud`; weaker `id==sub`; alg pin consistency |
-| **SAML** | Yes | High (stronger than min spec) | Public verify + caller cert misread as deployment trust |
-| **did:key** | Yes | High | `iat`; AS-bound `aud`; limited multicodec set |
-| **SPI / packaging** | Yes | High | Version pin docs vs runtime |
-| **LWS Core storage** | N/A | Out of scope | Use `lws-server` |
+Each is a decision, not an oversight; each names where the reasoning lives.
 
----
+| # | Divergence | Why |
+|---|---|---|
+| 1 | The LWS `client` identifier is required but **not required to be a URI** | Core §4.1 says SHOULD, not MUST. The bundled demo realm uses `lws-app`, a bare id, which is what Keycloak conventionally issues — see **P6-8**, and use a URI in production if your relying party cares. |
+| 2 | **Audience binding is optional per request** | The suites RECOMMEND an audience restriction; enforcing one unconditionally would reject conforming credentials. A deployment that wants it mandatory sets the `audience` configuration, which applies when a request names none (**P3-6**). |
+| 3 | **Replay protection is off by default** | No suite mandates it, and a verify endpoint is legitimately asked about the same live credential repeatedly. Opt in per caller (**P2-8**). |
+| 4 | **`cid/{userId}` is unauthenticated** | A controlled identifier is a URL others dereference; an identity document requiring a credential would not be dereferenceable. Enumeration is bounded — random-UUID ids, a uniform response shape, and a rate limit — not closed (**P3-7**). |
+| 5 | **The SAML verifier trusts the caller's certificate** | The suite's own model: SAML trust is out of band. See the suite section above. |
+| 6 | **Fetch happens before the signature is known good** | Required by the specification's cold-trust algorithm and unavoidable. The exposure is addressed instead: authenticated endpoints, rate limiting, SSRF vetting at resolution time, bounded timeouts and response size, and a per-host circuit breaker (**P0-3**, **P0-5**). |
+
+## Security posture
+
+The residual issues that appeared in this document's July 2026 revision — DNS-rebinding SSRF,
+internal-address leakage in client-facing errors, unauthenticated verify as an amplification vector,
+user-writable WebID attributes, no `jti` cache — have been closed or given an explicit control; see
+`CHANGELOG.md` and the P0–P3 bands of `TODO.md`. `README.md` § *Security* describes each mechanism, and
+`SECURITY.md` says what is in scope for a vulnerability report and what is deliberate.
+
+The one that is a **deployment** responsibility rather than a code one: the realm's unmanaged attribute
+policy must be `ADMIN_EDIT`, not `ENABLED`. A user who can write their own `lws_jwk` or WebID attribute
+can mint credentials for an identity they should not control. `INSTALL.md` step 9f.
+
+## Verification
+
+`mvn clean verify` — 144 unit tests plus 23 in `LwsAuthIT` against a real Keycloak 26.7.3 container.
+Roughly half the integration tests assert a *rejection*, including a full third-party OpenID Provider
+fixture broken one document at a time, because a verifier that wrongly rejects gets reported by its
+users and one that wrongly accepts does not.
 
 ## Relationship to `lws-server`
 
 ```text
                     lws-authn (Keycloak)                 lws-server (storage)
-OpenID              Issue ID Token (sub=WebID)          Accept / validate ID Token
-                    Host CID + OpenIdProvider           CID trust + discovery + JWKS
+OpenID              issues ID Token (sub = WebID)        accepts / validates ID Token
+                    hosts CID + OpenIdProvider           CID trust + discovery + JWKS
                     POST /lws/verify
 
-SSI CID             Host CID + keys                     Accept self-issued JWT
-                    POST /lws-ssi-cid/verify            Dereference CID by kid
+SSI CID             hosts CID + keys                     accepts self-issued JWT
+                    POST /lws-ssi-cid/verify             dereferences CID by kid
 
-SAML                Verify utility (+ Keycloak IdP)     Accept if IdP certs configured
+SAML                verify utility                       accepts if IdP certs configured
 
-did:key             POST /lws-ssi-did-key/verify        Accept self-issued did:key JWT
+did:key             POST /lws-ssi-did-key/verify         accepts self-issued did:key JWT
 ```
 
-Together they cover the ecosystem. **Neither alone is the full LWS product.** For protocol fidelity of *credentials*, `lws-authn` is often **tighter** (especially SAML XSW, `aud` presence on self-issued suites) than the storage RP path in `lws-server`.
-
----
-
-## Bottom line
-
-**Yes — `lws-authn` correctly implements the four LWS authentication suites** in the sense that matters for a Keycloak extension: correct credential shapes, trust establishment paths, signature validation, and (for OpenID / SSI CID) issuance + CID hosting.
-
-What it is **not**:
-
-1. A **formal Rec-level conformance certificate** (suites are unofficial proposals).  
-2. **Bug-free / internet-hardened by default** (DNS rebinding residual, error leakage, WebID attribute footgun, SAML trust semantics).  
-3. An LWS **storage** or the non-auth protocol suites (core CRUD, notifications, search).
-
-### Ship posture (protocol fidelity)
-
-**Ship with fixes** — suite algorithms and structure are sound; production on the public internet should address SSRF residual, error sanitization, WebID attribute policy, and SAML verify documentation/constraints before treating verify endpoints as deployment-level trust oracles.
-
-### Suggested next steps
-
-1. Mitigate DNS rebinding on verifier HTTP (pin or re-check peer addresses).  
-2. Generic client errors for blocked fetches; detailed reasons server-side only.  
-3. Document/enforce admin-only WebID attributes; clarify SAML trust model in API responses.  
-4. Shared `algMatchesKey` for SSI CID; optional `expected_audience` / `jti` for high-security RPs.  
-5. Expand unit tests for OpenID and SSI CID verification paths beyond the container IT.
+Neither alone is the full LWS product. For credential fidelity specifically, `lws-authn` is the
+stricter of the two.

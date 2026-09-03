@@ -1,3 +1,8 @@
+/*
+ * Copyright Erich Bremer.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 package com.ebremer.lws.authn.net;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -109,7 +114,7 @@ class OutboundHttpClientTest {
     /** The response-size cap still applies on the new client. */
     @Test
     void keepsTheResponseSizeCap() throws Exception {
-        assertTrue(OutboundHttp.MAX_RESPONSE_BYTES > 0);
+        assertTrue(OutboundHttp.maxResponseBytes() > 0);
         // A small body is well under the cap and must round-trip untouched.
         assertEquals("the redirect target", OutboundHttp.get(url("/elsewhere"), null).asResponse().asString());
     }

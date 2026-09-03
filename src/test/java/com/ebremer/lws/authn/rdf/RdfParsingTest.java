@@ -1,3 +1,8 @@
+/*
+ * Copyright Erich Bremer.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 package com.ebremer.lws.authn.rdf;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -116,6 +121,41 @@ class RdfParsingTest {
         assertNull(RdfParsing.parse("{\"@context\":\"https://attacker.example/c\"}", "application/ld+json", SUBJECT));
         assertNull(RdfParsing.parse("{not json at all", "application/ld+json", SUBJECT));
         assertNotNull(RdfParsing.parse(COMPACT_OPENID, "application/ld+json", SUBJECT));
+    }
+
+    /**
+     * P3-5. An unrecognised content type used to fall through to the Turtle parser, so an HTML error
+     * page came back as "Turtle syntax error at line 1" — misleading about what actually went wrong.
+     */
+    @Test
+    void refusesAContentTypeThatIsNotAnRdfSyntax() {
+        String html = "<html><body>404 Not Found</body></html>";
+        RdfParsing.UnsupportedSyntaxException e = assertThrows(RdfParsing.UnsupportedSyntaxException.class,
+                () -> RdfParsing.parse(html, "text/html; charset=utf-8", SUBJECT));
+        assertEquals("text/html", e.getContentType(), "the media type is reported bare and lower-cased");
+
+        assertThrows(RdfParsing.UnsupportedSyntaxException.class,
+                () -> RdfParsing.parse("%PDF-1.7", "application/pdf", SUBJECT));
+    }
+
+    /**
+     * The brace-sniff is a fallback for a document that declares nothing, and must not rescue one that
+     * declares the wrong thing: an HTML body starting with a brace is still not JSON-LD.
+     */
+    @Test
+    void theJsonSniffDoesNotOverrideADeclaredContentType() {
+        assertThrows(RdfParsing.UnsupportedSyntaxException.class,
+                () -> RdfParsing.parse("{\"error\":\"not found\"}", "text/html", SUBJECT));
+    }
+
+    /** A document that declares no content type at all is still read as Turtle, the syntax we ask for. */
+    @Test
+    void anAbsentContentTypeStillFallsBackToTurtle() {
+        Model model = RdfParsing.parse(
+                "<" + SUBJECT + "> <https://www.w3.org/ns/did#service> <" + SUBJECT + "#op> .",
+                null, SUBJECT);
+        assertTrue(declaresProvider(model));
+        assertNotNull(RdfParsing.parse(COMPACT_OPENID, null, SUBJECT), "and JSON-LD is still sniffed");
     }
 
     @Test

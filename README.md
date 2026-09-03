@@ -20,6 +20,18 @@ The OpenID and self-signed-CID suites dereference the subject's
 [Controlled Identifier Document](https://www.w3.org/TR/cid-1.0/) and use **Apache Jena 6.2.0** for RDF;
 SAML uses Keycloak's SAML library for XML signature validation; `did:key` is pure JDK crypto.
 
+### The other documents
+
+| | |
+|---|---|
+| [`INSTALL.md`](INSTALL.md) | Deploying this on a server, start to finish. |
+| [`COMPLIANCE.md`](COMPLIANCE.md) | **The conformance statement** — which normative requirements each suite enforces, which are deferred to the relying party, and what a `"valid": true` actually asserts. Read it before integrating. |
+| [`CHANGELOG.md`](CHANGELOG.md) | What changed, and **what breaks on upgrade**. |
+| [`SECURITY.md`](SECURITY.md) | Reporting a vulnerability, and what is deliberate rather than a bug. |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Building, testing, and the conventions this codebase expects. |
+| [`TODO.md`](TODO.md) | The backlog, as a review against the specifications — and the design history of everything already done. |
+| [`docs/`](docs/) | A walkthrough per suite, each with a runnable demo script. |
+
 ---
 
 ## Authentication suites
@@ -104,6 +116,27 @@ Getting this wrong does not fail a unit test: it fails when Jena loads inside Ke
 runs `LwsAuthIT`, which deploys the shaded JAR into a real Keycloak container and exercises RDF
 serving, parsing and SPARQL — run it after touching dependencies.
 
+### Tests
+
+`mvn test` runs 144 unit tests. `mvn verify` additionally runs 23 in `LwsAuthIT`, which needs Docker
+and is skipped without it.
+
+**`LwsAuthIT` binds host port 8080 and cannot run in parallel with itself.** The OpenID verifier
+dereferences its own issuer, so that URL has to resolve to Keycloak both from the test JVM and from
+inside the container, and `http://localhost:8080` bound straight through is the only spelling that
+does. The suite checks the port first and says so rather than timing out; the reasoning, and why a
+random port is not worth what it costs, is in the `LwsAuthIT` class javadoc.
+
+Roughly half the integration tests assert a *rejection* rather than an acceptance. That is deliberate:
+a verifier that wrongly rejects gets reported by its users, and one that wrongly accepts does not, so
+the failure branches are where a bug goes unnoticed. A host-side fixture server plays a third-party
+OpenID Provider — controlled identifier document, discovery document, JWKS — and each test breaks
+exactly one of the three, asserting *which* check fails rather than merely that the credential was
+refused.
+
+CI (`.github/workflows/ci.yml`) runs that on JDK 21, builds again on JDK 25 and asserts the class files
+are still Java 21, and runs CodeQL. Actions are pinned by commit SHA; Dependabot proposes the bumps.
+
 ## Deploy
 
 Keycloak loads provider JARs from its `providers/` directory.
@@ -156,6 +189,10 @@ incorporates by reference:
 |---|---|
 | `client_id` | your own client identifier. When given, `aud` must list it and `azp` must equal it (steps 3–5). |
 | `audience` | an additional audience the credential must be restricted to, typically the authorization server. |
+
+> LWS core §4.1 says a client identifier **SHOULD** be a URI. `lws-authn` requires `azp` to be present
+> but does not require it to be a URI, so a conventional Keycloak client id verifies. Prefer a URI in
+> production — see [`COMPLIANCE.md`](COMPLIANCE.md) § *Known divergences*.
 
 Without them the credential is still validated — signature, issuer, expiry, and a required `azp` — but
 nothing binds it to *you*, so a token minted for another relying party would pass. Supply them wherever
@@ -308,6 +345,18 @@ behaviours are covered by tests — `mvn test` for the unit tests, `mvn verify` 
   contain exactly one assertion. An injected, unsigned assertion is ignored.
 - **XXE.** SAML XML is parsed with a locally-configured parser that **disallows DTDs** and disables
   external entities, independent of any caller/library parser configuration.
+- **The `cid/{userId}` endpoints are unauthenticated, deliberately.** A controlled identifier is a URL
+  other people dereference — that is what makes it an identifier rather than a local user record — and
+  a verifier meets the subject there before any trust exists in either direction, so there is no
+  credential it could present. What that costs is enumeration, which is bounded rather than closed: the
+  identifiers are Keycloak user ids (random UUIDs, not guessable and not meaningful), every answer —
+  document, `404`, `406`, `429` — is the same media type with the same body shape so nothing but the
+  status distinguishes them, and a rate limit (`cid-rate-limit`, default 600/minute per caller) makes
+  scraping slow. Set `enabled=false` for a deployment that does not want to host identifiers at all.
+- **Unrecognised syntaxes are refused, not guessed.** A dereferenced document that declares a content
+  type which is not an RDF syntax this verifier reads is rejected by name, rather than handed to the
+  Turtle parser to fail with a misleading error. Only a document declaring nothing at all falls back to
+  Turtle, the syntax the verifiers ask for first.
 
 ---
 
@@ -341,13 +390,71 @@ amplification, a network-probe oracle and a cheap denial of service.
 > set the mode to `public` explicitly.
 
 Rate limiting applies in every mode, including `public`, and is enforced before the caller is
-authenticated. Set `rate-limit` to `0` to turn it off. A refusal is a `401`/`403`/`429` carrying a
-`WWW-Authenticate` challenge, which is what distinguishes "you may not call this endpoint" from a
-`401` meaning "the credential you asked me to check is not valid".
+authenticated. Set `rate-limit` to `0` to turn it off.
 
 Set the mode with either `kc.sh build --spi-realm-restapi-extension--lws--access=public` (repeat per
 provider id: `lws`, `lws-ssi-cid`, `lws-saml`, `lws-ssi-did-key`) or, with no rebuild, the environment
 variable `LWS_AUTHN_VERIFY_ACCESS=public`.
+
+### What each status means
+
+A `/verify` status is about **the request**, never about the credential in it. The credential's verdict
+is in the body:
+
+| Status | Meaning |
+|---|---|
+| `200` | The request was answered. Read `valid` — `true` or `false`. |
+| `400` | The request could not be read: a missing or unparseable parameter. |
+| `401` / `403` | **You** may not use this endpoint. Carries a `WWW-Authenticate` challenge (RFC 9110 §15.5.2). |
+| `404` | This suite is not enabled on this realm. |
+| `429` | Rate limited; retry shortly. |
+
+> **A rejected credential is a `200` with `"valid": false`.** Until this release it was a bare `401`
+> with no challenge — which RFC 9110 §15.5.2 forbids, and which said the wrong thing anyway: the
+> request *was* authorized, and the server answered it. A client that treated any non-`200` as
+> "endpoint unavailable" now sees the verdict it was asking for. Check `valid`, not the status.
+
+Every non-`200` carries `application/json` of one shape — `{"error": …, "error_description": …}` —
+whichever endpoint and whichever status produced it.
+
+---
+
+## Configuration reference
+
+Every setting is read from the provider's `Config.Scope` first, then a system property, then an
+environment variable, then a compiled-in default. `Config.Scope` is the supported surface
+(`kc.sh build --spi-realm-restapi-extension--<provider>--<key>=<value>`, where `<provider>` is `lws`,
+`lws-ssi-cid`, `lws-saml` or `lws-ssi-did-key`) and the only one that can differ per provider; the
+environment variable is what a container deployment can set without rebuilding the image.
+
+**Per provider:**
+
+| Setting | Scope key | System property | Environment variable | Default |
+|---|---|---|---|---|
+| Serve this suite at all | `enabled` | `lws.authn.enabled` | `LWS_AUTHN_ENABLED` | `true` |
+| Audience to require when the request names none | `audience` | `lws.authn.audience` | `LWS_AUTHN_AUDIENCE` | — |
+| `Cache-Control: max-age` on a served CID | `cid-cache-seconds` | `lws.authn.cid.cacheSeconds` | `LWS_AUTHN_CID_CACHE_SECONDS` | `300` |
+| CID requests per minute, per caller | `cid-rate-limit` | `lws.authn.cid.rateLimit` | `LWS_AUTHN_CID_RATE_LIMIT` | `600` |
+
+Plus the four verify-access settings in the table above.
+
+**Server-wide** (read from whichever provider's scope sets them; a provider that says nothing about a
+setting leaves it alone):
+
+| Setting | Scope key | System property | Environment variable | Default |
+|---|---|---|---|---|
+| SSRF allow-list (comma-separated hosts) | `allowed-internal-hosts` | `lws.authn.allowedInternalHosts` | `LWS_AUTHN_ALLOWED_INTERNAL_HOSTS` | — |
+| Outbound fetch timeout (ms) | `http-timeout-millis` | `lws.authn.http.timeoutMillis` | `LWS_AUTHN_HTTP_TIMEOUT_MILLIS` | `5000` |
+| Outbound response cap (bytes) | `http-max-response-bytes` | `lws.authn.http.maxResponseBytes` | `LWS_AUTHN_HTTP_MAX_RESPONSE_BYTES` | `262144` |
+| Clock skew allowed on `exp`/`nbf`/`<Conditions>` (s) | `clock-skew-seconds` | `lws.authn.clockSkewSeconds` | `LWS_AUTHN_CLOCK_SKEW_SECONDS` | `60` |
+
+Out-of-range values are clamped rather than honoured (timeout 100 ms–60 s, response cap 1 KiB–16 MiB,
+skew 0–600 s), and a value that will not parse falls back to the default.
+
+**Per realm.** `enabled` is the one setting realms of the same server sensibly differ on, so it also
+honours a realm attribute — `lws.authn.<providerId>.enabled` (for example
+`lws.authn.lws-saml.enabled`) set to `true` or `false` overrides the provider-wide flag for that realm
+alone. A disabled suite answers `404` on both its endpoints.
 
 ---
 
@@ -357,8 +464,8 @@ variable `LWS_AUTHN_VERIFY_ACCESS=public`.
   Keycloak-hosted identifiers; private keys never reach Keycloak (only public JWKs are registered). The
   SAML and `did:key` suites host nothing.
 - **SAML trust is out-of-band.** The verifier requires the trusted IdP certificate as input; it
-  validates the XML signature, the `<Conditions>` window (±60 s skew) and the audience, but does not
-  fetch metadata or build a trust chain.
+  validates the XML signature, the `<Conditions>` window (±60 s skew by default, `clock-skew-seconds`)
+  and the audience, but does not fetch metadata or build a trust chain.
 - **`did:key` key types.** Ed25519, P-256, P-384 and P-521 are supported; secp256k1 (which the JDK
   cannot do without BouncyCastle) and RSA are not. No BouncyCastle is used, so this works under both
   default and FIPS Keycloak crypto. Curve parameters come from the JDK rather than being transcribed
@@ -377,10 +484,18 @@ variable `LWS_AUTHN_VERIFY_ACCESS=public`.
     than guessed at; the older key-walking reader remains as a fallback for the compact shape.
 - **Cacheable identity documents.** The `cid/{userId}` endpoints negotiate on `Accept` q-values,
   answer `406` when nothing on offer is acceptable, and carry `Vary: Accept`, `ETag` and
-  `Cache-Control` so a verifier can cache them — which both suite drafts encourage, "to reduce
-  unnecessary network requests and the associated metadata leakage".
+  `Cache-Control` (`cid-cache-seconds`, default 300) so a verifier can cache them — which both suite
+  drafts encourage, "to reduce unnecessary network requests and the associated metadata leakage".
+- **Verification-method identifiers.** A JWK `kid` is arbitrary text, so the self-signed-CID document
+  percent-encodes it into the `<subject>#<kid>` fragment rather than producing an IRI Jena refuses to
+  serialize. Every method has an `id`, as CID 1.0 requires: when the `kid` cannot supply the fragment —
+  absent, blank, over-long, or not well-formed text — the position stands in as `#key-<n>`. The
+  verifier matches a credential's `kid` against a method's fragment both raw and decoded, so documents
+  from other implementations still resolve.
 - **Audience / token exchange.** Every `/verify` endpoint accepts an `audience` parameter (and the
-  OpenID one a `client_id`) so the credential can be bound to the party checking it; each result reports
+  OpenID one a `client_id`) so the credential can be bound to the party checking it — and a deployment
+  can require one for every request with the `audience` setting, rather than trusting each caller to
+  remember the optional parameter; each result reports
   the LWS `client` and the suite's `tokenType`, ready for an RFC 8693 exchange. Restrict credential
   audiences at issuance too (Resource Indicators, RFC 8707).
 
@@ -388,6 +503,13 @@ variable `LWS_AUTHN_VERIFY_ACCESS=public`.
 
 ```
 src/main/java/com/ebremer/lws/authn/
+  config/                                       configuration surface
+    Settings                                    scope -> system property -> environment -> default
+    ServerSettings                              server-wide tunables (SSRF list, timeouts, skew)
+    EndpointSettings                            per-provider settings, incl. the per-realm on/off flag
+  http/                                         shared endpoint plumbing
+    JsonResponses                               every non-result body, serialized not concatenated
+    CidEndpoint                                 the shared cid/{userId} endpoint
   openid/                                       OpenID Connect suite
     LWSConstants, LWSSubMapper                  vocabulary + sub→WebID protocol mapper
     cid/ControlledIdentifierDocument            CID builder (OpenIdProvider service)
@@ -408,3 +530,6 @@ src/main/java/com/ebremer/lws/authn/
     verify/SelfSignedDidKeyVerifier, DidKeyVerificationResult
 src/main/resources/META-INF/services/           SPI registrations (mapper + four resource factories)
 ```
+
+Every source file carries `SPDX-License-Identifier: Apache-2.0`; the project is Apache-2.0 (see
+[`LICENSE`](LICENSE)).

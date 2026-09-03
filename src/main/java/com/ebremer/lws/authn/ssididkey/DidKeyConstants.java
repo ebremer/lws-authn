@@ -1,6 +1,8 @@
 /*
  * Copyright Erich Bremer.
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Constants for the LWS 1.0 Self-signed Identity (did:key) Authentication Suite.
  * Specification: https://w3c.github.io/lws-protocol/lws10-authn-ssi-did-key/
  */

@@ -1,6 +1,8 @@
 /*
  * Copyright Erich Bremer.
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Decoding (and encoding) of did:key identifiers per "The did:key Method" — multibase base58btc plus
  * a multicodec key-type prefix. Supports Ed25519 (0xed01) and the NIST curves P-256 (0x1200),
  * P-384 (0x1201) and P-521 (0x1202). Pure JDK: no BouncyCastle, so it works under both the default
