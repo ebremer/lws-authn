@@ -27,6 +27,7 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
 import org.apache.jena.riot.RDFFormat;
+import org.jboss.logging.Logger;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
@@ -35,20 +36,26 @@ import org.keycloak.services.resource.RealmResourceProvider;
 import org.keycloak.urls.UrlType;
 import org.keycloak.util.JsonSerialization;
 
+import com.ebremer.lws.authn.jose.PublicJwk;
 import com.ebremer.lws.authn.ssicid.SsiCidConstants;
 import com.ebremer.lws.authn.ssicid.cid.SelfSignedControlledIdentifierDocument;
 import com.ebremer.lws.authn.ssicid.verify.SelfSignedCidVerifier;
 import com.ebremer.lws.authn.ssicid.verify.SsiCidVerificationResult;
+import com.ebremer.lws.authn.verify.VerifyAccess;
 
 /**
  * @author Erich Bremer
  */
 public class SsiCidResourceProvider implements RealmResourceProvider {
 
-    private final KeycloakSession session;
+    private static final Logger log = Logger.getLogger(SsiCidResourceProvider.class);
 
-    public SsiCidResourceProvider(KeycloakSession session) {
+    private final KeycloakSession session;
+    private final VerifyAccess access;
+
+    public SsiCidResourceProvider(KeycloakSession session, VerifyAccess access) {
         this.session = session;
+        this.access = access;
     }
 
     @Override
@@ -79,16 +86,25 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
         String issuer = Urls.realmIssuer(session.getContext().getUri(UrlType.FRONTEND).getBaseUri(), realm.getName());
         String webId = issuer + "/" + SsiCidConstants.RESOURCE_PROVIDER_ID + "/" + SsiCidConstants.CID_PATH + "/" + user.getId();
 
+        // Only the public half of a key may ever appear here (CID 1.0: a publicKeyJwk map "MUST NOT
+        // include any members of the private information class, such as `d`"). The attribute is
+        // operator-managed free text, so one mis-pasted key pair would otherwise publish an agent's
+        // private key at this world-readable URL. A JWK carrying private material is dropped outright,
+        // with a warning, rather than trimmed: the key is already compromised and quietly serving its
+        // public half would hide that from the operator.
         List<JsonNode> jwks = new ArrayList<>();
         user.getAttributeStream(SsiCidConstants.JWK_ATTRIBUTE).forEach(value -> {
+            JsonNode node;
             try {
-                JsonNode node = JsonSerialization.mapper.readTree(value);
-                if (node.isObject()) {
-                    jwks.add(node);
-                }
-            } catch (IOException ignore) {
-                // skip attribute values that are not valid JWK JSON
+                node = JsonSerialization.mapper.readTree(value);
+            } catch (IOException notJson) {
+                log.warnf("Ignoring a '%s' value on user %s: it is not valid JSON",
+                        SsiCidConstants.JWK_ATTRIBUTE, user.getId());
+                return;
             }
+            PublicJwk.sanitize(node).ifPresentOrElse(jwks::add, () ->
+                    log.warnf("Refusing to publish a '%s' value on user %s: %s",
+                            SsiCidConstants.JWK_ATTRIBUTE, user.getId(), PublicJwk.describeRejection(node)));
         });
 
         SelfSignedControlledIdentifierDocument cid = new SelfSignedControlledIdentifierDocument(webId, jwks);
@@ -104,8 +120,10 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
     }
 
     /**
-     * Verifies a self-issued JWT as an LWS authentication credential. The credential may be supplied
-     * as the {@code credential} form parameter or as a {@code Bearer} authorization header.
+     * Verifies a self-issued JWT as an LWS authentication credential. The credential is supplied as
+     * the {@code credential} form parameter; the {@code Authorization} header carries the
+     * <em>caller's</em> own credential (see {@link com.ebremer.lws.authn.verify.VerifyAccess}), and
+     * only falls back to meaning the credential to verify in {@code public} access mode.
      */
     @POST
     @Path(SsiCidConstants.VERIFY_PATH)
@@ -113,10 +131,13 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
     @Produces(MediaType.APPLICATION_JSON)
     public Response verify(@FormParam("credential") String credential,
                            @HeaderParam("Authorization") String authorization) {
+        Response denied = access.check(session, authorization);
+        if (denied != null) {
+            return denied;
+        }
         String token = credential;
-        if ((token == null || token.isBlank()) && authorization != null
-                && authorization.regionMatches(true, 0, "Bearer ", 0, 7)) {
-            token = authorization.substring(7).trim();
+        if ((token == null || token.isBlank()) && access.allowsCredentialInAuthorizationHeader()) {
+            token = VerifyAccess.bearerToken(authorization);
         }
         if (token == null || token.isBlank()) {
             return Response.status(Response.Status.BAD_REQUEST)

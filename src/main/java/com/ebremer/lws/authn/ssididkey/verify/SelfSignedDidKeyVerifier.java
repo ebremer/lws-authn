@@ -20,6 +20,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.PublicKey;
 import java.security.Signature;
 
+import org.jboss.logging.Logger;
 import org.keycloak.jose.jws.JWSHeader;
 import org.keycloak.jose.jws.JWSInput;
 import org.keycloak.representations.JsonWebToken;
@@ -27,14 +28,18 @@ import org.keycloak.util.JsonSerialization;
 
 import com.ebremer.lws.authn.ssididkey.DidKey;
 import com.ebremer.lws.authn.ssididkey.DidKeyConstants;
+import com.ebremer.lws.authn.verify.Trace;
 
 /**
  * @author Erich Bremer
  */
 public class SelfSignedDidKeyVerifier {
 
+    private static final Logger log = Logger.getLogger(SelfSignedDidKeyVerifier.class);
+
     public DidKeyVerificationResult verify(String credential) {
         DidKeyVerificationResult result = new DidKeyVerificationResult();
+        result.setTraceId(Trace.newId());
         try {
             JWSInput jws = new JWSInput(credential);
             JWSHeader header = jws.getHeader();
@@ -118,7 +123,8 @@ public class SelfSignedDidKeyVerifier {
 
             result.setValid(result.getErrors().isEmpty());
         } catch (Exception e) {
-            result.error(e.getClass().getSimpleName() + ": " + String.valueOf(e.getMessage()));
+            log.debugf(e, "[%s] LWS did:key credential verification failed", result.getTraceId());
+            result.error("Credential could not be validated");
             return result.fail();
         }
         return result;

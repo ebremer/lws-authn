@@ -24,7 +24,7 @@ proxy, with the LWS provider registered and verified end-to-end.
 6. [Build the `lws-authn` provider](#6-build-the-lws-authn-provider)
 7. [Deploy the provider JAR](#7-deploy-the-provider-jar)
 8. [Smoke test in dev mode](#8-smoke-test-in-dev-mode)
-9. [Configure Keycloak for production](#9-configure-keycloak-for-production)
+9. [Configure Keycloak for production](#9-configure-keycloak-for-production) — including [who may call `/verify`](#9d-decide-who-may-call-verify)
 10. [Build the optimized image](#10-build-the-optimized-image)
 11. [Run Keycloak as a systemd service](#11-run-keycloak-as-a-systemd-service)
 12. [Terminate TLS with nginx + certbot](#12-terminate-tls-with-nginx--certbot)
@@ -310,8 +310,43 @@ You opt specific hosts back in with a comma-separated list, via **either**:
 
 We wire the environment variable into the systemd unit in the next steps. For a single-box install
 where the server can't reach its own public IP, set it to your hostname (and/or `127.0.0.1`); leave
-it empty otherwise. Residual risks the guard does **not** cover: DNS rebinding and HTTP redirects to
-an internal target.
+it empty otherwise.
+
+The guard is installed as the **DNS resolver** of the HTTP client the verifiers use, not as a separate
+check in front of it, so the addresses it approves are exactly the addresses connected to — there is no
+second lookup for a hostile name server to poison. That client also refuses to follow redirects.
+Neither property depends on `spi-connections-http-client-default-allow-redirects`, so changing that
+server-wide setting cannot open a hole here.
+
+---
+
+### 9d. Decide who may call `/verify`
+
+The four `…/verify` endpoints are **authenticated by default**, because verification is expensive out
+of proportion to the request: a single POST makes this server dereference a URL the caller chose, run
+OpenID Connect Discovery against it and fetch its JWKS — before the credential's signature is known
+good, since that is the order the specification's cold-trust algorithm requires.
+
+| Setting | Environment variable | System property | Default |
+|---|---|---|---|
+| Mode (`bearer` / `secret` / `public`) | `LWS_AUTHN_VERIFY_ACCESS` | `lws.authn.verify.access` | `bearer` |
+| Shared secret (mode `secret`) | `LWS_AUTHN_VERIFY_SECRET` | `lws.authn.verify.secret` | — |
+| Required realm role (mode `bearer`) | `LWS_AUTHN_VERIFY_ROLE` | `lws.authn.verify.role` | — |
+| Requests per minute, per caller | `LWS_AUTHN_VERIFY_RATE_LIMIT` | `lws.authn.verify.rateLimit` | `60` |
+
+The same settings are available as build-time provider options, one per provider id, e.g.
+`kc.sh build --spi-realm-restapi-extension--lws--access=public`. The environment variables need no
+rebuild, so they are what the systemd unit below uses.
+
+- **`bearer`** — the caller presents a Keycloak access token for the realm.
+- **`secret`** — the caller presents a pre-shared secret as `Authorization: Bearer <secret>`. Choosing
+  `secret` without configuring one falls back to `bearer`; it never fails open.
+- **`public`** — anonymous, the pre-1.0 behaviour. Only for endpoints already restricted to a trusted
+  network by the firewall or reverse proxy.
+
+> In `bearer` and `secret` mode the `Authorization` header carries the **caller's** credential, so the
+> credential being verified must be sent as the `credential` form parameter. Only `public` mode keeps
+> the old fallback of reading the credential out of `Authorization`.
 
 ---
 
@@ -346,6 +381,12 @@ KC_DB_PASSWORD=CHANGE_ME_DB
 # dereference its own documents over a loopback/internal address.
 LWS_AUTHN_ALLOWED_INTERNAL_HOSTS=
 
+# Who may call the LWS /verify endpoints — see step 9d. 'bearer' (the default)
+# requires a Keycloak access token for the realm. Set 'public' only if the
+# endpoints are already restricted to a trusted network.
+LWS_AUTHN_VERIFY_ACCESS=bearer
+LWS_AUTHN_VERIFY_RATE_LIMIT=60
+
 # First boot ONLY: seed the temporary admin, then comment these out and
 # restart (see step 11c).
 KC_BOOTSTRAP_ADMIN_USERNAME=admin
@@ -355,8 +396,9 @@ sudo chmod 600 /etc/keycloak/keycloak.env
 ```
 
 > `KC_DB_PASSWORD` is Keycloak's environment-variable form of the `db-password` option (uppercase,
-> `KC_` prefix, dashes → underscores). `LWS_AUTHN_ALLOWED_INTERNAL_HOSTS` is read directly by the
-> provider.
+> `KC_` prefix, dashes → underscores). `LWS_AUTHN_ALLOWED_INTERNAL_HOSTS` and the
+> `LWS_AUTHN_VERIFY_*` settings are read directly by the provider, so they take effect on restart with
+> no `kc.sh build`.
 
 ### 11b. Unit file
 
@@ -495,15 +537,19 @@ issued by your server.
 ```bash
 BASE=https://id.example.com/realms/lws-demo
 
-ID_TOKEN=$(curl -s -X POST "$BASE/protocol/openid-connect/token" \
+TOKENS=$(curl -s -X POST "$BASE/protocol/openid-connect/token" \
   -d grant_type=password -d client_id=lws-app -d scope=openid \
-  -d username=alice -d password=CHANGE_ME | jq -r .id_token)
+  -d username=alice -d password=CHANGE_ME)
+ID_TOKEN=$(echo "$TOKENS" | jq -r .id_token)          # the credential to verify
+CALLER=$(echo "$TOKENS" | jq -r .access_token)        # who is asking (see step 9d)
 
 # The sub is a WebID (a fetchable URL), not an opaque UUID:
 echo "$ID_TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq '{sub, iss}'
 
 # Run the full validation (dereference sub -> locate OpenIdProvider service -> OIDC discovery -> verify signature):
-curl -s -X POST "$BASE/lws/verify" --data-urlencode "credential=$ID_TOKEN" | jq
+curl -s -X POST "$BASE/lws/verify" \
+  -H "Authorization: Bearer $CALLER" \
+  --data-urlencode "credential=$ID_TOKEN" | jq
 ```
 
 Expect:
@@ -525,6 +571,14 @@ Expect:
 }
 ```
 
+A failed verification also carries a `traceId`. The response deliberately says only *what* failed —
+never an upstream status code, a resolved address or an exception message — so the detail is in the
+server log at `DEBUG` under that id:
+
+```bash
+sudo journalctl -u keycloak | grep <traceId>
+```
+
 If `subjectDereferenced` is `false`, the server couldn't fetch its own WebID — revisit the hostname
 ([step 9b](#9b-write-keycloakconf)) and the SSRF allow-list ([step 9c](#9c-plan-the-ssrf-allow-list-important-for-openid-verify)).
 
@@ -540,6 +594,11 @@ If `subjectDereferenced` is `false`, the server couldn't fetch its own WebID —
   file.
 - **SSRF allow-list** — empty unless the server must dereference its own documents over an internal
   address, in which case it lists exactly those hosts.
+- **`/verify` access** — left at `bearer`, or set to `public` only behind a network restriction that
+  makes it unreachable from the internet ([step 9d](#9d-decide-who-may-call-verify)).
+- **User attributes are admin-only** — the realm's unmanaged attribute policy is `ADMIN_EDIT`, not
+  `ENABLED`. `lws_jwk` is the signing key an identity publishes and the WebID attribute becomes a
+  credential's `sub`; a user who can write either can impersonate an identity.
 - **Firewall** — only `22/80/443` exposed; Keycloak's `8080` stays on loopback.
 - **Direct Access Grants off** for real clients (it's on in the demo only to make it scriptable).
 - **Audience** — if your LWS/resource server checks `aud`, add a Keycloak **Audience** mapper or use
@@ -558,6 +617,8 @@ If `subjectDereferenced` is `false`, the server couldn't fetch its own WebID —
 | `kc.sh` complains about H2/dev at startup | `start --optimized` ran but a build-time option changed. Re-run `kc.sh build` (step 10), then restart. |
 | WebID / discovery URLs use the wrong host or `http` | `hostname` unset/wrong, or nginx isn't forwarding `X-Forwarded-*`. Fix `keycloak.conf` (step 9b) and the proxy headers (step 12); rebuild if needed. |
 | `/lws/verify` → `subjectDereferenced: false` or a blocked-host error | The server can't reach its own WebID, or the SSRF guard blocked an internal address. Ensure the public hostname is reachable from the box, or set `LWS_AUTHN_ALLOWED_INTERNAL_HOSTS` (step 9c/11a) and restart. |
+| `/verify` → `401` with `{"error":"invalid_token"}` and a `WWW-Authenticate` header | The **caller** is not authenticated. Since the endpoints are gated by default, pass your own access token in `Authorization` and the credential under test in the `credential` form field (step 9d). A `401` *without* that header instead means the credential you submitted did not validate. |
+| `/verify` → `429` with `{"error":"slow_down"}` | The caller exceeded `LWS_AUTHN_VERIFY_RATE_LIMIT` (default 60/minute, per source address). Raise it, or set it to `0` to disable rate limiting. |
 | `directAccessGrantsEnabled`/token request returns `invalid_client` | The client isn't public or Direct Access Grants is off. For the demo client, enable both. |
 
 Useful commands:

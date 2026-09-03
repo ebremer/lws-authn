@@ -26,6 +26,7 @@ import org.apache.jena.riot.RDFFormat;
 import org.apache.jena.vocabulary.RDF;
 import org.keycloak.util.JsonSerialization;
 
+import com.ebremer.lws.authn.jose.PublicJwk;
 import com.ebremer.lws.authn.ssicid.SsiCidConstants;
 
 /**
@@ -50,11 +51,20 @@ import com.ebremer.lws.authn.ssicid.SsiCidConstants;
 public final class SelfSignedControlledIdentifierDocument {
 
     private final String id;
-    private final List<JsonNode> publicKeyJwks; // each a JWK object, ideally carrying a "kid"
+    private final List<JsonNode> publicKeyJwks; // each a public-only JWK object, ideally carrying a "kid"
 
+    /**
+     * @param id            the controlled identifier this document describes
+     * @param publicKeyJwks candidate JWKs. Each is passed through {@link PublicJwk#sanitize} and is
+     *                      silently skipped if it is not publishable — this document is served to
+     *                      anyone, so no caller can make it emit private key material, whatever it
+     *                      passes in. Callers that want to tell an operator <em>why</em> a key was
+     *                      dropped should filter first and log {@link PublicJwk#describeRejection}.
+     */
     public SelfSignedControlledIdentifierDocument(String id, List<JsonNode> publicKeyJwks) {
         this.id = id;
-        this.publicKeyJwks = publicKeyJwks;
+        this.publicKeyJwks = publicKeyJwks == null ? List.of()
+                : publicKeyJwks.stream().map(PublicJwk::sanitize).flatMap(java.util.Optional::stream).toList();
     }
 
     /** Compact JSON-LD form (the canonical document; the JWK is naturally a JSON object). */

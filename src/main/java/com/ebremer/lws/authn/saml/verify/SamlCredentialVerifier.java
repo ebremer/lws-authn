@@ -28,6 +28,7 @@ import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 
+import org.jboss.logging.Logger;
 import org.keycloak.saml.processing.core.saml.v2.util.AssertionUtil;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
@@ -35,15 +36,25 @@ import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
 import com.ebremer.lws.authn.saml.SamlConstants;
+import com.ebremer.lws.authn.verify.Trace;
 
 /**
  * @author Erich Bremer
  */
 public class SamlCredentialVerifier {
 
+    private static final Logger log = Logger.getLogger(SamlCredentialVerifier.class);
+
     private static final long CLOCK_SKEW_SECONDS = 60;
     private static final String XMLDSIG_NS = "http://www.w3.org/2000/09/xmldsig#";
     private static final String NS = SamlConstants.SAML_ASSERTION_NS;
+    private static final String PROTOCOL_NS = SamlConstants.SAML_PROTOCOL_NS;
+
+    /** The only {@code <samlp:StatusCode>} an authentication credential may carry (SAML Core §3.2.2). */
+    private static final String STATUS_SUCCESS = "urn:oasis:names:tc:SAML:2.0:status:Success";
+
+    /** The confirmation method an LWS credential uses: it is a bearer token. */
+    private static final String BEARER_METHOD = "urn:oasis:names:tc:SAML:2.0:cm:bearer";
 
     /**
      * @param credential       the SAML 2.0 Response, as XML or base64-encoded XML
@@ -51,9 +62,47 @@ public class SamlCredentialVerifier {
      * @param expectedAudience optional audience the assertion must be restricted to
      */
     public SamlVerificationResult verify(String credential, X509Certificate idpCertificate, String expectedAudience) {
+        return verify(credential, idpCertificate, expectedAudience, false);
+    }
+
+    /**
+     * @param credential              the SAML 2.0 Response, as XML or base64-encoded XML
+     * @param idpCertificate          the trusted IdP signing certificate (established out of band)
+     * @param expectedAudience        optional audience the assertion must be restricted to
+     * @param allowExpiredCertificate accept a signing certificate that is expired or not yet valid.
+     *                                Only for offline analysis of an old credential; never in a
+     *                                deployment that treats the result as a live authentication.
+     */
+    public SamlVerificationResult verify(String credential, X509Certificate idpCertificate, String expectedAudience,
+                                         boolean allowExpiredCertificate) {
         SamlVerificationResult result = new SamlVerificationResult();
+        result.setTraceId(Trace.newId());
         try {
+            // --- the trust anchor itself ---
+            // A signature is only as good as the certificate it is checked against. An expired or
+            // not-yet-valid IdP certificate is not a trust anchor, and accepting one silently keeps a
+            // retired signing key usable forever.
+            boolean certificateValid = certificateCurrentlyValid(idpCertificate);
+            result.check("certificateValid", certificateValid);
+            if (!certificateValid && !allowExpiredCertificate) {
+                result.error("The supplied IdP certificate is expired or not yet valid");
+                return result.fail();
+            }
+
             Document doc = parseSecurely(toXmlBytes(credential));
+
+            // --- protocol status ---
+            // A <samlp:Response> that reports a failure is not a credential, however well signed the
+            // assertion it happens to carry is.
+            Element root = doc.getDocumentElement();
+            if (root != null && "Response".equals(root.getLocalName()) && PROTOCOL_NS.equals(root.getNamespaceURI())) {
+                boolean success = isSuccessStatus(root);
+                result.check("statusSuccess", success);
+                if (!success) {
+                    result.error("SAML Response <StatusCode> is not " + STATUS_SUCCESS);
+                    return result.fail();
+                }
+            }
 
             // --- signature ---
             Element signed = findSignedElement(doc);
@@ -100,9 +149,47 @@ public class SamlCredentialVerifier {
             Element issuer = firstChild(assertion, NS, "Issuer");
             result.setIssuer(issuer == null ? null : issuer.getTextContent().trim());
 
-            Element scd = descend(subject, "SubjectConfirmation", "SubjectConfirmationData");
-            if (scd != null && scd.hasAttribute("Recipient")) {
-                result.setRecipient(scd.getAttribute("Recipient"));
+            // --- subject confirmation (the bearer window and the LWS client identifier) ---
+            // The suite carries the LWS client identifier in SubjectConfirmationData/@Recipient, and the
+            // Web Browser SSO profile bounds a bearer subject with its own NotOnOrAfter. Neither is
+            // implied by <Conditions>, so both are enforced here. Exactly one SubjectConfirmation is
+            // required: with several there is no single "the" client identifier to report.
+            Element confirmation = onlyChild(subject, "SubjectConfirmation", result);
+            if (confirmation == null) {
+                return result.fail();
+            }
+            boolean bearer = BEARER_METHOD.equals(confirmation.getAttribute("Method"));
+            result.check("bearerSubjectConfirmation", bearer);
+            if (!bearer) {
+                result.error("<SubjectConfirmation> Method must be " + BEARER_METHOD);
+                return result.fail();
+            }
+            Element scd = firstChild(confirmation, NS, "SubjectConfirmationData");
+            if (scd == null) {
+                result.check("recipientPresent", false);
+                result.error("<SubjectConfirmation> has no <SubjectConfirmationData>");
+                return result.fail();
+            }
+            String recipient = scd.getAttribute("Recipient");
+            boolean recipientPresent = recipient != null && !recipient.isBlank();
+            result.check("recipientPresent", recipientPresent);
+            if (!recipientPresent) {
+                result.error("<SubjectConfirmationData> has no Recipient (the LWS client identifier)");
+                return result.fail();
+            }
+            result.setRecipient(recipient);
+
+            String scdNotOnOrAfter = attr(scd, "NotOnOrAfter");
+            if (scdNotOnOrAfter == null || scdNotOnOrAfter.isBlank()) {
+                result.check("subjectConfirmationWithinWindow", false);
+                result.error("<SubjectConfirmationData> has no NotOnOrAfter expiry (required for a bearer subject)");
+                return result.fail();
+            }
+            boolean confirmationCurrent = withinValidity(attr(scd, "NotBefore"), scdNotOnOrAfter);
+            result.check("subjectConfirmationWithinWindow", confirmationCurrent);
+            if (!confirmationCurrent) {
+                result.error("<SubjectConfirmationData> is outside its NotBefore/NotOnOrAfter window");
+                return result.fail();
             }
 
             // --- validity window ---
@@ -147,10 +234,33 @@ public class SamlCredentialVerifier {
 
             result.setValid(result.getErrors().isEmpty());
         } catch (Exception e) {
-            result.error(e.getClass().getSimpleName() + ": " + String.valueOf(e.getMessage()));
+            // Parser and XML-DSig exceptions can carry file paths and library internals; log, don't echo.
+            log.debugf(e, "[%s] LWS SAML credential verification failed", result.getTraceId());
+            result.error("Credential could not be validated");
             return result.fail();
         }
         return result;
+    }
+
+    /** True iff {@code certificate} is inside its own validity period right now. */
+    private static boolean certificateCurrentlyValid(X509Certificate certificate) {
+        if (certificate == null) {
+            return false;
+        }
+        try {
+            certificate.checkValidity();
+            return true;
+        } catch (java.security.cert.CertificateExpiredException
+                | java.security.cert.CertificateNotYetValidException e) {
+            return false;
+        }
+    }
+
+    /** True iff a {@code <samlp:Response>} reports {@code …:status:Success}. */
+    private static boolean isSuccessStatus(Element response) {
+        Element status = firstChild(response, PROTOCOL_NS, "Status");
+        Element code = status == null ? null : firstChild(status, PROTOCOL_NS, "StatusCode");
+        return code != null && STATUS_SUCCESS.equals(code.getAttribute("Value"));
     }
 
     /** The single assertion inside a signed Response, or the signed Assertion itself. */
@@ -253,11 +363,6 @@ public class SamlCredentialVerifier {
             }
         }
         return out;
-    }
-
-    private static Element descend(Element parent, String childLocal, String grandchildLocal) {
-        Element child = firstChild(parent, NS, childLocal);
-        return child == null ? null : firstChild(child, NS, grandchildLocal);
     }
 
     private static Element onlyChild(Element parent, String local, SamlVerificationResult result) {

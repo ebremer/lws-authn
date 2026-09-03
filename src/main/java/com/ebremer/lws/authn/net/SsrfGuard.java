@@ -1,6 +1,8 @@
 /*
  * Copyright Erich Bremer.
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * SSRF guard for outbound HTTP fetches driven by attacker-influenced URLs (the OpenID and self-signed
  * CID verifiers dereference the credential's `sub`/`iss`). Only http(s) is allowed, and the target
  * host must not resolve to a loopback / private / link-local / reserved address unless it is
@@ -26,8 +28,13 @@ import java.util.Set;
  * environment variable {@code LWS_AUTHN_ALLOWED_INTERNAL_HOSTS}. By default nothing internal is
  * reachable.</p>
  *
- * <p>Residual risks the operator should be aware of: DNS rebinding (the name is re-resolved at connect
- * time) and HTTP redirects to an internal target are not defended here.</p>
+ * <p>{@link #verify(String)} is the early, informative check: it validates the scheme and rejects a
+ * URL whose host resolves anywhere internal, so the caller gets a useful error. It is <em>not</em> the
+ * enforcement point — a name can resolve differently between that check and the moment a socket is
+ * opened (DNS rebinding). Enforcement lives in {@link #resolveAndVet}, which
+ * {@link GuardedDnsResolver} installs as the DNS resolver of the HTTP client
+ * {@link OutboundHttp} uses, so the addresses that are vetted are exactly the addresses that are
+ * connected to.</p>
  *
  * @author Erich Bremer
  */
@@ -64,21 +71,62 @@ public final class SsrfGuard {
         if (host == null || host.isBlank()) {
             throw new BlockedException("URL has no host: " + url);
         }
-        if (allowedHosts.contains(host.toLowerCase(Locale.ROOT))) {
-            return;
-        }
-        InetAddress[] addresses;
         try {
-            addresses = InetAddress.getAllByName(host);
-        } catch (Exception e) {
-            throw new BlockedException("cannot resolve host: " + host);
+            resolveAndVet(host, allowedHosts);
+        } catch (UnknownHostException e) {
+            throw new BlockedException(e.getMessage());
+        }
+    }
+
+    /**
+     * Resolves {@code host} and returns its addresses, having checked every one of them against the
+     * internal-address policy. This is the enforcement point: the caller connects to exactly the
+     * addresses returned here, so the name is never resolved a second time and cannot change under the
+     * check.
+     *
+     * <p>An allow-listed host is still resolved — the addresses are needed to connect — but is not
+     * subjected to the internal-address check.</p>
+     *
+     * @throws UnknownHostException if the name does not resolve, or resolves to an address this
+     *         deployment must not reach. The message deliberately names only the host, never the
+     *         resolved address, because it can surface in a client-facing error.
+     */
+    public static InetAddress[] resolveAndVet(String host) throws UnknownHostException {
+        return resolveAndVet(host, configuredAllowlist());
+    }
+
+    /** As {@link #resolveAndVet(String)}, against an explicit allow-list of host names. */
+    public static InetAddress[] resolveAndVet(String host, Set<String> allowedHosts) throws UnknownHostException {
+        if (host == null || host.isBlank()) {
+            throw new UnknownHostException("no host to resolve");
+        }
+        String name = normalize(host);
+        InetAddress[] addresses = InetAddress.getAllByName(name);
+        if (addresses.length == 0) {
+            throw new UnknownHostException("cannot resolve host: " + name);
+        }
+        if (allowedHosts.contains(name.toLowerCase(Locale.ROOT))) {
+            return addresses;
         }
         for (InetAddress address : addresses) {
             if (isInternal(address)) {
-                throw new BlockedException("refusing to fetch internal address " + address.getHostAddress()
-                        + " for host '" + host + "' (allow it via lws.authn.allowedInternalHosts if intended)");
+                throw new UnknownHostException("refusing to fetch an internal address for host '" + name
+                        + "' (allow it via lws.authn.allowedInternalHosts if intended)");
             }
         }
+        return addresses;
+    }
+
+    /**
+     * Strips the brackets from an IPv6 literal. {@link URI#getHost()} keeps them ({@code [::1]}) while
+     * Apache HttpClient hands the resolver the bare form, so both spellings must key the same host.
+     */
+    private static String normalize(String host) {
+        String h = host.trim();
+        if (h.length() > 1 && h.charAt(0) == '[' && h.charAt(h.length() - 1) == ']') {
+            return h.substring(1, h.length() - 1);
+        }
+        return h;
     }
 
     private static boolean isInternal(InetAddress a) {

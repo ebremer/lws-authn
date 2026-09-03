@@ -14,17 +14,40 @@
 # Usage:
 #   bash scripts/ssi-did-key-demo.sh
 #   KEYTYPE=ed25519 KC_URL=https://kc.example REALM=myrealm bash scripts/ssi-did-key-demo.sh
+#   VERIFY_TOKEN=$ACCESS_TOKEN bash scripts/ssi-did-key-demo.sh
 
 set -euo pipefail
 
 KC_URL="${KC_URL:-http://localhost:8080}"
 REALM="${REALM:-master}"
 KEYTYPE="${KEYTYPE:-p256}"   # p256 (zDn…, ES256) or ed25519 (z6Mk…, EdDSA)
+# The verify endpoints are authenticated by default (README, "Securing the verify endpoints").
+# Supply a caller token directly, or let the script fetch one with these realm credentials.
+VERIFY_TOKEN="${VERIFY_TOKEN:-}"
+VERIFY_USER="${VERIFY_USER:-admin}"
+VERIFY_PASS="${VERIFY_PASS:-admin}"
 
 for t in curl jq node; do command -v "$t" >/dev/null || { echo "$t is required"; exit 1; }; done
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+
+if [ -z "$VERIFY_TOKEN" ]; then
+  VERIFY_TOKEN=$(curl -sS -X POST "$KC_URL/realms/$REALM/protocol/openid-connect/token" \
+    -d grant_type=password -d client_id=admin-cli \
+    -d username="$VERIFY_USER" -d password="$VERIFY_PASS" | jq -r '.access_token // empty')
+  [ -n "$VERIFY_TOKEN" ] || echo "warning: no caller token; /verify will refuse unless it runs in 'public' mode" >&2
+fi
+
+# VERIFY_TOKEN is the *caller's* credential; the did:key JWT under test goes in the form body.
+verify_post() {
+  local url="$1"; shift
+  if [ -n "${VERIFY_TOKEN:-}" ]; then
+    curl -sS -X POST "$url" -H "Authorization: Bearer $VERIFY_TOKEN" "$@"
+  else
+    curl -sS -X POST "$url" "$@"
+  fi
+}
 
 cat > "$WORK/mint.mjs" <<'NODE'
 import crypto from 'node:crypto';
@@ -61,7 +84,7 @@ JWT=$(KEYTYPE="$KEYTYPE" node "$WORK/mint.mjs")
 printf '\n\033[1;36m== minted a %s did:key self-signed JWT\033[0m\n%s\n' "$KEYTYPE" "$JWT"
 
 printf '\n\033[1;36m== verifying at %s\033[0m\n' "$KC_URL/realms/$REALM/lws-ssi-did-key/verify"
-RESULT=$(curl -sS -X POST "$KC_URL/realms/$REALM/lws-ssi-did-key/verify" --data-urlencode "credential=$JWT")
+RESULT=$(verify_post "$KC_URL/realms/$REALM/lws-ssi-did-key/verify" --data-urlencode "credential=$JWT")
 echo "$RESULT" | jq .
 
 if [ "$(printf '%s' "$RESULT" | jq -r '.valid // false')" = true ]; then

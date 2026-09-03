@@ -122,8 +122,12 @@ locate the service → OIDC discovery → validate signature):
 
 ```bash
 curl -X POST https://keycloak.example/realms/myrealm/lws/verify \
-  --data-urlencode "credential=$ID_TOKEN"      # or: -H "Authorization: Bearer $ID_TOKEN"
+  -H "Authorization: Bearer $CALLER_ACCESS_TOKEN" \
+  --data-urlencode "credential=$ID_TOKEN"
 ```
+
+`Authorization` carries **your** access token; the credential being verified goes in the body. See
+[Securing the verify endpoints](#securing-the-verify-endpoints).
 
 Walkthrough + runnable demo: **[`docs/walkthrough-openid.md`](docs/walkthrough-openid.md)** /
 **[`scripts/lws-demo.sh`](scripts/lws-demo.sh)** (`bash scripts/lws-demo.sh`).
@@ -136,8 +140,12 @@ Keycloak does **not** issue the credential — the agent does. Keycloak hosts th
 verifiers can find it, and offers a verifier.
 
 1. The agent generates a keypair, keeps the private key, and registers the **public** JWK on the user
-   as the `lws_jwk` attribute (Keycloak 26 needs unmanaged attributes enabled). Its identifier is
-   `{issuer}/lws-ssi-cid/cid/{userId}`.
+   as the `lws_jwk` attribute. Its identifier is `{issuer}/lws-ssi-cid/cid/{userId}`.
+   - Keycloak 26 drops undeclared attributes, so set the realm's unmanaged attribute policy to
+     **`ADMIN_EDIT`** — *not* `ENABLED`. `ENABLED` lets the **end user** write `lws_jwk`, and a user
+     who can register their own signing key can mint credentials for their own identity.
+   - Only the public half is ever served: a `lws_jwk` value containing `d`, `p`, `q`, `dp`, `dq`,
+     `qi`, `k` or `oth`, or a `kty` of `oct`, is refused outright and logged, never published.
 2. The agent self-signs a JWT (`sub == iss == client_id ==` that identifier, header `kid` matching the
    key).
 
@@ -169,13 +177,20 @@ trust is out-of-band):
 | `credential` | the SAML Response (raw XML or base64-encoded XML) |
 | `certificate` | the trusted IdP signing certificate, PEM-encoded (required) |
 | `audience` | optional audience the assertion must be restricted to |
+| `allowExpiredCertificate` | `true` to accept an IdP certificate outside its own validity period. Off by default — an expired certificate is not a trust anchor. Only for offline analysis of an old credential. |
 
 ```bash
 curl -X POST https://keycloak.example/realms/myrealm/lws-saml/verify \
+  -H "Authorization: Bearer $CALLER_ACCESS_TOKEN" \
   --data-urlencode "credential=$SAML_RESPONSE" \
   --data-urlencode "certificate=$IDP_CERT_PEM" \
   --data-urlencode "audience=https://app.example/SAML"
 ```
+
+The verifier additionally requires the Response's `<samlp:StatusCode>` to be
+`…:status:Success`, exactly one bearer `<SubjectConfirmation>` whose `<SubjectConfirmationData>`
+carries a `Recipient` (the LWS client identifier) and an unexpired `NotOnOrAfter`, and a signing
+certificate that is inside its own validity period.
 
 Guide: **[`docs/walkthrough-saml.md`](docs/walkthrough-saml.md)** (there is no shell demo — producing a
 signed SAML Response requires a SAML login flow).
@@ -218,10 +233,25 @@ behaviours are covered by tests — `mvn test` for the unit tests, `mvn verify` 
   `169.254.169.254` cloud-metadata endpoint). Legitimate internal targets are opt-in via a
   comma-separated allow-list — system property `lws.authn.allowedInternalHosts` or environment
   variable `LWS_AUTHN_ALLOWED_INTERNAL_HOSTS`.
+  - The check is part of **name resolution**, not a separate step before it: the guard is installed as
+    the DNS resolver of the HTTP client the verifiers use, so the addresses it approves are exactly the
+    addresses the connection manager connects to. There is no second lookup for a hostile name server
+    to poison, which is what closes the DNS-rebinding window.
+  - That client also has **redirect following disabled**. Keycloak's shared client happens to disable
+    redirects by default too (`spi-connections-http-client-default-allow-redirects`, default `false`),
+    but that is a deployment setting one flag away from letting a `302` walk past the guard — so the
+    verifiers do not depend on it.
   - **Important:** if this Keycloak hosts its own controlled identifier documents on a loopback or
     internal address — so the OpenID verifier dereferences *itself* — you **must** allow-list that
-    host, or OpenID `/verify` is blocked. Residual risks not handled here: DNS rebinding and HTTP
-    redirects to an internal target.
+    host, or OpenID `/verify` is blocked.
+  - A host that fails repeatedly is short-circuited for a few seconds, so a dead or hostile target
+    cannot be used to make this server spend five seconds per request on the caller's behalf.
+- **Information disclosure.** A verify response never reflects an upstream status code, a resolved
+  address or a raw exception message. Rejections carry a `traceId`; the detail is in the server log at
+  `DEBUG` under that id.
+- **Private key material.** The self-signed-CID endpoint publishes only the public members of a
+  registered JWK, and refuses to publish a value carrying private key material at all (CID 1.0: a
+  `publicKeyJwk` map "MUST NOT include any members of the private information class").
 - **SAML signature wrapping (XSW).** The SAML verifier validates the signature and then reads claims
   **only from the cryptographically-covered assertion**, located by precise direct-child navigation
   (never a document-wide `getElementsByTagName` an injected element could win). It additionally
@@ -229,6 +259,46 @@ behaviours are covered by tests — `mvn test` for the unit tests, `mvn verify` 
   contain exactly one assertion. An injected, unsigned assertion is ignored.
 - **XXE.** SAML XML is parsed with a locally-configured parser that **disallows DTDs** and disables
   external entities, independent of any caller/library parser configuration.
+
+---
+
+## Securing the verify endpoints
+
+The four `…/verify` endpoints are **authenticated by default**. Verification is expensive out of
+proportion to the request that triggers it: for the OpenID and self-signed-CID suites a single POST
+makes this server dereference a URL the caller chose, run OpenID Connect Discovery against it and
+fetch its JWKS — all *before* the credential's signature is known good, because that is the order the
+specification's cold-trust algorithm requires. Open to anonymous callers that is request
+amplification, a network-probe oracle and a cheap denial of service.
+
+| Setting | `Config.Scope` key | System property | Environment variable | Default |
+|---|---|---|---|---|
+| Mode | `access` | `lws.authn.verify.access` | `LWS_AUTHN_VERIFY_ACCESS` | `bearer` |
+| Shared secret | `secret` | `lws.authn.verify.secret` | `LWS_AUTHN_VERIFY_SECRET` | — |
+| Required realm role | `role` | `lws.authn.verify.role` | `LWS_AUTHN_VERIFY_ROLE` | — |
+| Requests per minute, per caller | `rate-limit` | `lws.authn.verify.rateLimit` | `LWS_AUTHN_VERIFY_RATE_LIMIT` | `60` |
+
+- **`bearer`** (default) — the caller presents a Keycloak access token for the realm. Set `role` to
+  additionally require a realm role.
+- **`secret`** — the caller presents a pre-shared secret as `Authorization: Bearer <secret>`, for a
+  verifier that is not a Keycloak client. Configuring `secret` mode with no secret falls back to
+  `bearer`; it never fails open.
+- **`public`** — no caller authentication. This is the pre-existing behaviour, and is now opt-in.
+
+> **The `Authorization` header changed meaning.** In `bearer` and `secret` mode it carries the
+> **caller's** credential, so the credential being verified must be sent as the `credential` form
+> parameter. Only in `public` mode does `Authorization: Bearer …` still fall back to meaning "the
+> credential to verify". If you were relying on that form, either send the credential in the body or
+> set the mode to `public` explicitly.
+
+Rate limiting applies in every mode, including `public`, and is enforced before the caller is
+authenticated. Set `rate-limit` to `0` to turn it off. A refusal is a `401`/`403`/`429` carrying a
+`WWW-Authenticate` challenge, which is what distinguishes "you may not call this endpoint" from a
+`401` meaning "the credential you asked me to check is not valid".
+
+Set the mode with either `kc.sh build --spi-realm-restapi-extension--lws--access=public` (repeat per
+provider id: `lws`, `lws-ssi-cid`, `lws-saml`, `lws-ssi-did-key`) or, with no rebuild, the environment
+variable `LWS_AUTHN_VERIFY_ACCESS=public`.
 
 ---
 

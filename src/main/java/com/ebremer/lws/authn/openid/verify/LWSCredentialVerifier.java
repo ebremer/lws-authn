@@ -22,9 +22,10 @@ import java.security.PublicKey;
 import java.util.List;
 
 import com.ebremer.lws.authn.net.OutboundHttp;
-import com.ebremer.lws.authn.net.SsrfGuard;
 import com.ebremer.lws.authn.rdf.RdfParsing;
+import com.ebremer.lws.authn.verify.Trace;
 import com.fasterxml.jackson.databind.JsonNode;
+import org.jboss.logging.Logger;
 import org.apache.jena.query.ParameterizedSparqlString;
 import org.apache.jena.query.QueryExecution;
 import org.apache.jena.query.QueryExecutionFactory;
@@ -54,6 +55,8 @@ import com.ebremer.lws.authn.openid.LWSConstants;
  */
 public class LWSCredentialVerifier {
 
+    private static final Logger log = Logger.getLogger(LWSCredentialVerifier.class);
+
     private final KeycloakSession session;
 
     public LWSCredentialVerifier(KeycloakSession session) {
@@ -62,6 +65,7 @@ public class LWSCredentialVerifier {
 
     public VerificationResult verify(String credential) {
         VerificationResult result = new VerificationResult();
+        result.setTraceId(Trace.newId());
         try {
             JWSInput jws = new JWSInput(credential);
             JWSHeader header = jws.getHeader();
@@ -165,7 +169,10 @@ public class LWSCredentialVerifier {
             // Exchange (RFC 8693). See the README "Audience / token exchange" note.
             result.setValid(result.getErrors().isEmpty());
         } catch (Exception e) {
-            result.error(e.getClass().getSimpleName() + ": " + String.valueOf(e.getMessage()));
+            // Never echo the exception to the caller: it can name internal hosts, ports and library
+            // internals. The detail goes to the log under the result's trace id.
+            log.debugf(e, "[%s] LWS OpenID credential verification failed", result.getTraceId());
+            result.error("Credential could not be validated");
             return result.fail();
         }
         return result;
@@ -179,14 +186,18 @@ public class LWSCredentialVerifier {
      */
     private Model dereference(String sub, VerificationResult result) {
         try {
-            SsrfGuard.verify(sub); // refuse to dereference internal/loopback targets (SSRF)
+            // OutboundHttp applies the SSRF policy, refuses a host that has been failing, and fetches
+            // through a client that follows no redirects and resolves only vetted addresses.
             SimpleHttp.Response response = OutboundHttp.get(sub, session)
                     .header("Accept", LWSConstants.TURTLE + ", " + LWSConstants.JSON_LD + ";q=0.9, "
                             + LWSConstants.N_TRIPLES + ";q=0.8, " + LWSConstants.RDF_XML + ";q=0.7")
                     .asResponse();
             if (response.getStatus() != 200) {
+                log.debugf("[%s] dereferencing sub <%s> returned HTTP %d", result.getTraceId(), sub,
+                        response.getStatus());
+                OutboundHttp.recordFailure(sub);
                 result.check("subjectDereferenced", false);
-                result.error("Dereferencing 'sub' <" + sub + "> returned HTTP " + response.getStatus());
+                result.error("Dereferencing 'sub' <" + sub + "> did not return a controlled identifier document");
                 return null;
             }
             String contentType = response.getFirstHeader("Content-Type");
@@ -194,11 +205,15 @@ public class LWSCredentialVerifier {
             Model model = RdfParsing.isJsonLd(contentType, body)
                     ? modelFromCompactJsonLd(body, sub)
                     : RdfParsing.parseRdf(body, contentType, sub);
+            OutboundHttp.recordSuccess(sub);
             result.check("subjectDereferenced", true);
             return model;
         } catch (Exception e) {
+            // The cause can name the address the host resolved to, so it is logged, not returned.
+            log.debugf(e, "[%s] could not dereference or parse sub <%s>", result.getTraceId(), sub);
+            OutboundHttp.recordFailure(sub);
             result.check("subjectDereferenced", false);
-            result.error("Failed to dereference/parse 'sub' <" + sub + ">: " + e.getMessage());
+            result.error("Failed to dereference 'sub' <" + sub + "> as a controlled identifier document");
             return null;
         }
     }
@@ -283,14 +298,17 @@ public class LWSCredentialVerifier {
 
     /** Performs OpenID Connect Discovery on iss and returns the public key matching the token's kid. */
     private PublicKey resolveSigningKey(String iss, JWSHeader header, VerificationResult result) {
+        String discoveryUrl = null;
         try {
             String base = iss.endsWith("/") ? iss.substring(0, iss.length() - 1) : iss;
-            String discoveryUrl = base + "/.well-known/openid-configuration";
-            SsrfGuard.verify(discoveryUrl);
+            discoveryUrl = base + "/.well-known/openid-configuration";
             SimpleHttp.Response discovery = OutboundHttp.get(discoveryUrl, session).asResponse();
             if (discovery.getStatus() != 200) {
+                log.debugf("[%s] OpenID discovery for <%s> returned HTTP %d", result.getTraceId(), iss,
+                        discovery.getStatus());
+                OutboundHttp.recordFailure(discoveryUrl);
                 result.check("jwksResolved", false);
-                result.error("OpenID discovery for <" + iss + "> returned HTTP " + discovery.getStatus());
+                result.error("OpenID Connect Discovery for <" + iss + "> did not return a configuration document");
                 return null;
             }
             JsonNode config = discovery.asJson();
@@ -298,17 +316,20 @@ public class LWSCredentialVerifier {
             boolean issuerOk = iss.equals(discoveredIssuer);
             result.check("issuerDiscoveryMatches", issuerOk);
             if (!issuerOk) {
-                result.error("OpenID discovery issuer mismatch: expected <" + iss + ">, got <" + discoveredIssuer + ">");
+                // The discovered issuer is a third party's response; log it rather than reflecting it.
+                log.debugf("[%s] discovery issuer mismatch: expected <%s>, got <%s>", result.getTraceId(), iss,
+                        discoveredIssuer);
+                result.error("The OpenID configuration served for <" + iss + "> declares a different issuer");
                 return null;
             }
             String jwksUri = text(config, "jwks_uri");
             if (jwksUri == null) {
                 result.check("jwksResolved", false);
-                result.error("OpenID configuration has no jwks_uri");
+                result.error("The OpenID configuration for <" + iss + "> has no jwks_uri");
                 return null;
             }
-            SsrfGuard.verify(jwksUri);
             JSONWebKeySet keySet = OutboundHttp.get(jwksUri, session).asJson(JSONWebKeySet.class);
+            OutboundHttp.recordSuccess(discoveryUrl);
             String kid = header.getKeyId();
             String alg = header.getRawAlgorithm();
             if (keySet.getKeys() != null) {
@@ -325,11 +346,15 @@ public class LWSCredentialVerifier {
                 }
             }
             result.check("jwksResolved", false);
-            result.error("No JWK matched the token (kid=" + kid + ", alg=" + alg + ")");
+            result.error("No JWK published by <" + iss + "> matched the token (kid=" + kid + ", alg=" + alg + ")");
             return null;
         } catch (Exception e) {
+            log.debugf(e, "[%s] OpenID Connect discovery failed for <%s>", result.getTraceId(), iss);
+            if (discoveryUrl != null) {
+                OutboundHttp.recordFailure(discoveryUrl);
+            }
             result.check("jwksResolved", false);
-            result.error("OpenID Connect discovery failed for <" + iss + ">: " + e.getMessage());
+            result.error("OpenID Connect Discovery failed for <" + iss + ">");
             return null;
         }
     }

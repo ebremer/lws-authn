@@ -60,7 +60,10 @@ public class LWSSubMapper extends AbstractOIDCProtocolMapper
         attr.setHelpText("Optional. Name of the user attribute holding the user's WebID / controlled "
                 + "identifier (used as the 'sub' claim). When empty, or unset for a given user, a "
                 + "Keycloak-hosted controlled identifier document URL is derived automatically: "
-                + "{issuer}/lws/cid/{userId}.");
+                + "{issuer}/lws/cid/{userId}. SECURITY: this attribute becomes the credential's subject, "
+                + "so it MUST NOT be user-writable — a user who can set it can claim any WebID. If it is "
+                + "an unmanaged attribute, set the realm's unmanaged attribute policy to ADMIN_EDIT (not "
+                + "ENABLED); if it is declared in the user profile, give it admin-only write permission.");
         CONFIG_PROPERTIES.add(attr);
 
         CONFIG_PROPERTIES.add(includeProperty(OIDCAttributeMapperHelper.INCLUDE_IN_ID_TOKEN,

@@ -42,18 +42,27 @@ The rest is the same thing by hand.
 
 ## Manual path
 
-### 1. Allow unmanaged attributes
+### 1. Allow *admin-managed* unmanaged attributes
 
 Keycloak 26 rejects undeclared user attributes by default, so the public key (`lws_jwk`) would be
-dropped. Enable unmanaged attributes once per realm: *Realm settings → User profile → (kebab) →
-Enable unmanaged attributes*, or via the API:
+dropped. Allow them once per realm — as **`ADMIN_EDIT`**: *Realm settings → User profile → (kebab) →
+Unmanaged attributes → Only administrators can write*, or via the API:
 
 ```bash
 curl -s -H "Authorization: Bearer $ADMIN" "$KC/admin/realms/$REALM/users/profile" \
-  | jq '.unmanagedAttributePolicy="ENABLED"' \
+  | jq '.unmanagedAttributePolicy="ADMIN_EDIT"' \
   | curl -s -X PUT "$KC/admin/realms/$REALM/users/profile" \
       -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' -d @-
 ```
+
+> **Do not use `ENABLED` here.** `ENABLED` lets the *end user* manage unmanaged attributes, and
+> `lws_jwk` is the signing key their own controlled identifier document publishes. A user who can
+> write it can register any key against their identity and sign credentials for it. The same applies
+> to any attribute you point the OpenID suite's **LWS WebID Subject** mapper at: it becomes the
+> credential's `sub`, so a user who can write it can claim any WebID.
+
+Only the public half of a key is ever served. A `lws_jwk` value containing `d`, `p`, `q`, `dp`, `dq`,
+`qi`, `k` or `oth`, or one whose `kty` is `oct`, is refused outright and logged — never published.
 
 ### 2. Generate the agent's keypair and its public JWK
 
@@ -106,8 +115,14 @@ Sign `base64url(header) + "." + base64url(payload)`; ES256 needs the signature a
 ### 6. Verify
 
 ```bash
-curl -s -X POST "$KC/realms/$REALM/lws-ssi-cid/verify" --data-urlencode "credential=$JWT" | jq
+curl -s -X POST "$KC/realms/$REALM/lws-ssi-cid/verify" \
+  -H "Authorization: Bearer $CALLER_ACCESS_TOKEN" \
+  --data-urlencode "credential=$JWT" | jq
 ```
+
+> `Authorization` identifies **you**, the caller: the `…/verify` endpoints are authenticated by
+> default. The credential being checked always travels in the request body. See
+> [Securing the verify endpoints](../README.md#securing-the-verify-endpoints).
 
 ```json
 {

@@ -11,6 +11,7 @@
 package com.ebremer.lws.authn;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
@@ -106,7 +107,7 @@ class LwsAuthIT {
     @Test
     void openIdCredentialVerifies() throws Exception {
         JsonNode r = JSON.readTree(postForm(base + "/realms/" + REALM + "/lws/verify",
-                Map.of("credential", idToken())).body());
+                Map.of("credential", idToken()), accessToken()).body());
         assertTrue(r.get("valid").asBoolean(), () -> "expected valid, got: " + r);
         r.get("checks").fields().forEachRemaining(e ->
                 assertTrue(e.getValue().asBoolean(), "check failed: " + e.getKey()));
@@ -117,7 +118,7 @@ class LwsAuthIT {
     void didKeyCredentialsVerify() throws Exception {
         for (String jwt : List.of(mintDidKeyP256(), mintDidKeyEd25519())) {
             JsonNode r = JSON.readTree(postForm(base + "/realms/" + REALM + "/lws-ssi-did-key/verify",
-                    Map.of("credential", jwt)).body());
+                    Map.of("credential", jwt), accessToken()).body());
             assertTrue(r.get("valid").asBoolean(), () -> "expected valid, got: " + r);
         }
     }
@@ -136,18 +137,55 @@ class LwsAuthIT {
     @Test
     void samlEndpointMounted() throws Exception {
         HttpResponse<String> r = postForm(base + "/realms/" + REALM + "/lws-saml/verify",
-                Map.of("credential", "<samlp:Response/>"));
+                Map.of("credential", "<samlp:Response/>"), accessToken());
         assertEquals(400, r.statusCode());
         assertTrue(r.body().contains("certificate"), r.body());
+    }
+
+    /**
+     * P0-3: the verify endpoints are authenticated by default. An anonymous POST must be refused
+     * before any outbound fetch happens, and — RFC 9110 &sect;15.5.2 — the 401 must carry a challenge,
+     * which is also what distinguishes "you may not call this" from "the credential you sent is bad".
+     */
+    @Test
+    void anonymousVerifyIsRefused() throws Exception {
+        for (String suite : List.of("lws", "lws-ssi-cid", "lws-ssi-did-key", "lws-saml")) {
+            HttpResponse<String> r = postForm(base + "/realms/" + REALM + "/" + suite + "/verify",
+                    Map.of("credential", "irrelevant"), null);
+            assertEquals(401, r.statusCode(), suite + " must refuse an unauthenticated caller");
+            assertNotNull(r.headers().firstValue("WWW-Authenticate").orElse(null),
+                    suite + " must send a WWW-Authenticate challenge with its 401");
+        }
+    }
+
+    /** A token from another realm is not a caller credential for this one. */
+    @Test
+    void aBadCallerTokenIsRefused() throws Exception {
+        HttpResponse<String> r = postForm(base + "/realms/" + REALM + "/lws-ssi-did-key/verify",
+                Map.of("credential", mintDidKeyP256()), "not-a-token");
+        assertEquals(401, r.statusCode(), "a bogus bearer token must not be accepted");
     }
 
     // ----------------------------------------------------------------------------------- helpers
 
     private String idToken() throws Exception {
-        String body = postForm(base + "/realms/" + REALM + "/protocol/openid-connect/token",
+        return JSON.readTree(tokenResponse()).get("id_token").asText();
+    }
+
+    /**
+     * The caller's own credential. Since P0-3 the verify endpoints are authenticated by default, so the
+     * credential under test travels in the form body and the Authorization header identifies the
+     * caller — the standard HTTP reading of that header, and the only one that lets the endpoint be
+     * closed to anonymous use.
+     */
+    private String accessToken() throws Exception {
+        return JSON.readTree(tokenResponse()).get("access_token").asText();
+    }
+
+    private String tokenResponse() throws Exception {
+        return postForm(base + "/realms/" + REALM + "/protocol/openid-connect/token",
                 Map.of("grant_type", "password", "client_id", "lws-app",
-                        "username", "alice", "password", "alice", "scope", "openid")).body();
-        return JSON.readTree(body).get("id_token").asText();
+                        "username", "alice", "password", "alice", "scope", "openid"), null).body();
     }
 
     private static String claim(String jwt, String name) throws Exception {
@@ -188,14 +226,19 @@ class LwsAuthIT {
                 HttpResponse.BodyHandlers.ofString()).body();
     }
 
-    private static HttpResponse<String> postForm(String url, Map<String, String> form) throws Exception {
+    /** POSTs a form, optionally authenticating the caller with {@code bearer}. */
+    private static HttpResponse<String> postForm(String url, Map<String, String> form, String bearer)
+            throws Exception {
         String body = form.entrySet().stream()
                 .map(e -> URLEncoder.encode(e.getKey(), StandardCharsets.UTF_8) + "="
                         + URLEncoder.encode(e.getValue(), StandardCharsets.UTF_8))
                 .collect(Collectors.joining("&"));
-        return HTTP.send(HttpRequest.newBuilder(URI.create(url))
+        HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(url))
                 .header("Content-Type", "application/x-www-form-urlencoded")
-                .POST(HttpRequest.BodyPublishers.ofString(body)).build(),
-                HttpResponse.BodyHandlers.ofString());
+                .POST(HttpRequest.BodyPublishers.ofString(body));
+        if (bearer != null) {
+            request.header("Authorization", "Bearer " + bearer);
+        }
+        return HTTP.send(request.build(), HttpResponse.BodyHandlers.ofString());
     }
 }
