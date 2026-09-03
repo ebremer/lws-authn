@@ -11,6 +11,7 @@
 package com.ebremer.lws.authn;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -23,13 +24,16 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.math.BigInteger;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.PrivateKey;
 import java.security.Signature;
 import java.security.interfaces.ECPublicKey;
+import java.security.cert.X509Certificate;
 import java.security.spec.ECGenParameterSpec;
 import java.util.Base64;
+import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -45,6 +49,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.testcontainers.DockerClientFactory;
 import org.testcontainers.Testcontainers;
+
+import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
+import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
+import org.bouncycastle.asn1.x500.X500Name;
+import org.bouncycastle.operator.ContentSigner;
+import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 
 import com.ebremer.lws.authn.ssididkey.DidKey;
 
@@ -281,6 +291,59 @@ class LwsAuthIT {
         }
     }
 
+    /**
+     * P3-1. An invalid credential is an answer, not a refusal: RFC 9110 §15.5.2 requires a 401 to carry
+     * a {@code WWW-Authenticate} challenge, and these used to send a bare 401 for a credential that
+     * simply did not verify. The status was wrong as well as incomplete — the request <em>was</em>
+     * authorized, and the endpoint answered it. So: 200 with {@code "valid": false}, and 401 reserved
+     * for the caller, where {@link #anonymousVerifyIsRefused} shows it still carries a challenge.
+     */
+    @Test
+    void anInvalidCredentialIsTwoHundredWithValidFalse() throws Exception {
+        Map<String, String> nonsense = Map.of("credential", "not.a.jwt");
+        for (String suite : List.of("lws", "lws-ssi-cid", "lws-ssi-did-key")) {
+            HttpResponse<String> r = postForm(base + "/realms/" + REALM + "/" + suite + "/verify",
+                    nonsense, accessToken());
+            assertEquals(200, r.statusCode(), suite + " answered a rejected credential with a status: " + r.body());
+            assertTrue(r.headers().firstValue("WWW-Authenticate").isEmpty(),
+                    suite + " must not challenge a caller it accepted");
+            assertFalse(JSON.readTree(r.body()).get("valid").asBoolean(), r.body());
+        }
+
+        // SAML too, which needs a certificate to get as far as rejecting the credential.
+        HttpResponse<String> saml = postForm(base + "/realms/" + REALM + "/lws-saml/verify",
+                Map.of("credential", "<samlp:Response/>", "certificate", selfSignedPem()), accessToken());
+        assertEquals(200, saml.statusCode(), saml.body());
+        assertFalse(JSON.readTree(saml.body()).get("valid").asBoolean(), saml.body());
+    }
+
+    /**
+     * P3-2/P3-7. Every non-result answer is the same media type with the same shape, whatever produced
+     * it: nothing but the status distinguishes a 404 for an unknown identifier from a 406 or a 400, so
+     * there is no incidental oracle in the wording or structure of a refusal.
+     */
+    @Test
+    void everyRefusalIsJsonOfTheSameShape() throws Exception {
+        String sub = claim(idToken(), "sub");
+        String unknown = sub.substring(0, sub.lastIndexOf('/') + 1) + "00000000-0000-0000-0000-000000000000";
+
+        HttpResponse<String> missing = get(unknown, "text/turtle");
+        assertEquals(404, missing.statusCode());
+        HttpResponse<String> unacceptable = get(sub, "text/html");
+        assertEquals(406, unacceptable.statusCode());
+        HttpResponse<String> noCredential = postForm(base + "/realms/" + REALM + "/lws/verify",
+                Map.of("audience", "https://as.example"), accessToken());
+        assertEquals(400, noCredential.statusCode());
+
+        for (HttpResponse<String> r : List.of(missing, unacceptable, noCredential)) {
+            assertTrue(r.headers().firstValue("Content-Type").orElse("").startsWith("application/json"),
+                    "an untyped response becomes a 500 in Keycloak: " + r.headers().map());
+            JsonNode json = JSON.readTree(r.body());
+            assertTrue(json.hasNonNull("error"), r.body());
+            assertTrue(json.hasNonNull("error_description"), r.body());
+        }
+    }
+
     /** A token from another realm is not a caller credential for this one. */
     @Test
     void aBadCallerTokenIsRefused() throws Exception {
@@ -314,6 +377,27 @@ class LwsAuthIT {
     private static String claim(String jwt, String name) throws Exception {
         String json = new String(Base64.getUrlDecoder().decode(jwt.split("\\.")[1]), StandardCharsets.UTF_8);
         return JSON.readTree(json).get(name).asText();
+    }
+
+    /**
+     * A throwaway self-signed certificate, PEM-encoded: enough for the SAML endpoint to get past its
+     * parameter checks and actually reject the credential, which is what the caller wants to observe.
+     */
+    private static String selfSignedPem() throws Exception {
+        KeyPairGenerator g = KeyPairGenerator.getInstance("RSA");
+        g.initialize(2048);
+        KeyPair kp = g.generateKeyPair();
+        long now = System.currentTimeMillis();
+        X500Name dn = new X500Name("CN=lws-authn-it");
+        ContentSigner signer = new JcaContentSignerBuilder("SHA256withRSA").build(kp.getPrivate());
+        X509Certificate certificate = new JcaX509CertificateConverter().getCertificate(
+                new JcaX509v3CertificateBuilder(dn, BigInteger.valueOf(now),
+                        new Date(now - 1000L), new Date(now + 86_400_000L), dn, kp.getPublic()).build(signer));
+        // Encoded here rather than with Keycloak's PemUtils: that needs CryptoIntegration to have been
+        // initialised, which happens inside the server, not in this JVM.
+        return "-----BEGIN CERTIFICATE-----\n"
+                + Base64.getMimeEncoder(64, new byte[]{'\n'}).encodeToString(certificate.getEncoded())
+                + "\n-----END CERTIFICATE-----";
     }
 
     private static String mintDidKeyP256() throws Exception {

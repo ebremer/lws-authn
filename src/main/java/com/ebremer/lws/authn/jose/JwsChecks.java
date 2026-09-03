@@ -22,6 +22,8 @@ import org.keycloak.jose.jws.JWSInput;
 import org.keycloak.representations.JsonWebToken;
 import org.keycloak.util.JsonSerialization;
 
+import com.ebremer.lws.authn.config.ServerSettings;
+
 /**
  * @author Erich Bremer
  */
@@ -102,15 +104,18 @@ public final class JwsChecks {
      * Leeway allowed on {@code exp} and {@code nbf}. All three JWT suites say a verifier "MAY provide
      * for some small leeway to account for clock skew"; Keycloak's own {@code isActive()} allows 10
      * seconds on {@code nbf} and none at all on {@code exp}, so a credential could be refused by a
-     * server whose clock ran a second fast. 60 seconds matches what the SAML verifier already applies.
+     * server whose clock ran a second fast. The 60-second default matches what the SAML verifier
+     * applies; configure it as {@code clock-skew-seconds} (see {@link ServerSettings}).
      */
-    public static final long CLOCK_SKEW_SECONDS = 60;
+    public static long clockSkewSeconds() {
+        return ServerSettings.clockSkewSeconds();
+    }
 
     /** JOSE {@code typ} values this provider accepts when the header declares one (RFC 8725 §3.11). */
     private static final Set<String> ACCEPTED_TYPES = Set.of("jwt", "at+jwt", "application/jwt");
 
     /**
-     * True iff {@code token} is inside its validity window, allowing {@link #CLOCK_SKEW_SECONDS} of
+     * True iff {@code token} is inside its validity window, allowing {@link #clockSkewSeconds()} of
      * clock skew at both ends.
      *
      * <p>An absent or zero {@code exp} is <em>not</em> valid: Keycloak's {@code isActive()} treats a
@@ -125,11 +130,12 @@ public final class JwsChecks {
             return false;
         }
         long now = Instant.now().getEpochSecond();
-        if (now >= exp + CLOCK_SKEW_SECONDS) {
+        long skew = clockSkewSeconds();
+        if (now >= exp + skew) {
             return false;
         }
         Long notBefore = token.getNbf();
-        return notBefore == null || notBefore == 0 || now >= notBefore - CLOCK_SKEW_SECONDS;
+        return notBefore == null || notBefore == 0 || now >= notBefore - skew;
     }
 
     /**

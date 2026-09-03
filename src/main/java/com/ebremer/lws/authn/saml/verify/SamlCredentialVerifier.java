@@ -46,7 +46,9 @@ public class SamlCredentialVerifier {
     private static final Logger log = Logger.getLogger(SamlCredentialVerifier.class);
 
     /** Shared with the JWT suites, so one deployment does not apply two different tolerances. */
-    private static final long CLOCK_SKEW_SECONDS = com.ebremer.lws.authn.jose.JwsChecks.CLOCK_SKEW_SECONDS;
+    private static long clockSkewSeconds() {
+        return com.ebremer.lws.authn.jose.JwsChecks.clockSkewSeconds();
+    }
     private static final String XMLDSIG_NS = "http://www.w3.org/2000/09/xmldsig#";
     private static final String NS = SamlConstants.SAML_ASSERTION_NS;
     private static final String PROTOCOL_NS = SamlConstants.SAML_PROTOCOL_NS;
@@ -405,11 +407,11 @@ public class SamlCredentialVerifier {
         Instant now = Instant.now();
         try {
             if (notBefore != null && !notBefore.isBlank()
-                    && now.isBefore(Instant.parse(notBefore).minusSeconds(CLOCK_SKEW_SECONDS))) {
+                    && now.isBefore(Instant.parse(notBefore).minusSeconds(clockSkewSeconds()))) {
                 return false;
             }
             if (notOnOrAfter != null && !notOnOrAfter.isBlank()
-                    && !now.isBefore(Instant.parse(notOnOrAfter).plusSeconds(CLOCK_SKEW_SECONDS))) {
+                    && !now.isBefore(Instant.parse(notOnOrAfter).plusSeconds(clockSkewSeconds()))) {
                 return false;
             }
             return true;

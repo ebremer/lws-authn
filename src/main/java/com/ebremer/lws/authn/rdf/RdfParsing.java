@@ -36,12 +36,60 @@ public final class RdfParsing {
     private static final String JSON_LD = "application/ld+json";
 
     /**
+     * Thrown when a dereferenced document declares a content type that is not an RDF syntax this
+     * verifier reads.
+     *
+     * <p>The alternative — what this class used to do — was to hand the bytes to the Turtle parser and
+     * see what happened. It failed closed, so nothing was insecure about it, but an HTML error page,
+     * a PDF or a plain-text 404 body all came back as a Turtle syntax error somewhere in line 1, which
+     * says nothing about the actual problem: the server at the subject's URL did not serve a
+     * controlled identifier document. Naming the content type says exactly that.</p>
+     */
+    public static final class UnsupportedSyntaxException extends RuntimeException {
+        private final String contentType;
+
+        UnsupportedSyntaxException(String contentType) {
+            super("not an RDF syntax this verifier reads: " + contentType);
+            this.contentType = contentType;
+        }
+
+        /** The offending media type, already reduced to its bare {@code type/subtype}. */
+        public String getContentType() {
+            return contentType;
+        }
+    }
+
+    /** The bare {@code type/subtype} of a {@code Content-Type}, lower-cased; {@code null} if absent. */
+    private static String mediaType(String contentType) {
+        if (contentType == null) {
+            return null;
+        }
+        String bare = contentType.split(";")[0].trim().toLowerCase(Locale.ROOT);
+        return bare.isEmpty() ? null : bare;
+    }
+
+    /**
+     * Throws unless {@code contentType} is absent or names a syntax this class can read.
+     *
+     * @throws UnsupportedSyntaxException if it names something else
+     */
+    public static void requireSupported(String contentType) {
+        String ct = mediaType(contentType);
+        if (ct == null || ct.equals(JSON_LD) || ct.equals("application/json")) {
+            return;
+        }
+        if (RDFLanguages.contentTypeToLang(ct) == null) {
+            throw new UnsupportedSyntaxException(ct);
+        }
+    }
+
+    /**
      * Decides whether a dereferenced document should be read as JSON-LD: by content type when one is
      * present and recognised, otherwise by sniffing a leading {@code {} / {@code [}.
      */
     public static boolean isJsonLd(String contentType, String body) {
-        if (contentType != null) {
-            String ct = contentType.split(";")[0].trim().toLowerCase(Locale.ROOT);
+        String ct = mediaType(contentType);
+        if (ct != null) {
             if (ct.equals(JSON_LD) || ct.equals("application/json")) {
                 return true;
             }
@@ -53,14 +101,27 @@ public final class RdfParsing {
         return trimmed.startsWith("{") || trimmed.startsWith("[");
     }
 
-    /** Parses Turtle / N-Triples / RDF/XML with Jena RIOT, defaulting to Turtle. */
+    /**
+     * Parses Turtle / N-Triples / RDF/XML with Jena RIOT.
+     *
+     * <p>A document that declares a content type Jena does not know is <strong>refused</strong>, not
+     * guessed at. Only a document that declares nothing at all falls back to Turtle: that is the
+     * syntax the verifiers ask for first and the WebID/Solid norm, so it is the best guess available
+     * when the server offers none, and it is a guess about silence rather than a contradiction of
+     * something the server actually said.</p>
+     *
+     * @throws UnsupportedSyntaxException if {@code contentType} names something that is not an RDF
+     *                                    syntax this verifier reads
+     */
     public static Model parseRdf(String body, String contentType, String base) {
         Lang lang = Lang.TURTLE;
-        if (contentType != null) {
-            Lang detected = RDFLanguages.contentTypeToLang(contentType.split(";")[0].trim());
-            if (detected != null) {
-                lang = detected;
+        String ct = mediaType(contentType);
+        if (ct != null) {
+            Lang detected = RDFLanguages.contentTypeToLang(ct);
+            if (detected == null) {
+                throw new UnsupportedSyntaxException(ct);
             }
+            lang = detected;
         }
         Model model = ModelFactory.createDefaultModel();
         RDFDataMgr.read(model, new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)), base, lang);
@@ -107,8 +168,14 @@ public final class RdfParsing {
      * @return the parsed graph, or {@code null} if it was JSON-LD that could not be processed — the
      *         caller may then fall back to reading the compact shape directly, which is what this
      *         provider did for every JSON-LD document before {@link #parseJsonLd} existed
+     * @throws UnsupportedSyntaxException if the document declares a content type that is not an RDF
+     *                                    syntax this verifier reads
      */
     public static Model parse(String body, String contentType, String base) {
+        // Checked before isJsonLd, whose {-sniff is a fallback for a document that declares no type at
+        // all and must not be allowed to rescue one that declares the wrong one: an HTML error page
+        // whose body happens to start with a brace is not a JSON-LD document, and neither is it Turtle.
+        requireSupported(contentType);
         if (!isJsonLd(contentType, body)) {
             return parseRdf(body, contentType, base);
         }

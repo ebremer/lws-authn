@@ -12,14 +12,15 @@ order is roughly "cheapest first".
 failures). Nothing below is a build breakage — these are security, conformance, robustness and
 hygiene gaps.
 
-> ### P0, P1, P2 and P4 are done
+> ### P0, P1, P2, P3 and P4 are done
 >
 > More precisely: every item those bands contained **at review time**. Three items were added
 > afterwards and are still open — **P0-10** (the live deployment still runs pre-P0 code), **P4-7**
 > (no `.gitattributes`) and **P6-8** (the demo realm's client identifier). P0-10 is the highest
-> priority item in this file: it is the only one with consequences outside the repository.
+> priority item in this file: it is the only one with consequences outside the repository. **P1-C6**
+> was checked off in the P1 pass without its fix being made; P3-3 finished it, and its entry now says so.
 >
-> `mvn clean verify` is green: **114 unit tests** (21 before this work started) and **10** in
+> `mvn clean verify` is green: **139 unit tests** (21 before this work started) and **12** in
 > `LwsAuthIT` against a real Keycloak 26.7.3 container. The changes worth knowing about
 > before reading further:
 >
@@ -43,9 +44,26 @@ hygiene gaps.
 > could be verified in any suite. Neither was visible to a unit test — the first needs the real
 > classpath, the second needs Keycloak's crypto providers.
 >
-> P3-1 (a `401` with no `WWW-Authenticate` when a *credential* is invalid) is now more visible than it
-> was: access-control denials send a challenge and credential rejections do not, which is what
-> currently distinguishes them. It stays a P3.
+> ### P3 (all seven items)
+>
+> - **A rejected credential is now a `200` with `"valid": false`** on all four suites, not a bare
+>   `401`. A `401` means *the caller* was refused and always carries a challenge. **This is a
+>   breaking change for a client that read the status instead of the body.**
+> - **Every non-result body is serialized, not concatenated**, and every one has the same shape:
+>   `{"error", "error_description"}`, whichever endpoint and whichever status produced it.
+> - **A real configuration surface.** `Settings` / `ServerSettings` / `EndpointSettings` read every
+>   tunable from `Config.Scope`, then a system property, then an environment variable: the SSRF
+>   allow-list, outbound timeouts and response cap, clock skew, CID cache lifetime and rate limit, a
+>   deployment-wide required audience, and an on/off flag that a **realm attribute** can override per
+>   realm. The full table is in `README.md`.
+> - **The two `cid/{userId}` endpoints are one implementation** (`http/CidEndpoint`), rate limited,
+>   with a uniform response shape and an explicit written decision about why they are unauthenticated.
+> - A `kid` is percent-encoded into the verification method's IRI fragment, so a `kid` with a space or
+>   a `#` in it no longer 500s the whole document; the verifier matches raw *and* decoded fragments.
+>   This also finished **P1-C6**, which was checked off with its fix unmade and deferred the encoding
+>   half to P3-3: every published method now has the `id` CID 1.0 requires.
+> - An unrecognised `Content-Type` on a dereferenced document is refused by name instead of being fed
+>   to the Turtle parser.
 >
 > ### P1 (all 19 items)
 >
@@ -346,11 +364,15 @@ Facts from those documents that shape the items below:
   **Do:** accept a key only when `type` is `JsonWebKey` and `controller` equals `sub`.
 
 - [x] **P1-C6 · The served CID omits the REQUIRED verification-method `id` when the JWK has no `kid`.**
-  `ssicid/cid/SelfSignedControlledIdentifierDocument.java:65-68` adds `id` only when a `kid` is present,
-  and `:99` falls back to a blank node in the RDF serialization. CID 1.0: a verification method's `id`
-  MUST be a string conforming to URL syntax.
-  **Do:** require a `kid` on registered JWKs (rejecting the attribute value otherwise, consistent with
-  P1-C3) or synthesize `#key-<n>`; URL-encode the fragment (see P3-3).
+  `SelfSignedControlledIdentifierDocument` added `id` only when a `kid` was present, and fell back to a
+  blank node in the RDF serialization. CID 1.0: a verification method's `id` MUST be a string
+  conforming to URL syntax.
+  **Done — with P3-3, which this item deferred the encoding half to.** This was checked off in the P1
+  pass with the fix not actually made; finishing P3-3 finished it. Every published method now has an
+  `id`: the `kid` supplies the fragment when it can be percent-encoded into one, and when it cannot —
+  absent, blank, over-long, or not well-formed text — the position stands in as `#key-<n>`, the option
+  this item named. Positional, so it shifts if keys are added or removed; a verifier selects by the
+  JWK's own `kid` first in any case. No blank-node verification method is emitted any more.
 
 - [x] **P1-C7 · No algorithm/key pinning in the SSI-CID verifier.**
   The OpenID verifier has `algMatchesKey` (`openid/verify/LWSCredentialVerifier.java:343-358`) and the
@@ -461,51 +483,87 @@ Facts from those documents that shape the items below:
 
 ## P3 — Correctness and robustness
 
-- [ ] **P3-1 · `/verify` returns 401 with no `WWW-Authenticate` header.**
-  `openid/resource/LWSResourceProvider.java:122`, `ssicid/resource/SsiCidResourceProvider.java:130`,
-  `ssididkey/resource/DidKeyResourceProvider.java` and `saml/resource/SamlResourceProvider.java:84` all
-  return `Response.Status.UNAUTHORIZED`. RFC 9110 §15.5.2: *"The server generating a 401 response MUST
-  send a `WWW-Authenticate` header field."* The status is also semantically wrong — the *request* was
-  authorized; the *submitted credential* was not valid.
-  **Do:** return `200 OK` with `{"valid": false, …}`, and reserve 401 (with a proper challenge) for an
-  unauthenticated caller once P0-3 lands.
+- [x] **P3-1 · `/verify` returns 401 with no `WWW-Authenticate` header.**
+  All four providers returned `Response.Status.UNAUTHORIZED` for a credential that did not verify.
+  RFC 9110 §15.5.2: *"The server generating a 401 response MUST send a `WWW-Authenticate` header
+  field."* The status was also semantically wrong — the *request* was authorized; the *submitted
+  credential* was not valid.
+  **Done:** a verification outcome is always `200 OK` with `{"valid": …}` in the body. `401`/`403` now
+  mean only "the caller may not use this endpoint" and always carry a challenge (`VerifyAccess`),
+  `400` means the request could not be read, `404` means the suite is disabled here, `429` means rate
+  limited. `LwsAuthIT.anInvalidCredentialIsTwoHundredWithValidFalse` checks all four suites answer
+  `200` with `valid:false` **and** send no challenge.
+  **Breaking:** a client that read the status rather than `valid` will now see `200` for a rejected
+  credential. The status table is in `README.md` under "What each status means".
 
-- [ ] **P3-2 · JSON built by string concatenation.**
-  `saml/resource/SamlResourceProvider.java:91-95` interpolates a message into a JSON literal; the other
-  three providers do the same for their "missing credential" body. Every current caller passes a
-  constant, so nothing is broken today — but it is one edit from emitting malformed JSON.
-  **Do:** serialize with `JsonSerialization` everywhere.
+- [x] **P3-2 · JSON built by string concatenation.**
+  Every "missing credential" body, the 404, the 406 and `VerifyAccess`'s denials were string literals
+  with a message interpolated in. Every caller passed a constant, so nothing was broken — but it was
+  one edit from emitting malformed JSON.
+  **Done:** `http/JsonResponses` builds them all through `JsonSerialization`, with one shape
+  (`{"error", "error_description"}`) across every endpoint and status — which P3-7 wanted anyway. The
+  `WWW-Authenticate` header, assembled the same way, now escapes its `quoted-string` values.
+  `JsonResponsesTest` round-trips a description full of quotes, backslashes and newlines.
 
-- [ ] **P3-3 · An unencoded `kid` can produce an invalid IRI and a 500 from the CID endpoint.**
-  `ssicid/cid/SelfSignedControlledIdentifierDocument.java:66` and `:99` build `id + "#" + kid` with no
-  escaping; a `kid` containing a space, `#` or `/` yields an IRI Jena rejects when serializing Turtle.
-  **Do:** URL-encode the fragment and reject `kid`s that cannot be encoded (pairs with P1-C6).
+- [x] **P3-3 · An unencoded `kid` can produce an invalid IRI and a 500 from the CID endpoint.**
+  `SelfSignedControlledIdentifierDocument` built `id + "#" + kid` with no escaping; a `kid` containing
+  a space, `#` or `/` yielded an IRI Jena rejects when serializing — taking down the whole document,
+  including every other key on that user.
+  **Done:** `jose/KeyIdFragment` percent-encodes everything outside RFC 3986 `unreserved`, and refuses
+  (rather than mangles) a `kid` that is blank, absurdly long, or contains an unpaired surrogate; a
+  refused `kid` leaves the method unidentified — a blank node in RDF, no `id` in JSON-LD — which is
+  what a JWK with no `kid` already produced. `SelfSignedCidVerifier.selectByKid` compares a method's
+  fragment both raw and percent-decoded, so this provider's own documents and other implementations'
+  both resolve.
 
-- [ ] **P3-4 · SPARQL predicates hardcoded as strings instead of the constants that exist for them.**
-  `ssicid/verify/SelfSignedCidVerifier.java:213-216` writes `sec:authenticationMethod` /
-  `sec:verificationMethod` into the query text while `SsiCidConstants.SEC_AUTHENTICATION` and
-  `SEC_VERIFICATION_METHOD` sit unused (the latter has zero references anywhere).
-  **Do:** bind them as IRI parameters, as the subject already is.
+- [x] **P3-4 · SPARQL predicates hardcoded as strings instead of the constants that exist for them.**
+  **Already fixed** by the P1 work: `SelfSignedCidVerifier.collectFromRdf` binds `SEC_AUTHENTICATION`,
+  `SEC_VERIFICATION_METHOD`, `JSON_WEB_KEY_TYPE`, `SEC_CONTROLLER` and `SEC_PUBLIC_KEY_JWK` as IRI
+  parameters of a `ParameterizedSparqlString`, alongside the subject. Nothing was left to do here.
 
-- [ ] **P3-5 · Unknown content types are parsed as Turtle.**
-  `rdf/RdfParsing.java:51-62` defaults to `Lang.TURTLE` for any unrecognised `Content-Type`; combined
-  with the `{`-sniff in `isJsonLd:36-48`, an HTML error page reaches the Turtle parser. It fails closed,
-  but the reported error is misleading.
-  **Do:** reject unrecognised content types explicitly, with a clear message.
+- [x] **P3-5 · Unknown content types are parsed as Turtle.**
+  `RdfParsing.parseRdf` defaulted to `Lang.TURTLE` for any unrecognised `Content-Type`; combined with
+  the `{`-sniff in `isJsonLd`, an HTML error page reached the Turtle parser. It failed closed, but the
+  reported error said "Turtle syntax error at line 1" when the truth was "that URL does not serve a
+  controlled identifier document".
+  **Done:** `RdfParsing.requireSupported` runs *before* the sniff, so a declared content type can no
+  longer be overridden by a body that happens to start with a brace, and a type Jena does not know
+  throws `UnsupportedSyntaxException` naming it. Both verifiers catch it separately from the generic
+  failure and report the media type — public information the remote server chose to advertise. Only a
+  document declaring *nothing* still falls back to Turtle: that is a guess about silence rather than a
+  contradiction of what the server said.
 
-- [ ] **P3-6 · The SPI provides no configuration surface.**
-  `init(Config.Scope)` is empty in all four factories (`openid/resource/LWSResourceProviderFactory.java:28`
-  and the SSI-CID / SAML / did:key equivalents), and `net/SsrfGuard.java:122-138` reads its allow-list
-  only from a JVM system property or environment variable. There is no supported way to set timeouts,
-  clock skew, expected audiences or cache lifetimes, or to disable an endpoint per realm.
-  **Do:** wire real `spi-realm-restapi-extension-*` configuration and route the allow-list through it,
-  keeping the environment variable as a fallback.
+- [x] **P3-6 · The SPI provides no configuration surface.**
+  `init(Config.Scope)` was empty in all four factories (the P0 work had since wired `VerifyAccess`
+  through it), and the SSRF allow-list was readable only from a JVM system property or environment
+  variable. There was no supported way to set timeouts, clock skew, expected audiences or cache
+  lifetimes, or to disable an endpoint per realm.
+  **Done:** a `config` package. `Settings` is the single lookup — scope, then system property, then
+  environment, then default — and `isSet` distinguishes "not configured" from "configured to the
+  default". `ServerSettings` holds what static utility code reads (`SsrfGuard`'s allow-list,
+  `OutboundHttp`'s timeout and response cap, `JwsChecks`'s clock skew, shared with the SAML
+  `<Conditions>` window); each factory *contributes* to it from its own scope, so a setting one
+  provider names applies to all four and a provider that says nothing leaves it alone. Out-of-range
+  values are clamped. `EndpointSettings` holds the per-provider ones: `enabled`, a deployment-wide
+  required `audience` used when a request names none, `cid-cache-seconds` and `cid-rate-limit`, plus
+  the `VerifyAccess` policy. **Per realm:** `enabled` also honours a realm attribute
+  `lws.authn.<providerId>.enabled`, which is the one setting realms of a server sensibly differ on.
+  Every environment variable that worked before still works. Full table in `README.md`; 13 tests in
+  `SettingsTest`.
 
-- [ ] **P3-7 · The CID endpoints are unauthenticated and uncached.**
-  `openid/resource/LWSResourceProvider.java:70-91` / `ssicid/resource/SsiCidResourceProvider.java:71-104`
-  serve any `{userId}` and answer 404 for unknown ones. That is inherent to hosting dereferenceable
-  WebIDs, but it deserves an explicit decision: a uniform response shape, plus rate limiting to bound
-  scraping.
+- [x] **P3-7 · The CID endpoints are unauthenticated and uncached.**
+  Uncached was already fixed by the P2 work (`Vary`, `ETag`, `Cache-Control`). What was left was the
+  explicit decision the item asked for.
+  **Done — and the decision is that they stay unauthenticated.** A controlled identifier is a URL other
+  people dereference; a verifier meets the subject there before any trust exists in either direction,
+  so there is no credential it could present, and an authenticated identity document is not a
+  dereferenceable one. What that costs is enumeration, so it is bounded rather than closed: a uniform
+  response shape (document, `404`, `406`, `429` — all `application/json` of one shape, nothing but the
+  status distinguishing them), user ids that are random UUIDs, and a rate limit — `cid-rate-limit`,
+  default 600/minute per caller, an order of magnitude above the verify limit because this is a cheap
+  local read. A deployment that does not want to host identifiers at all sets `enabled=false`. Both
+  endpoints are now one implementation, `http/CidEndpoint`, which carries the reasoning in its javadoc;
+  `LwsAuthIT.everyRefusalIsJsonOfTheSameShape` checks the uniform shape end to end.
 
 ---
 

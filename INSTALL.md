@@ -303,10 +303,13 @@ reach. But if the server reaches its own hostname over an internal/loopback addr
 setups, split-horizon DNS, or NAT hairpin problems), the guard will block `/verify` unless you
 allow-list that host.
 
-You opt specific hosts back in with a comma-separated list, via **either**:
+You opt specific hosts back in with a comma-separated list, via **any** of:
 
-- environment variable `LWS_AUTHN_ALLOWED_INTERNAL_HOSTS`, or
-- JVM system property `lws.authn.allowedInternalHosts`.
+- environment variable `LWS_AUTHN_ALLOWED_INTERNAL_HOSTS`,
+- JVM system property `lws.authn.allowedInternalHosts`, or
+- the build-time provider option
+  `kc.sh build --spi-realm-restapi-extension--lws--allowed-internal-hosts=…` (set it on any one of the
+  four providers; it is a server-wide setting).
 
 We wire the environment variable into the systemd unit in the next steps. For a single-box install
 where the server can't reach its own public IP, set it to your hostname (and/or `127.0.0.1`); leave
@@ -343,6 +346,41 @@ rebuild, so they are what the systemd unit below uses.
   `secret` without configuring one falls back to `bearer`; it never fails open.
 - **`public`** — anonymous, the pre-1.0 behaviour. Only for endpoints already restricted to a trusted
   network by the firewall or reverse proxy.
+
+> **A rejected credential is a `200`, not a `401`.** A `/verify` status is about the request; the
+> credential's verdict is the `valid` field of the body. `200` means "answered — read `valid`";
+> `400` means the request could not be read; `401`/`403` mean *you* may not use the endpoint and carry
+> a `WWW-Authenticate` challenge; `404` means the suite is disabled on that realm; `429` means rate
+> limited. Before this release a credential that failed to verify was a bare `401` with no challenge,
+> which RFC 9110 §15.5.2 forbids. **If you have a client that branches on the status rather than on
+> `valid`, change it.**
+
+### 9e. The rest of the settings
+
+Every setting is read from the provider's configuration first, then a system property, then an
+environment variable, then a compiled-in default — so the environment variables in the unit file below
+need no `kc.sh build`.
+
+| Setting | Environment variable | System property | Provider option | Default |
+|---|---|---|---|---|
+| Serve this suite at all | `LWS_AUTHN_ENABLED` | `lws.authn.enabled` | `enabled` | `true` |
+| Audience to require when the request names none | `LWS_AUTHN_AUDIENCE` | `lws.authn.audience` | `audience` | — |
+| `Cache-Control: max-age` on a served CID | `LWS_AUTHN_CID_CACHE_SECONDS` | `lws.authn.cid.cacheSeconds` | `cid-cache-seconds` | `300` |
+| CID requests per minute, per caller | `LWS_AUTHN_CID_RATE_LIMIT` | `lws.authn.cid.rateLimit` | `cid-rate-limit` | `600` |
+| Outbound fetch timeout (ms) | `LWS_AUTHN_HTTP_TIMEOUT_MILLIS` | `lws.authn.http.timeoutMillis` | `http-timeout-millis` | `5000` |
+| Outbound response cap (bytes) | `LWS_AUTHN_HTTP_MAX_RESPONSE_BYTES` | `lws.authn.http.maxResponseBytes` | `http-max-response-bytes` | `262144` |
+| Clock skew on `exp`/`nbf`/`<Conditions>` (s) | `LWS_AUTHN_CLOCK_SKEW_SECONDS` | `lws.authn.clockSkewSeconds` | `clock-skew-seconds` | `60` |
+
+The last three are server-wide: set them on any one provider and all four use them. Out-of-range
+values are clamped rather than honoured.
+
+**Turning a suite off.** `LWS_AUTHN_ENABLED=false` (or `--spi-realm-restapi-extension--lws-saml--enabled=false`
+for just one) makes that suite's endpoints answer `404`. For one realm only, set the realm attribute
+`lws.authn.<providerId>.enabled` — for example:
+
+```bash
+kcadm.sh update realms/myrealm -s 'attributes."lws.authn.lws-saml.enabled"=false'
+```
 
 > In `bearer` and `secret` mode the `Authorization` header carries the **caller's** credential, so the
 > credential being verified must be sent as the `credential` form parameter. Only `public` mode keeps
@@ -387,6 +425,12 @@ LWS_AUTHN_ALLOWED_INTERNAL_HOSTS=
 LWS_AUTHN_VERIFY_ACCESS=bearer
 LWS_AUTHN_VERIFY_RATE_LIMIT=60
 
+# Optional, see step 9e. Uncomment to bind every verified credential to this
+# server even when the caller forgets the 'audience' parameter, or to turn a
+# suite off entirely.
+#LWS_AUTHN_AUDIENCE=https://id.example.com/realms/myrealm
+#LWS_AUTHN_ENABLED=true
+
 # First boot ONLY: seed the temporary admin, then comment these out and
 # restart (see step 11c).
 KC_BOOTSTRAP_ADMIN_USERNAME=admin
@@ -396,9 +440,8 @@ sudo chmod 600 /etc/keycloak/keycloak.env
 ```
 
 > `KC_DB_PASSWORD` is Keycloak's environment-variable form of the `db-password` option (uppercase,
-> `KC_` prefix, dashes → underscores). `LWS_AUTHN_ALLOWED_INTERNAL_HOSTS` and the
-> `LWS_AUTHN_VERIFY_*` settings are read directly by the provider, so they take effect on restart with
-> no `kc.sh build`.
+> `KC_` prefix, dashes → underscores). Every `LWS_AUTHN_*` setting is read directly by the provider,
+> so they all take effect on restart with no `kc.sh build`.
 
 ### 11b. Unit file
 
@@ -617,7 +660,10 @@ If `subjectDereferenced` is `false`, the server couldn't fetch its own WebID —
 | `kc.sh` complains about H2/dev at startup | `start --optimized` ran but a build-time option changed. Re-run `kc.sh build` (step 10), then restart. |
 | WebID / discovery URLs use the wrong host or `http` | `hostname` unset/wrong, or nginx isn't forwarding `X-Forwarded-*`. Fix `keycloak.conf` (step 9b) and the proxy headers (step 12); rebuild if needed. |
 | `/lws/verify` → `subjectDereferenced: false` or a blocked-host error | The server can't reach its own WebID, or the SSRF guard blocked an internal address. Ensure the public hostname is reachable from the box, or set `LWS_AUTHN_ALLOWED_INTERNAL_HOSTS` (step 9c/11a) and restart. |
-| `/verify` → `401` with `{"error":"invalid_token"}` and a `WWW-Authenticate` header | The **caller** is not authenticated. Since the endpoints are gated by default, pass your own access token in `Authorization` and the credential under test in the `credential` form field (step 9d). A `401` *without* that header instead means the credential you submitted did not validate. |
+| `/verify` → `401` with `{"error":"invalid_token"}` and a `WWW-Authenticate` header | The **caller** is not authenticated. Since the endpoints are gated by default, pass your own access token in `Authorization` and the credential under test in the `credential` form field (step 9d). |
+| `/verify` → `200` with `"valid": false` | The request was fine; the **credential** did not verify. Read `checks` and `errors` in the body, and the server log at `DEBUG` under the response's `traceId`. This used to be a `401` — see step 9d. |
+| `/verify` or `/cid/{userId}` → `404` with `{"error":"not_found"}` | Either that user id does not exist, or the suite is disabled — check `LWS_AUTHN_ENABLED` and the realm attribute `lws.authn.<providerId>.enabled` (step 9e). |
+| `/cid/{userId}` → `429` with `{"error":"slow_down"}` | The caller exceeded `LWS_AUTHN_CID_RATE_LIMIT` (default 600/minute, per source address). Raise it, or set it to `0` to disable. |
 | `/verify` → `429` with `{"error":"slow_down"}` | The caller exceeded `LWS_AUTHN_VERIFY_RATE_LIMIT` (default 60/minute, per source address). Raise it, or set it to `0` to disable rate limiting. |
 | `directAccessGrantsEnabled`/token request returns `invalid_client` | The client isn't public or Direct Access Grants is off. For the demo client, enable both. |
 

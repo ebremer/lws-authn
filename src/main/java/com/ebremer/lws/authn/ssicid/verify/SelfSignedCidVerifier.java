@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import com.ebremer.lws.authn.jose.JwsChecks;
+import com.ebremer.lws.authn.jose.KeyIdFragment;
 import com.ebremer.lws.authn.net.OutboundHttp;
 import com.ebremer.lws.authn.rdf.RdfParsing;
 import com.ebremer.lws.authn.verify.Trace;
@@ -302,6 +303,17 @@ public class SelfSignedCidVerifier {
             result.check("subjectDereferenced", true);
             result.check("subjectIdMatches", true);
             return methods;
+        } catch (RdfParsing.UnsupportedSyntaxException wrongSyntax) {
+            // Distinguished from the generic failure below because it is actionable and gives nothing
+            // away: the media type is one the remote server chose to advertise publicly, and naming it
+            // is the difference between "your document is not RDF" and "something went wrong".
+            log.debugf("[%s] sub <%s> was served as '%s', which is not an RDF syntax this verifier reads",
+                    result.getTraceId(), sub, wrongSyntax.getContentType());
+            OutboundHttp.recordFailure(sub);
+            result.check("subjectDereferenced", false);
+            result.error("The document at 'sub' <" + sub + "> was served as '" + wrongSyntax.getContentType()
+                    + "', which is not an RDF syntax this verifier reads");
+            return null;
         } catch (Exception e) {
             // The cause can name the address the host resolved to, so it is logged, not returned.
             log.debugf(e, "[%s] could not dereference or parse sub <%s>", result.getTraceId(), sub);
@@ -405,6 +417,11 @@ public class SelfSignedCidVerifier {
      * of the method's {@code id}, which is where CID 1.0 conventionally puts it
      * ({@code <subject>#<kid>}). There is no fallback to "the only key": the credential says which key
      * signed it, and honouring that is the point of the check.
+     *
+     * <p>The fragment is compared both raw and percent-decoded: a {@code kid} is arbitrary text, so any
+     * document that puts one in an IRI fragment has to encode it (this provider does — see
+     * {@link KeyIdFragment}), and a comparison that only looked at the raw fragment would fail to find
+     * the very method the credential names.</p>
      */
     public static VerificationMethod selectByKid(List<VerificationMethod> methods, String kid) {
         if (methods.isEmpty() || kid == null || kid.isBlank()) {
@@ -418,7 +435,11 @@ public class SelfSignedCidVerifier {
         for (VerificationMethod method : methods) {
             String id = method.id();
             int hash = id == null ? -1 : id.lastIndexOf('#');
-            if (hash >= 0 && kid.equals(id.substring(hash + 1))) {
+            if (hash < 0) {
+                continue;
+            }
+            String fragment = id.substring(hash + 1);
+            if (kid.equals(fragment) || kid.equals(KeyIdFragment.decode(fragment))) {
                 return method;
             }
         }

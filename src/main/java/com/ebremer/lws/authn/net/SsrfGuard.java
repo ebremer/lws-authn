@@ -14,17 +14,18 @@ import java.net.InetAddress;
 import java.net.URI;
 import java.net.UnknownHostException;
 import java.util.Arrays;
-import java.util.Collections;
-import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Set;
+
+import com.ebremer.lws.authn.config.ServerSettings;
 
 /**
  * Validates a URL before it is fetched, to prevent Server-Side Request Forgery.
  *
  * <p>An allow-list (comma-separated hostnames) lets a deployment permit legitimate internal targets —
  * for example a Keycloak that hosts its own controlled identifier documents on a loopback or internal
- * address. It is read from the system property {@code lws.authn.allowedInternalHosts} or the
+ * address. It comes from {@link ServerSettings#allowedInternalHosts()}: the provider configuration key
+ * {@code allowed-internal-hosts}, the system property {@code lws.authn.allowedInternalHosts}, or the
  * environment variable {@code LWS_AUTHN_ALLOWED_INTERNAL_HOSTS}. By default nothing internal is
  * reachable.</p>
  *
@@ -166,22 +167,8 @@ public final class SsrfGuard {
         return (b[10] & 0xFF) == 0xFF && (b[11] & 0xFF) == 0xFF;
     }
 
-    /** The configured allow-list of internal host names (system property or environment variable). */
+    /** The configured allow-list of internal host names. */
     public static Set<String> configuredAllowlist() {
-        String value = System.getProperty("lws.authn.allowedInternalHosts");
-        if (value == null || value.isBlank()) {
-            value = System.getenv("LWS_AUTHN_ALLOWED_INTERNAL_HOSTS");
-        }
-        if (value == null || value.isBlank()) {
-            return Collections.emptySet();
-        }
-        Set<String> hosts = new LinkedHashSet<>();
-        for (String h : value.split(",")) {
-            String t = h.trim().toLowerCase(Locale.ROOT);
-            if (!t.isEmpty()) {
-                hosts.add(t);
-            }
-        }
-        return hosts;
+        return ServerSettings.allowedInternalHosts();
     }
 }

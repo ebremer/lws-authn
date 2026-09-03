@@ -13,7 +13,7 @@ import org.keycloak.services.resource.RealmResourceProvider;
 import org.keycloak.services.resource.RealmResourceProviderFactory;
 
 import com.ebremer.lws.authn.ssicid.SsiCidConstants;
-import com.ebremer.lws.authn.verify.VerifyAccess;
+import com.ebremer.lws.authn.config.EndpointSettings;
 
 /**
  * @author Erich Bremer
@@ -21,19 +21,19 @@ import com.ebremer.lws.authn.verify.VerifyAccess;
 public class SsiCidResourceProviderFactory implements RealmResourceProviderFactory {
 
     /**
-     * Access policy for the verify endpoint. Held on the factory because {@link Config.Scope} is only
-     * offered here, and read eagerly so a misconfiguration is logged at startup rather than per request.
+     * This provider's settings. Held on the factory because {@link Config.Scope} is only offered here,
+     * and read eagerly so a misconfiguration is logged at startup rather than once per request.
      */
-    private volatile VerifyAccess verifyAccess = VerifyAccess.defaults();
+    private volatile EndpointSettings settings = EndpointSettings.defaults(SsiCidConstants.RESOURCE_PROVIDER_ID);
 
     @Override
     public RealmResourceProvider create(KeycloakSession session) {
-        return new SsiCidResourceProvider(session, verifyAccess);
+        return new SsiCidResourceProvider(session, settings);
     }
 
     @Override
     public void init(Config.Scope config) {
-        this.verifyAccess = VerifyAccess.from(config);
+        this.settings = EndpointSettings.from(SsiCidConstants.RESOURCE_PROVIDER_ID, config);
     }
 
     @Override

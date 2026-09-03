@@ -300,6 +300,17 @@ public class LWSCredentialVerifier {
                 return null;
             }
             return model;
+        } catch (RdfParsing.UnsupportedSyntaxException wrongSyntax) {
+            // Distinguished from the generic failure below because it is actionable and gives nothing
+            // away: the media type is one the remote server chose to advertise publicly, and naming it
+            // is the difference between "your document is not RDF" and "something went wrong".
+            log.debugf("[%s] sub <%s> was served as '%s', which is not an RDF syntax this verifier reads",
+                    result.getTraceId(), sub, wrongSyntax.getContentType());
+            OutboundHttp.recordFailure(sub);
+            result.check("subjectDereferenced", false);
+            result.error("The document at 'sub' <" + sub + "> was served as '" + wrongSyntax.getContentType()
+                    + "', which is not an RDF syntax this verifier reads");
+            return null;
         } catch (Exception e) {
             // The cause can name the address the host resolved to, so it is logged, not returned.
             log.debugf(e, "[%s] could not dereference or parse sub <%s>", result.getTraceId(), sub);

@@ -23,6 +23,8 @@ import org.keycloak.broker.provider.util.SimpleHttp;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.truststore.TruststoreProvider;
 
+import com.ebremer.lws.authn.config.ServerSettings;
+
 /**
  * Builds {@link SimpleHttp} GETs pre-configured with bounded timeouts, a response-size cap, redirect
  * following disabled, and SSRF-vetted name resolution.
@@ -49,15 +51,23 @@ public final class OutboundHttp {
     private OutboundHttp() {
     }
 
-    /** Connect / read / connection-request timeout applied to each outbound fetch (milliseconds). */
-    public static final int TIMEOUT_MS = 5_000;
+    /**
+     * Connect / read / connection-request timeout applied to each outbound fetch (milliseconds).
+     * Configurable as {@code http-timeout-millis}; see {@link ServerSettings}.
+     */
+    public static int timeoutMillis() {
+        return ServerSettings.httpTimeoutMillis();
+    }
 
     /**
      * Maximum response body the verifiers will consume. Controlled identifier documents, OIDC
-     * discovery documents and JWK sets are all small (a few KB); 256&nbsp;KiB is a generous ceiling
-     * that still rejects a hostile target streaming an unbounded body.
+     * discovery documents and JWK sets are all small (a few KB); the 256&nbsp;KiB default is a generous
+     * ceiling that still rejects a hostile target streaming an unbounded body. Configurable as
+     * {@code http-max-response-bytes}.
      */
-    public static final long MAX_RESPONSE_BYTES = 256L * 1024L;
+    public static long maxResponseBytes() {
+        return ServerSettings.maxResponseBytes();
+    }
 
     private static final int POOL_SIZE = 16;
     private static final int MAX_PER_ROUTE = 4;
@@ -91,13 +101,15 @@ public final class OutboundHttp {
         requireClosedCircuit(hostOf(url));
         SsrfGuard.verify(url);
         HttpClient client = usingSessionClient() ? null : guardedClient(session);
+        long maxBytes = maxResponseBytes();
+        int timeout = timeoutMillis();
         SimpleHttp request = client == null
-                ? SimpleHttp.doGet(url, session).setMaxConsumedResponseSize(MAX_RESPONSE_BYTES)
-                : LwsSimpleHttp.get(url, client, MAX_RESPONSE_BYTES);
+                ? SimpleHttp.doGet(url, session).setMaxConsumedResponseSize(maxBytes)
+                : LwsSimpleHttp.get(url, client, maxBytes);
         return request
-                .connectTimeoutMillis(TIMEOUT_MS)
-                .connectionRequestTimeoutMillis(TIMEOUT_MS)
-                .socketTimeOutMillis(TIMEOUT_MS);
+                .connectTimeoutMillis(timeout)
+                .connectionRequestTimeoutMillis(timeout)
+                .socketTimeOutMillis(timeout);
     }
 
     // ------------------------------------------------------------------ the shared, guarded client
@@ -124,9 +136,9 @@ public final class OutboundHttp {
         GuardedClientBuilder builder = new GuardedClientBuilder();
         builder.disableRedirectHandling()
                 .disableCookies(true)
-                .socketTimeout(TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                .establishConnectionTimeout(TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                .connectionRequestTimeout(TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                .socketTimeout(timeoutMillis(), TimeUnit.MILLISECONDS)
+                .establishConnectionTimeout(timeoutMillis(), TimeUnit.MILLISECONDS)
+                .connectionRequestTimeout(timeoutMillis(), TimeUnit.MILLISECONDS)
                 .connectionPoolSize(POOL_SIZE)
                 .maxPooledPerRoute(MAX_PER_ROUTE)
                 .connectionTTL(5, TimeUnit.MINUTES)
