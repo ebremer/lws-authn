@@ -14,6 +14,11 @@ hygiene gaps.
 
 > ### P0, P1, P2 and P4 are done
 >
+> More precisely: every item those bands contained **at review time**. Three items were added
+> afterwards and are still open — **P0-10** (the live deployment still runs pre-P0 code), **P4-7**
+> (no `.gitattributes`) and **P6-8** (the demo realm's client identifier). P0-10 is the highest
+> priority item in this file: it is the only one with consequences outside the repository.
+>
 > `mvn clean verify` is green: **114 unit tests** (21 before this work started) and **10** in
 > `LwsAuthIT` against a real Keycloak 26.7.3 container. The changes worth knowing about
 > before reading further:
@@ -235,6 +240,27 @@ Facts from those documents that shape the items below:
   **Do:** require `Method == urn:oasis:names:tc:SAML:2.0:cm:bearer`, enforce the
   `SubjectConfirmationData` window with the same skew as `<Conditions>`, and require `Recipient`
   (see P1-M2).
+
+- [ ] **P0-10 · The live deployment is still running pre-P0 code, and the upgrade is breaking.**
+  *(Added after the P0–P2 work landed. Not a code defect — the code is fixed; this is the fix not yet
+  being where it matters.)* `https://ebremer.com/auth` (realm Halcyon, client `lws-app`) predates all of
+  it. Deploying the current JAR changes behaviour in ways that surface as silent `401`s on traffic that
+  works today:
+  - the `…/verify` endpoints are authenticated by default (P0-3);
+  - `Authorization` now carries the **caller's** credential, not the credential under test (P0-3);
+  - `azp`, `iat` and `kid` became mandatory (P1-O1, P1-C1/C3, P1-D1), so a third-party issuer omitting
+    any of them stops verifying;
+  - controlled identifier documents must carry `id`, `type` and `controller` (P1-C4/C5/O3).
+
+  There is also a reason to *want* the upgrade rather than merely survive it: until the P2 `KeyType`
+  fix, **no EC-signed credential could be verified in any suite**. If anything there uses ES256 — the
+  algorithm every LWS suite example uses — the self-signed-CID verify endpoint has never actually
+  worked.
+
+  **Do:** write `UPGRADING.md` and roll out in stages. Deploy first with
+  `LWS_AUTHN_VERIFY_ACCESS=public` so access control is unchanged, confirm live traffic still verifies,
+  then tighten to `bearer`. The claim-level strictness has no opt-out, so audit what issuers actually
+  send *before* deploying, not after.
 
 ---
 
@@ -529,6 +555,28 @@ Facts from those documents that shape the items below:
 - [x] **P4-6 · `pom.xml`'s `<description>` still describes a single-suite project** ("implementing the LWS
   1.0 OpenID Connect Authentication Suite"). It implements four.
 
+- [ ] **P4-7 · No `.gitattributes`, so line endings are whatever each clone decides — and the shell
+  scripts break on Linux.** *(Added after the P4 pass, from a Windows-specific review.)*
+  Git for Windows sets `core.autocrlf=true` at system level (neither local nor global config chooses
+  it). Git *stores* `scripts/*.sh` with LF, so the repository content is correct and Linux CI is
+  unaffected — but a Windows working tree has CRLF, including the scripts.
+
+  Verified: same Keycloak image, same bash 5.1.8, two scripts differing only in line endings — the LF
+  one exits 0, the CRLF one fails with `env: 'bash\r': No such file or directory`, exit 127. Git Bash
+  runs CRLF scripts happily, which is exactly why this is invisible from a Windows box; `bash -n` passes
+  too, so a syntax check does not catch it either. `README.md` documents `bash scripts/lws-demo.sh` as
+  the primary way to try each suite, so anyone taking a Windows checkout into WSL, a container or a
+  Linux host hits it.
+
+  The latent half is worse than the immediate one: with no `.gitattributes` the outcome depends on each
+  contributor's `core.autocrlf`, so someone with `input` or `false` can commit CRLF *into* the
+  repository, at which point Linux CI breaks for everyone.
+
+  **Do:** add at the root —
+  `* text=auto` and `*.sh text eol=lf` — then `git add --renormalize .` once. `text=auto` normalises to
+  LF in the repository whatever the local setting; `eol=lf` on `*.sh` forces LF in the *working tree*
+  too, even on Windows. It also silences the CRLF warning printed on every commit.
+
 ---
 
 ## P5 — Tests and CI
@@ -643,3 +691,12 @@ Recorded so a later pass doesn't re-litigate it:
   (reference-covers-own-ID plus single-assertion plus direct-child navigation), the XXE hardening, the
   did:key algorithm pin, the explicit `exp`-required rule in all four verifiers, and the `commons-codec`
   relocation are all sound and test-backed.
+
+- [ ] **P6-8 · The demo realm teaches a client identifier that is not a URI.**
+  `examples/lws-demo-realm.json` uses `lws-app`, and LWS core §4.1 says the client identifier SHOULD be
+  a URI. P1-O1 is marked done because the verifier now *requires* `azp` and the README explains making
+  it a URI — but the example everyone copies still models the other thing, and the realm is imported
+  verbatim by `LwsAuthIT` and the demo scripts.
+  **Do:** decide whether to change the demo realm's client id to a URI (and follow it through the
+  walkthroughs, scripts and IT), or state in `docs/walkthrough-openid.md` why the demo keeps a plain
+  client id. Either is defensible; silently demonstrating the weaker form is not.
