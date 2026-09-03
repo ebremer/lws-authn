@@ -401,6 +401,48 @@ The output re-lists the registered providers — confirm the `lws`, `lws-ssi-cid
 `lws-ssi-did-key` resources and the `lws-webid-sub-mapper` mapper appear, exactly as in
 [step 8](#8-smoke-test-in-dev-mode).
 
+### 9f. Make user attributes admin-only (do not skip this)
+
+Two user attributes decide **who an identity is**:
+
+| Attribute | What it does |
+|---|---|
+| `lws_jwk` | the public signing key published in the user's controlled identifier document — whoever holds the matching private key can sign credentials as that identity |
+| the WebID attribute (whatever you name it in the mapper, if you use one) | becomes the `sub` claim of every ID Token for that user |
+
+**A user who can write either one can become somebody else.** Setting their own `lws_jwk` lets them
+mint self-signed credentials for their own WebID; setting their own WebID attribute makes Keycloak
+issue an ID Token whose `sub` is an identifier they chose. Neither is a bug in this provider — it is
+Keycloak faithfully issuing what the account says — which is exactly why the policy has to be right.
+
+Keycloak 26 drops attributes that are not declared, so you have to allow them explicitly. Allow them
+as **`ADMIN_EDIT`**, never `ENABLED`: `ENABLED` means the end user can write them from the account
+console.
+
+```bash
+# Per realm. Replace myrealm.
+kcadm.sh get realms/myrealm \
+  | jq '.unmanagedAttributePolicy="ADMIN_EDIT"' \
+  | kcadm.sh update realms/myrealm -f -
+```
+
+Or in the console: *Realm settings → General → Unmanaged attributes → **Only administrators can
+write***.
+
+Verify it took, before you trust anything the realm issues:
+
+```bash
+kcadm.sh get realms/myrealm --fields unmanagedAttributePolicy
+# {"unmanagedAttributePolicy" : "ADMIN_EDIT"}
+```
+
+The stricter alternative, if you would rather not allow unmanaged attributes at all, is to declare
+each attribute in the realm's user profile with `permissions.edit` set to `["admin"]` only. That is
+equivalent for this purpose and narrower in general.
+
+> **You do not need this at all if you use neither suite's hosted identifiers** — that is, if you run
+> only the SAML and `did:key` verifiers, which host nothing. Everyone else needs it.
+
 ---
 
 ## 11. Run Keycloak as a systemd service
@@ -640,8 +682,10 @@ If `subjectDereferenced` is `false`, the server couldn't fetch its own WebID —
 - **`/verify` access** — left at `bearer`, or set to `public` only behind a network restriction that
   makes it unreachable from the internet ([step 9d](#9d-decide-who-may-call-verify)).
 - **User attributes are admin-only** — the realm's unmanaged attribute policy is `ADMIN_EDIT`, not
-  `ENABLED`. `lws_jwk` is the signing key an identity publishes and the WebID attribute becomes a
-  credential's `sub`; a user who can write either can impersonate an identity.
+  `ENABLED` ([step 9f](#9f-make-user-attributes-admin-only-do-not-skip-this)). `lws_jwk` is the signing
+  key an identity publishes and the WebID attribute becomes a credential's `sub`; a user who can write
+  either can impersonate an identity. Check it with
+  `kcadm.sh get realms/<realm> --fields unmanagedAttributePolicy`.
 - **Firewall** — only `22/80/443` exposed; Keycloak's `8080` stays on loopback.
 - **Direct Access Grants off** for real clients (it's on in the demo only to make it scriptable).
 - **Audience** — if your LWS/resource server checks `aud`, add a Keycloak **Audience** mapper or use

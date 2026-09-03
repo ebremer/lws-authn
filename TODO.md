@@ -12,13 +12,13 @@ order is roughly "cheapest first".
 failures). Nothing below is a build breakage — these are security, conformance, robustness and
 hygiene gaps.
 
-> ### P0, P1, P2, P3, P4 and P5 are done
+> ### P0, P1, P2, P3, P4, P5 and P6 are done
 >
-> More precisely: every item those bands contained **at review time**. Three items were added
-> afterwards and are still open — **P0-10** (the live deployment still runs pre-P0 code), **P4-7**
-> (no `.gitattributes`) and **P6-8** (the demo realm's client identifier). P0-10 is the highest
-> priority item in this file: it is the only one with consequences outside the repository. **P1-C6**
-> was checked off in the P1 pass without its fix being made; P3-3 finished it, and its entry now says so.
+> More precisely: every item those bands contained **at review time**, plus **P6-8**, added
+> afterwards. Two added items are still open — **P0-10** (the live deployment still runs pre-P0 code)
+> and **P4-7** (no `.gitattributes`). P0-10 is the highest priority item in this file: it is the only
+> one with consequences outside the repository. **P1-C6** was checked off in the P1 pass without its
+> fix being made; P3-3 finished it, and its entry now says so.
 >
 > `mvn clean verify` is green: **144 unit tests** (21 before this work started) and **23** in
 > `LwsAuthIT` against a real Keycloak 26.7.3 container. The changes worth knowing about
@@ -79,6 +79,20 @@ hygiene gaps.
 > - **CI is hardened:** a least-privilege `permissions:` block, every action pinned by commit SHA,
 >   CodeQL, `dependency-review-action` on pull requests, Dependabot for the bumps that SHA pinning
 >   would otherwise freeze, SBOM upload, and a JDK 25 job that asserts the class files are still Java 21.
+>
+> ### P6 (all eight items)
+>
+> - **`COMPLIANCE.md` is rewritten**, and is now the conformance statement P6-5 asked for rather than
+>   a second overlapping document: per suite, every requirement enforced — naming the field that
+>   appears in the response's `checks` object, so a claim in it can be tested against a real response —
+>   what is deferred to the relying party, the supported key types and syntaxes, and a *Known
+>   divergences* table whose every row names the item id carrying its reasoning.
+> - **`SECURITY.md`, `CONTRIBUTING.md` and `CHANGELOG.md` added.** The changelog leads with a
+>   **⚠ Breaking** section, because the defaults themselves changed; `SECURITY.md` says what is
+>   deliberate rather than a bug, so a reporter does not spend a weekend on the SAML trust model.
+> - **`INSTALL.md` gained step 9f**, which actually *sets* the `ADMIN_EDIT` attribute policy. It was
+>   previously only a line in the closing checklist, met after the realm was already configured.
+> - **All 63 source files now carry `SPDX-License-Identifier: Apache-2.0`** (19 did).
 >
 > ### P1 (all 19 items)
 >
@@ -738,60 +752,78 @@ Facts from those documents that shape the items below:
 
 ## P6 — Documentation
 
-- [ ] **P6-1 · `COMPLIANCE.md` is stale.** It is dated 2026-07-09 and repeatedly calls the suites
-  *"unofficial proposals"*. They are now W3C Working Drafts (see the matrix above), and `lws10-core` is a
-  Working Draft of 21 August 2026.
-  **Do:** rewrite the front matter against the matrix, and restate the "Gaps / softness" tables in terms
-  of the item IDs in this file so the two documents stay in sync.
+- [x] **P6-1 · `COMPLIANCE.md` is stale.** It was dated 2026-07-09, called the suites *"unofficial
+  proposals"*, and its "Residual issues" and "Suggested next steps" were the pre-P0 review — every one
+  of them since closed.
+  **Done: rewritten from scratch, and merged with P6-5** so there is one authoritative document rather
+  than two overlapping ones. Front matter restated against the spec matrix above (Working Drafts of
+  3 and 21 August 2026; CID 1.0 is a Recommendation). The "Gaps / softness" tables are gone, replaced
+  by a *Known divergences and deliberate choices* table where every row is a decision that names the
+  item id carrying its reasoning — so the two documents cannot drift apart silently again.
 
-- [ ] **P6-2 · `README.md`'s SSRF section overstates the residual risk on redirects.** It lists "HTTP
-  redirects to an internal target" as an unhandled residual; in fact Keycloak disables redirect following
-  by default, and the real hazard is a deployment that re-enables it. Say that, and name the setting (see
-  P0-6).
+- [x] **P6-2 · `README.md`'s SSRF section overstates the residual risk on redirects.**
+  **Already fixed by P0-6.** The section now says the verifiers' own client disables redirect following
+  outright, names `spi-connections-http-client-default-allow-redirects` and its `false` default, and
+  says the hazard is a deployment re-enabling it — which is exactly what this item asked for. Recorded
+  rather than re-fixed.
 
-- [ ] **P6-3 · Stale comment in `openid/verify/LWSCredentialVerifier.java:207-213`** about avoiding a
-  Titanium version conflict — Titanium is already in the shaded JAR. Fix when P2-1 lands.
+- [x] **P6-3 · Stale comment in `LWSCredentialVerifier`** claiming the compact JSON-LD reader exists to
+  avoid coupling to a Titanium version conflicting with Keycloak's.
+  **Done.** That was true before P2-1 and P4-2; the conflict was settled by *relocating* Titanium into
+  the shaded JAR, not by avoiding it. The javadoc now says what the method is actually for: the
+  fallback for a document naming an `@context` this provider does not bundle, which `RdfParsing` refuses
+  to fetch. Reading the standardized shape by name is the only interpretation available without those
+  term definitions.
 
-- [ ] **P6-4 · Document the `ADMIN_EDIT` requirement** for `lws_jwk` and for any WebID attribute, in
-  `README.md`, `INSTALL.md` and `docs/walkthrough-ssi-cid.md`, with an explicit note that a user-writable
-  attribute is an identity-spoofing vector (see P0-2).
+- [x] **P6-4 · Document the `ADMIN_EDIT` requirement.**
+  Mostly already covered — `README.md`, both walkthroughs and `INSTALL.md`'s hardening checklist all
+  named it, with the spoofing framing.
+  **What was missing, and is the point of the item:** `INSTALL.md` had no step that actually *set* it.
+  A reader following the guide configured a realm, never touched the attribute policy, and met the
+  requirement only in a checklist at the end — by which time `lws_jwk` values were already being
+  silently dropped. **New step 9f** sets it, with the `kcadm.sh` command, the console path, a
+  verification command, the narrower user-profile alternative, and a table of what each attribute
+  actually controls. The checklist now links to it.
 
-- [ ] **P6-5 · Add a conformance statement:** which MUSTs each suite implements, which are deferred to the
-  relying party (audience confinement), and which key types and RDF syntaxes are supported. That is what
-  an implementer integrating against `lws-authn` actually needs, and it is currently spread across
-  `README.md` and `COMPLIANCE.md`.
+- [x] **P6-5 · Add a conformance statement.** **Done as the rewritten `COMPLIANCE.md`** rather than a
+  third document, since P6-1 was rewriting it anyway and a separate file would have been the same
+  content in a second place. It states, per suite: every requirement enforced (naming the field that
+  appears in the response's `checks` object, so a claim in the document can be tested against a real
+  response), what is deferred to the relying party and why, the supported key types and RDF syntaxes,
+  and the deliberate divergences. `README.md` now links to it as the thing to read before integrating.
 
-- [ ] **P6-6 · Missing repository files:** `SECURITY.md` (how to report a vulnerability — this is a
-  credential-verification library), `CONTRIBUTING.md`, `CHANGELOG.md`.
+- [x] **P6-6 · Missing repository files.** All three added:
+  - **`SECURITY.md`** — how to report, what is in scope, and what is *deliberate* rather than a bug:
+    the SAML verifier trusting the caller's certificate, identifier enumeration on `cid/{userId}`, and
+    a deployment configured with `ENABLED` attributes. Naming those up front is what stops a reporter
+    spending a weekend on a non-issue.
+  - **`CONTRIBUTING.md`** — build, test, and the conventions that are not obvious from the code: why
+    comments cite specifications, why a new rule needs a *negative* test, which layer to test at (with
+    the two bugs only the container caught as the argument), and the shaded-JAR dependency rules.
+  - **`CHANGELOG.md`** — with an explicit **⚠ Breaking** section for the upgrade path, since the
+    defaults themselves changed. It also records that `pom.xml` still reads `0.1.0` while the
+    `lws-authn-0.1.0` tag points at the first commit, so the JAR this tree builds is *named* 0.1.0 but
+    is not 0.1.0 — harmless with one consumer, a trap the moment two builds exist on one machine.
 
-- [ ] **P6-7 · Licence headers.** `LICENSE` is Apache-2.0, but every source file carries only
-  "Copyright Erich Bremer". Add `SPDX-License-Identifier: Apache-2.0` to each file.
+- [x] **P6-7 · Licence headers.** `LICENSE` is Apache-2.0 but only 19 of 63 source files said so in a
+  form any tool could read.
+  **Done: all 63 now carry `SPDX-License-Identifier: Apache-2.0`.** Files with an existing header had
+  the tag inserted after the copyright line, leaving the prose untouched; the 19 test files with no
+  header at all got a minimal one. `CONTRIBUTING.md` states the requirement for new files. This is what
+  makes the licence machine-readable to a scanner, an SBOM consumer or a downstream redistributor — the
+  SBOM the build already produces is otherwise describing files that assert nothing.
 
----
-
-## What the review found to be correct
-
-Recorded so a later pass doesn't re-litigate it:
-
-* Every vocabulary IRI is right. `lws:OpenIdProvider`, `did:service`, `did:serviceEndpoint`,
-  `sec:authenticationMethod`, `sec:verificationMethod`, `sec:controller`, `sec:publicKeyJwk` and
-  `sec:JsonWebKey` all match the `https://www.w3.org/ns/cid/v1` context and the 2026-08-21 LWS
-  Vocabulary, as does the `rdf:JSON` datatype for `publicKeyJwk`.
-* The OpenID CID's service map is **conformant without an `id`** — CID 1.0 makes it OPTIONAL (P2-6 is a
-  nicety, not a fix).
-* `LWSSubMapper.transformUserInfoToken`'s `getOtherClaims().put("sub", …)` matches what Keycloak's own
-  `AbstractPairwiseSubMapper` does; it is not a bug.
-* Redirect-based SSRF is not exploitable in a default deployment (P0-6 is about the non-default case).
-* The SPARQL parameterisation against attacker-controlled `sub` / `iss`, the SAML XSW defences
-  (reference-covers-own-ID plus single-assertion plus direct-child navigation), the XXE hardening, the
-  did:key algorithm pin, the explicit `exp`-required rule in all four verifiers, and the `commons-codec`
-  relocation are all sound and test-backed.
-
-- [ ] **P6-8 · The demo realm teaches a client identifier that is not a URI.**
+- [x] **P6-8 · The demo realm teaches a client identifier that is not a URI.**
   `examples/lws-demo-realm.json` uses `lws-app`, and LWS core §4.1 says the client identifier SHOULD be
-  a URI. P1-O1 is marked done because the verifier now *requires* `azp` and the README explains making
-  it a URI — but the example everyone copies still models the other thing, and the realm is imported
-  verbatim by `LwsAuthIT` and the demo scripts.
-  **Do:** decide whether to change the demo realm's client id to a URI (and follow it through the
-  walkthroughs, scripts and IT), or state in `docs/walkthrough-openid.md` why the demo keeps a plain
-  client id. Either is defensible; silently demonstrating the weaker form is not.
+  a URI. The verifier requires `azp` but not that it be a URI, so the example everyone copies modelled
+  the weaker form silently.
+  **Decision: the demo keeps `lws-app`, and now says why.** It is also a *Keycloak* client id — what
+  you type into the console, pass as `client_id` in a token request, and see in every Keycloak
+  tutorial. Making it a URL would teach the LWS point at the cost of obscuring the Keycloak one, in
+  the document whose job is to get someone from nothing to a working identity. §4.1 is a SHOULD, and
+  both forms verify.
+  **Done:** `docs/walkthrough-openid.md` explains it where the reader first meets `azp` in a decoded
+  token, and says to prefer a URI in production, that `https://app.example.com/` is a perfectly good
+  Keycloak client id, and that nothing else needs changing because `client_id`, `aud` and `azp` all
+  follow it. `README.md` and `COMPLIANCE.md` § *Known divergences* record the same. The realm, scripts
+  and `LwsAuthIT` are untouched — changing them would have churned the integration test for a SHOULD.

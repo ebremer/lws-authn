@@ -1,6 +1,8 @@
 /*
  * Copyright Erich Bremer.
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * LWS WebID subject mapper.
  *
  * The LWS 1.0 OpenID Connect Authentication Suite uses an OpenID Connect ID Token as an LWS

@@ -1,6 +1,8 @@
 /*
  * Copyright Erich Bremer.
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * JAX-RS resource for the self-signed did:key suite:
  *
  *   POST {…}/lws-ssi-did-key/verify   verify a self-issued did:key JWT as an LWS credential

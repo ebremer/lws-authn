@@ -1,6 +1,8 @@
 /*
  * Copyright Erich Bremer.
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Factory for the self-signed CID realm resource provider. Mounting id "lws-ssi-cid" exposes the
  * endpoints under {frontendUrl}/realms/{realm}/lws-ssi-cid.
  */

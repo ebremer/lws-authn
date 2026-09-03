@@ -1,6 +1,8 @@
 /*
  * Copyright Erich Bremer.
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * JAX-RS resource for the SAML 2.0 suite:
  *
  *   POST {…}/lws-saml/verify   verify a signed SAML 2.0 Response as an LWS authentication credential

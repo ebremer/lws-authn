@@ -1,6 +1,8 @@
 /*
  * Copyright Erich Bremer.
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Integration test: deploys the built provider JAR into a real Keycloak 26.7.3 via Testcontainers and
  * runs the same end-to-end smoke flow that was validated by hand — the mapper fires, all four suite
  * endpoints mount, shaded Jena serves/parses RDF, and the OpenID and did:key credentials verify.

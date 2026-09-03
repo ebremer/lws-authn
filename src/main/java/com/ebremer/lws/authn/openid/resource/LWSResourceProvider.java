@@ -1,6 +1,8 @@
 /*
  * Copyright Erich Bremer.
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * JAX-RS resource exposing the LWS endpoints:
  *
  *   GET  {issuer}/lws/cid/{userId}   the user's controlled identifier document (content negotiated)

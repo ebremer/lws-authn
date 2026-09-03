@@ -1,6 +1,8 @@
 /*
  * Copyright Erich Bremer.
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Factory for the SAML realm resource provider. Mounting id "lws-saml" exposes the endpoint under
  * {frontendUrl}/realms/{realm}/lws-saml.
  */

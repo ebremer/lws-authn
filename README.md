@@ -20,6 +20,18 @@ The OpenID and self-signed-CID suites dereference the subject's
 [Controlled Identifier Document](https://www.w3.org/TR/cid-1.0/) and use **Apache Jena 6.2.0** for RDF;
 SAML uses Keycloak's SAML library for XML signature validation; `did:key` is pure JDK crypto.
 
+### The other documents
+
+| | |
+|---|---|
+| [`INSTALL.md`](INSTALL.md) | Deploying this on a server, start to finish. |
+| [`COMPLIANCE.md`](COMPLIANCE.md) | **The conformance statement** — which normative requirements each suite enforces, which are deferred to the relying party, and what a `"valid": true` actually asserts. Read it before integrating. |
+| [`CHANGELOG.md`](CHANGELOG.md) | What changed, and **what breaks on upgrade**. |
+| [`SECURITY.md`](SECURITY.md) | Reporting a vulnerability, and what is deliberate rather than a bug. |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Building, testing, and the conventions this codebase expects. |
+| [`TODO.md`](TODO.md) | The backlog, as a review against the specifications — and the design history of everything already done. |
+| [`docs/`](docs/) | A walkthrough per suite, each with a runnable demo script. |
+
 ---
 
 ## Authentication suites
@@ -177,6 +189,10 @@ incorporates by reference:
 |---|---|
 | `client_id` | your own client identifier. When given, `aud` must list it and `azp` must equal it (steps 3–5). |
 | `audience` | an additional audience the credential must be restricted to, typically the authorization server. |
+
+> LWS core §4.1 says a client identifier **SHOULD** be a URI. `lws-authn` requires `azp` to be present
+> but does not require it to be a URI, so a conventional Keycloak client id verifies. Prefer a URI in
+> production — see [`COMPLIANCE.md`](COMPLIANCE.md) § *Known divergences*.
 
 Without them the credential is still validated — signature, issuer, expiry, and a required `azp` — but
 nothing binds it to *you*, so a token minted for another relying party would pass. Supply them wherever
@@ -514,3 +530,6 @@ src/main/java/com/ebremer/lws/authn/
     verify/SelfSignedDidKeyVerifier, DidKeyVerificationResult
 src/main/resources/META-INF/services/           SPI registrations (mapper + four resource factories)
 ```
+
+Every source file carries `SPDX-License-Identifier: Apache-2.0`; the project is Apache-2.0 (see
+[`LICENSE`](LICENSE)).

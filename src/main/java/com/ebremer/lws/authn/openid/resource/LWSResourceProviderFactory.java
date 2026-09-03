@@ -1,6 +1,8 @@
 /*
  * Copyright Erich Bremer.
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Factory for the LWS realm resource provider. Mounting id "lws" exposes the endpoints under
  * {issuer}/lws (i.e. {frontendUrl}/realms/{realm}/lws).
  */

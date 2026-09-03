@@ -1,6 +1,8 @@
 /*
  * Copyright Erich Bremer.
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * JAX-RS resource for the self-signed CID suite:
  *
  *   GET  {…}/lws-ssi-cid/cid/{userId}   the user's controlled identifier document, publishing the

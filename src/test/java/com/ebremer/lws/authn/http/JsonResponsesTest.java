@@ -1,3 +1,8 @@
+/*
+ * Copyright Erich Bremer.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 package com.ebremer.lws.authn.http;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;

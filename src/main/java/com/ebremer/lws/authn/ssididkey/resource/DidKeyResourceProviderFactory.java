@@ -1,6 +1,8 @@
 /*
  * Copyright Erich Bremer.
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Factory for the did:key realm resource provider. Mounting id "lws-ssi-did-key" exposes the endpoint
  * under {frontendUrl}/realms/{realm}/lws-ssi-did-key.
  */

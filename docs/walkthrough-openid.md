@@ -111,6 +111,17 @@ echo "$ID_TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq '{sub
 That `sub` is your identity. Unlike a stock Keycloak token (whose `sub` is an opaque UUID), this one
 is a URL you can fetch.
 
+> **Why `azp` here is `lws-app` and not a URL.** LWS core §4.1 says the client identifier **SHOULD** be
+> a URI. This demo keeps a bare `lws-app` because it is also a Keycloak client id, which is what you
+> type into the console, pass as `client_id` in a token request, and see in every Keycloak tutorial —
+> making it a URL here would teach the LWS point at the cost of obscuring the Keycloak one.
+>
+> It is a SHOULD, and `lws-authn` requires `azp` to be *present* rather than to be a URI, so both forms
+> verify. **In production, prefer a URI** — `https://app.example.com/` is a perfectly good Keycloak
+> client id, and a globally unique client identifier is what stops two deployments' clients colliding
+> in a verifier's audience check. To use one, set it as the client id when you create the client; no
+> other change is needed, because `client_id`, `aud` and `azp` all follow it.
+
 ### 5. Dereference the WebID (the controlled identifier document)
 
 ```bash

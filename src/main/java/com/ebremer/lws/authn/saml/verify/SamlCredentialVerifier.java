@@ -1,6 +1,8 @@
 /*
  * Copyright Erich Bremer.
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Validates a signed SAML 2.0 assertion as an LWS authentication credential, per
  * https://w3c.github.io/lws-protocol/lws10-authn-saml/
  *

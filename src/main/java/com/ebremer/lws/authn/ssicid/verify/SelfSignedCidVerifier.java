@@ -1,6 +1,8 @@
 /*
  * Copyright Erich Bremer.
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Validates a self-issued JWT as an LWS authentication credential, per
  * https://w3c.github.io/lws-protocol/lws10-authn-ssi-cid/
  *

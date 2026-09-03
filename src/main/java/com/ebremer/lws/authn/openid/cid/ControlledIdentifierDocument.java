@@ -1,6 +1,8 @@
 /*
  * Copyright Erich Bremer.
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Controlled identifier document (W3C CID 1.0) describing an LWS subject and the OpenID Provider
  * that issues its authentication credentials.
  */

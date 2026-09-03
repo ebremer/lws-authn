@@ -1,6 +1,8 @@
 /*
  * Copyright Erich Bremer.
  *
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Controlled identifier document (W3C CID 1.0) for the self-signed identity suite: it publishes the
  * subject's public key(s) as {@code authentication} verification methods of type {@code JsonWebKey}.
  */
