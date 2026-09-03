@@ -84,7 +84,8 @@ JWT=$(KEYTYPE="$KEYTYPE" node "$WORK/mint.mjs")
 printf '\n\033[1;36m== minted a %s did:key self-signed JWT\033[0m\n%s\n' "$KEYTYPE" "$JWT"
 
 printf '\n\033[1;36m== verifying at %s\033[0m\n' "$KC_URL/realms/$REALM/lws-ssi-did-key/verify"
-RESULT=$(verify_post "$KC_URL/realms/$REALM/lws-ssi-did-key/verify" --data-urlencode "credential=$JWT")
+RESULT=$(verify_post "$KC_URL/realms/$REALM/lws-ssi-did-key/verify" \
+  --data-urlencode "credential=$JWT" --data-urlencode "audience=https://as.example")
 echo "$RESULT" | jq .
 
 if [ "$(printf '%s' "$RESULT" | jq -r '.valid // false')" = true ]; then

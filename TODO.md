@@ -12,9 +12,10 @@ order is roughly "cheapest first".
 failures). Nothing below is a build breakage — these are security, conformance, robustness and
 hygiene gaps.
 
-> ### P0 is done (all nine items)
+> ### P0 and P1 are done
 >
-> `mvn test` is green at **62 tests**. The changes worth knowing about before reading further:
+> `mvn test` is green at **93 tests** (21 before this work started). The changes worth knowing about
+> before reading further:
 >
 > - **The `…/verify` endpoints are now authenticated by default** (`access=bearer`). This is a
 >   breaking change for an existing deployment; `LWS_AUTHN_VERIFY_ACCESS=public` restores the old
@@ -37,6 +38,31 @@ hygiene gaps.
 > P3-1 (a `401` with no `WWW-Authenticate` when a *credential* is invalid) is now more visible than it
 > was: access-control denials send a challenge and credential rejections do not, which is what
 > currently distinguishes them. It stays a P3.
+>
+> ### P1 (all 19 items)
+>
+> - **Every verify result now names the LWS `client` and the suite's `tokenType`** (core §4.1, §4.3),
+>   and fails closed when the client identifier is absent. That retired four dead constants.
+> - **OpenID:** `azp` is required; `crit` is rejected; the CID's `id` must equal `sub` on *both* syntax
+>   paths (the JSON-LD one used to default a missing `id` to the subject, accepting a document that
+>   never claimed to describe it); and `POST …/lws/verify` takes `client_id` and `audience` to enforce
+>   OpenID Connect Core §3.1.3.7 steps 3–5, which the suite incorporates by reference.
+> - **Self-signed CID:** `iat` and `kid` required; `crit` rejected; the document `id` must equal `sub`
+>   on the JSON-LD path too; a method is only usable if it is a `JsonWebKey` the subject **controls**;
+>   the `alg` is pinned to the published key and cross-checked against the JWK's own `use`/`alg`; and
+>   `audience` binds the credential to this authorization server.
+> - **did:key:** `iat` required, `crit` rejected, `audience` honoured; **P-384 and P-521 added**
+>   alongside Ed25519 and P-256; and a `did:key` must be **canonically encoded** — the decoded key is
+>   re-encoded and must reproduce the identifier, so one key cannot have two identifiers. Curve
+>   parameters now come from the JDK instead of hand-transcribed constants.
+> - **SAML:** `<Issuer>` is required rather than merely recorded.
+>
+> **Behaviour that got stricter.** Credentials that used to verify and now will not: an ID Token with
+> no `azp`; a self-issued JWT with no `iat` or no `kid`; a controlled identifier document whose `id`
+> is missing or differs from the subject, or whose verification methods lack `type`/`controller`; a
+> non-canonically-encoded `did:key`; a SAML assertion with no `<Issuer>`. Each is a MUST in the
+> drafts, but any of them may be a real credential in the wild, so check your issuers before rolling
+> this out.
 
 ---
 
@@ -151,12 +177,12 @@ Facts from those documents that shape the items below:
 
 ### Cross-cutting (LWS core §4.1 / §4.3)
 
-- [ ] **P1-K1 · "client" is REQUIRED by core §4.1, but only two of four suites enforce it.**
+- [x] **P1-K1 · "client" is REQUIRED by core §4.1, but only two of four suites enforce it.**
   SSI-CID and did:key check `client_id`; the OpenID verifier never reads `azp` (P1-O1) and the SAML
   verifier treats `Recipient` as optional (P1-M2).
   **Do:** make every verification result carry a `client` field, and fail closed when it is absent.
 
-- [ ] **P1-K2 · The token type URIs required by core §4.3 are declared and never used.**
+- [x] **P1-K2 · The token type URIs required by core §4.3 are declared and never used.**
   `LWSConstants.TOKEN_TYPE_ID_TOKEN`, `SsiCidConstants.TOKEN_TYPE_JWT`,
   `DidKeyConstants.TOKEN_TYPE_JWT` and `SamlConstants.TOKEN_TYPE_SAML2` have **zero** references in
   `src/` — as do `SamlConstants.SAML_PROTOCOL_NS`, `SamlConstants.NAMEID_FORMAT_PERSISTENT` and
@@ -166,7 +192,7 @@ Facts from those documents that shape the items below:
 
 ### OpenID Connect suite
 
-- [ ] **P1-O1 · `azp` is a MUST, and is neither produced-as-a-URI nor validated.**
+- [x] **P1-O1 · `azp` is a MUST, and is neither produced-as-a-URI nor validated.**
   Spec: *"The ID Token MUST use the `azp` (authorized party) claim for the LWS client identifier."*
   `openid/verify/LWSCredentialVerifier.java` never reads `azp`. On the issuing side Keycloak's `azp`
   is the raw OIDC client id (`lws-app` in `examples/lws-demo-realm.json`), which is not a URI, while
@@ -174,7 +200,7 @@ Facts from those documents that shape the items below:
   **Do:** require a non-blank `azp` in the verifier and surface it; document (or add a mapper for)
   making the client identifier a URI.
 
-- [ ] **P1-O2 · OpenID Connect Core §3.1.3.7 steps 3–5 are not implemented.**
+- [x] **P1-O2 · OpenID Connect Core §3.1.3.7 steps 3–5 are not implemented.**
   The suite says *"The JWT MUST be validated as described by OpenID Connect Core Section 3.1.3.7."*
   Steps 3–5 of that section require: `aud` contains the client's `client_id`; if `aud` has multiple
   values then `azp` MUST be present; and if `azp` is present it MUST equal the `client_id`.
@@ -183,7 +209,7 @@ Facts from those documents that shape the items below:
   steps 3–5 when they are supplied; enforce the `azp`-presence rule unconditionally. Keep the
   "audience confinement is the RP's job" position, but make the check *available*.
 
-- [ ] **P1-O3 · A controlled identifier document with no `id` is accepted.**
+- [x] **P1-O3 · A controlled identifier document with no `id` is accepted.**
   Spec: the dereferenced resource *"MUST be formatted as a valid controlled identifier document with an
   `id` value equal to the subject identifier"*, and CID 1.0 requires an `id` in the topmost map.
   `openid/verify/LWSCredentialVerifier.java:220` falls back to `sub` when neither `id` nor `@id` is
@@ -192,7 +218,7 @@ Facts from those documents that shape the items below:
   **Do:** require an explicit `id`/`@id`, compare it to `sub`, and record a `subjectIdMatches` check on
   both paths.
 
-- [ ] **P1-O4 · The `crit` JOSE header is never inspected.**
+- [x] **P1-O4 · The `crit` JOSE header is never inspected.**
   RFC 7515 §5.2 — cited normatively by the SSI suites and reachable from OIDC Core — requires a verifier
   to reject a JWS whose header carries critical parameters it does not understand. None of the three
   JWT verifiers looks at `crit`.
@@ -200,42 +226,42 @@ Facts from those documents that shape the items below:
 
 ### Self-signed CID suite *(the 21 August 2026 draft)*
 
-- [ ] **P1-C1 · `iat` is a MUST and is not checked.**
+- [x] **P1-C1 · `iat` is a MUST and is not checked.**
   Spec: *"The JWT MUST include an `iat` (issued at) claim."*
   `ssicid/verify/SelfSignedCidVerifier.java` validates `exp` and `aud` but never `iat`.
   **Do:** require `iat`; add an `issuedAtPresent` check; optionally reject an `iat` in the future beyond
   the skew allowance, and offer a configurable maximum credential age.
 
-- [ ] **P1-C2 · `aud` MUST include the target authorization server; only presence is checked.**
+- [x] **P1-C2 · `aud` MUST include the target authorization server; only presence is checked.**
   `ssicid/verify/SelfSignedCidVerifier.java:141-147` asserts `aud` is non-empty and stops.
   **Do:** add an `audience` form parameter (the SAML endpoint already has one — mirror it) and require
   containment; keep presence-only as an explicitly reported fallback mode.
 
-- [ ] **P1-C3 · Key selection falls back when the header has no `kid`.**
+- [x] **P1-C3 · Key selection falls back when the header has no `kid`.**
   Spec: *"The verifier MUST use the `kid` (key id) value from the signed JWT header to identify a
   verification method."* `ssicid/verify/SelfSignedCidVerifier.java:234-247` returns the single key when
   `kid` is absent.
   **Do:** reject credentials with no `kid`.
 
-- [ ] **P1-C4 · The JSON-LD path never checks that the document's `id` equals `sub`.**
+- [x] **P1-C4 · The JSON-LD path never checks that the document's `id` equals `sub`.**
   `ssicid/verify/SelfSignedCidVerifier.java:187-193` collects `authentication` / `verificationMethod`
   entries from the top-level object without ever reading `id`. The RDF path enforces the relationship by
   binding `?sub`; the two paths again disagree.
   **Do:** read `id`, compare it to `sub`, and collect only methods reachable from it.
 
-- [ ] **P1-C5 · The verification method's `controller` and `type` are never checked.**
+- [x] **P1-C5 · The verification method's `controller` and `type` are never checked.**
   CID 1.0 makes `id`, `type` and `controller` REQUIRED on a verification method. Neither the JSON-LD
   collector (`:195-205`) nor the SPARQL collector (`:211-231`) looks at them.
   **Do:** accept a key only when `type` is `JsonWebKey` and `controller` equals `sub`.
 
-- [ ] **P1-C6 · The served CID omits the REQUIRED verification-method `id` when the JWK has no `kid`.**
+- [x] **P1-C6 · The served CID omits the REQUIRED verification-method `id` when the JWK has no `kid`.**
   `ssicid/cid/SelfSignedControlledIdentifierDocument.java:65-68` adds `id` only when a `kid` is present,
   and `:99` falls back to a blank node in the RDF serialization. CID 1.0: a verification method's `id`
   MUST be a string conforming to URL syntax.
   **Do:** require a `kid` on registered JWKs (rejecting the attribute value otherwise, consistent with
   P1-C3) or synthesize `#key-<n>`; URL-encode the fragment (see P3-3).
 
-- [ ] **P1-C7 · No algorithm/key pinning in the SSI-CID verifier.**
+- [x] **P1-C7 · No algorithm/key pinning in the SSI-CID verifier.**
   The OpenID verifier has `algMatchesKey` (`openid/verify/LWSCredentialVerifier.java:343-358`) and the
   did:key verifier pins `alg` to the decoded key type, but
   `ssicid/verify/SelfSignedCidVerifier.java:106-120` passes the header `alg` straight to
@@ -246,15 +272,15 @@ Facts from those documents that shape the items below:
 
 ### Self-signed `did:key` suite
 
-- [ ] **P1-D1 · `iat` is a MUST and is not checked.** Same gap as P1-C1, in
+- [x] **P1-D1 · `iat` is a MUST and is not checked.** Same gap as P1-C1, in
   `ssididkey/verify/SelfSignedDidKeyVerifier.java:100-117`.
 
-- [ ] **P1-D2 · `aud` MUST include the target authorization server; only presence is checked.**
+- [x] **P1-D2 · `aud` MUST include the target authorization server; only presence is checked.**
   `ssididkey/verify/SelfSignedDidKeyVerifier.java:111-117`. Same fix as P1-C2.
 
-- [ ] **P1-D3 · `crit` header not inspected.** Same as P1-O4.
+- [x] **P1-D3 · `crit` header not inspected.** Same as P1-O4.
 
-- [ ] **P1-D4 · Only two `did:key` multicodecs are supported, and the limit is not stated as a
+- [x] **P1-D4 · Only two `did:key` multicodecs are supported, and the limit is not stated as a
   conformance claim.** `ssididkey/DidKey.java:35-36,64-70` handles Ed25519 (`0xed01`) and P-256
   (`0x1200`). The did:key registry also defines P-384 (`0x1201`, ES384), P-521 (`0x1202`, ES512),
   secp256k1 (`0xe701`, ES256K) and RSA (`0x1205`); the LWS draft mandates no particular set, so a
@@ -263,14 +289,14 @@ Facts from those documents that shape the items below:
   parameters); decide explicitly on secp256k1 / RSA; publish the supported set as a conformance
   statement in `README.md` and `COMPLIANCE.md`.
 
-- [ ] **P1-D5 · Non-canonical `did:key` encodings are accepted.**
+- [x] **P1-D5 · Non-canonical `did:key` encodings are accepted.**
   `ssididkey/DidKey.java:51-71` decodes whatever base58btc parses; it never re-encodes and compares, so
   distinct identifier strings can map to the same key.
   **Do:** re-encode the decoded key and require an exact, byte-for-byte match with the input identifier.
 
 ### SAML 2.0 suite
 
-- [ ] **P1-M1 · `saml:Issuer` is a MUST and is not required.**
+- [x] **P1-M1 · `saml:Issuer` is a MUST and is not required.**
   Spec: *"The SAML token MUST use the `saml:Issuer` assertion for the LWS issuer identifier."*
   `saml/verify/SamlCredentialVerifier.java:100-101` records it and tolerates `null`.
   **Do:** require a non-empty `<Issuer>` inside the cryptographically covered assertion.

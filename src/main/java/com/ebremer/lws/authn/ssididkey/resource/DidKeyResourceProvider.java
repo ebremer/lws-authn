@@ -58,12 +58,16 @@ public class DidKeyResourceProvider implements RealmResourceProvider {
      * parameter; the {@code Authorization} header carries the <em>caller's</em> own credential (see
      * {@link com.ebremer.lws.authn.verify.VerifyAccess}), and only falls back to meaning the
      * credential to verify in {@code public} access mode.
+     *
+     * <p>The optional {@code audience} parameter names the target authorization server, which the
+     * suite requires the credential's {@code aud} to include.</p>
      */
     @POST
     @Path(DidKeyConstants.VERIFY_PATH)
     @Consumes(MediaType.APPLICATION_FORM_URLENCODED)
     @Produces(MediaType.APPLICATION_JSON)
     public Response verify(@FormParam("credential") String credential,
+                           @FormParam("audience") String expectedAudience,
                            @HeaderParam("Authorization") String authorization) {
         Response denied = access.check(session, authorization);
         if (denied != null) {
@@ -79,7 +83,7 @@ public class DidKeyResourceProvider implements RealmResourceProvider {
                     .type(MediaType.APPLICATION_JSON).build();
         }
 
-        DidKeyVerificationResult result = new SelfSignedDidKeyVerifier().verify(token);
+        DidKeyVerificationResult result = new SelfSignedDidKeyVerifier().verify(token, expectedAudience);
         try {
             return Response.ok(JsonSerialization.writeValueAsPrettyString(result), MediaType.APPLICATION_JSON)
                     .status(result.isValid() ? Response.Status.OK : Response.Status.UNAUTHORIZED)

@@ -140,7 +140,8 @@ JWT="$SIGNING_INPUT.$SIG"
 echo "$JWT"
 
 note "9. Verify the self-signed credential with the provider's /lws-ssi-cid/verify endpoint"
-RESULT=$(verify_post "$KC_URL/realms/$REALM/lws-ssi-cid/verify" --data-urlencode "credential=$JWT")
+RESULT=$(verify_post "$KC_URL/realms/$REALM/lws-ssi-cid/verify" \
+  --data-urlencode "credential=$JWT" --data-urlencode "audience=$AUDIENCE")
 echo "$RESULT" | jq .
 
 if [ "$(printf '%s' "$RESULT" | jq -r '.valid // false')" = true ]; then

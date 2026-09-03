@@ -64,7 +64,7 @@ The suites are independent; deploy the single JAR and use any of them.
 |-----------|--------------|---------|
 | `ssididkey.resource.DidKeyResourceProvider` | `RealmResourceProvider` (`lws-ssi-did-key`) | Verifies a self-issued `did:key` JWT. |
 | `ssididkey.verify.SelfSignedDidKeyVerifier` | — | Check `sub==iss==client_id` is a `did:key` → decode the key from it → validate signature. |
-| `ssididkey.DidKey` | — | did:key codec (multibase base58btc + multicodec); decodes Ed25519 and P-256 keys, pure JDK. |
+| `ssididkey.DidKey` | — | did:key codec (multibase base58btc + multicodec); decodes Ed25519, P-256, P-384 and P-521 keys, pure JDK. |
 
 The OpenID and self-signed-CID suites serialize CIDs with Jena as JSON-LD / Turtle / N-Triples / RDF/XML.
 
@@ -129,6 +129,18 @@ curl -X POST https://keycloak.example/realms/myrealm/lws/verify \
 `Authorization` carries **your** access token; the credential being verified goes in the body. See
 [Securing the verify endpoints](#securing-the-verify-endpoints).
 
+Two optional parameters turn on the audience half of OpenID Connect Core §3.1.3.7, which the suite
+incorporates by reference:
+
+| Param | |
+|---|---|
+| `client_id` | your own client identifier. When given, `aud` must list it and `azp` must equal it (steps 3–5). |
+| `audience` | an additional audience the credential must be restricted to, typically the authorization server. |
+
+Without them the credential is still validated — signature, issuer, expiry, and a required `azp` — but
+nothing binds it to *you*, so a token minted for another relying party would pass. Supply them wherever
+the result is treated as an authentication.
+
 Walkthrough + runnable demo: **[`docs/walkthrough-openid.md`](docs/walkthrough-openid.md)** /
 **[`scripts/lws-demo.sh`](scripts/lws-demo.sh)** (`bash scripts/lws-demo.sh`).
 
@@ -150,9 +162,17 @@ verifiers can find it, and offers a verifier.
    key).
 
 `GET …/lws-ssi-cid/cid/{userId}` serves the CID publishing the registered key(s) as `authentication`
-methods; `POST …/lws-ssi-cid/verify` validates a self-issued JWT (reject `none`; enforce
-`sub==iss==client_id`; dereference `sub`; select key by `kid`; validate signature; check expiry +
-audience).
+methods; `POST …/lws-ssi-cid/verify` validates a self-issued JWT: reject `none` and any unsupported
+`crit` header; enforce `sub == iss == client_id`; require a `kid`; dereference `sub` to a document
+whose `id` **is** `sub`; select a `JsonWebKey` method that document's subject **controls**; pin the
+`alg` to that key; validate the signature; require `iat` and `exp`; and check the audience.
+
+Pass `audience=<authorization server>` to enforce the suite's "the `aud` claim MUST include the target
+authorization server" — without it only the presence of an audience restriction can be checked.
+
+The document a verifier dereferences must therefore be CID-conformant: an `id` equal to the subject,
+and verification methods carrying `id`, `type: JsonWebKey` and a `controller` equal to the subject.
+The documents this provider serves already are.
 
 Walkthrough + runnable demo: **[`docs/walkthrough-ssi-cid.md`](docs/walkthrough-ssi-cid.md)** /
 **[`scripts/ssi-cid-demo.sh`](scripts/ssi-cid-demo.sh)**.
@@ -202,17 +222,26 @@ signed SAML Response requires a SAML login flow).
 The most self-contained suite: the subject is a `did:key` identifier that **embeds the public key**
 (multibase base58btc + multicodec), so there is no hosting, no dereferencing, and no realm setup — the
 verifier decodes the key from the identifier and validates the self-signed JWT. Supported key types:
-**Ed25519** (`did:key:z6Mk…`, EdDSA) and **P-256** (`did:key:zDn…`, ES256).
+**Ed25519** (`did:key:z6Mk…`, EdDSA), **P-256** (`did:key:zDn…`, ES256), **P-384** (ES384) and
+**P-521** (ES512).
 
-`POST …/lws-ssi-did-key/verify` — validates a self-issued `did:key` JWT (reject `none`; enforce
-`sub==iss==client_id` is a `did:key`; decode the key from the identifier; check the JWT `alg` matches
-the key type; validate the signature; check expiry + audience):
+The encoding must be canonical: a decoded key is re-encoded and must reproduce the identifier exactly.
+A `did:key` *is* its key, so allowing two spellings of one key would let a single agent present itself
+as two subjects.
+
+`POST …/lws-ssi-did-key/verify` — validates a self-issued `did:key` JWT: reject `none` and any
+unsupported `crit` header; enforce `sub == iss == client_id` is a **canonically encoded** `did:key`;
+decode the key from the identifier; check the JWT `alg` matches the key type; validate the signature;
+require `iat` and `exp`; check the audience. Pass `audience=<authorization server>` to require that the
+credential names it:
 
 ```json
-{ "valid": true, "subject": "did:key:zDnaerx9…", "keyType": "P-256",
-  "checks": { "signingAlgorithmNotNone": true, "selfIssued": true, "subjectIsDidKey": true,
-              "keyDecodedFromDid": true, "algorithmMatchesKey": true, "signatureValid": true,
-              "notExpired": true, "audiencePresent": true } }
+{ "valid": true, "subject": "did:key:zDnaerx9…", "client": "did:key:zDnaerx9…",
+  "keyType": "P-256", "tokenType": "urn:ietf:params:oauth:token-type:jwt",
+  "checks": { "signingAlgorithmNotNone": true, "noUnsupportedCriticalHeaders": true,
+              "selfIssued": true, "subjectIsDidKey": true, "keyDecodedFromDid": true,
+              "algorithmMatchesKey": true, "signatureValid": true, "notExpired": true,
+              "issuedAtPresent": true, "audiencePresent": true } }
 ```
 
 Walkthrough + runnable demo (mints a `did:key` and verifies it):
@@ -310,16 +339,20 @@ variable `LWS_AUTHN_VERIFY_ACCESS=public`.
 - **SAML trust is out-of-band.** The verifier requires the trusted IdP certificate as input; it
   validates the XML signature, the `<Conditions>` window (±60 s skew) and the audience, but does not
   fetch metadata or build a trust chain.
-- **`did:key` key types.** Ed25519 and P-256 are supported; secp256k1 and other multicodecs are not.
-  No BouncyCastle is used (works under default and FIPS Keycloak crypto).
+- **`did:key` key types.** Ed25519, P-256, P-384 and P-521 are supported; secp256k1 (which the JDK
+  cannot do without BouncyCastle) and RSA are not. No BouncyCastle is used, so this works under both
+  default and FIPS Keycloak crypto. Curve parameters come from the JDK rather than being transcribed
+  here, so the set is one table row per curve.
 - **`frontendUrl`.** Derived identifiers and served documents are built from the realm front-end URL;
   set it (or run behind a stable hostname) so they stay consistent and publicly dereferenceable.
 - **Verifier networking & syntaxes.** OpenID/self-signed-CID verification dereferences `sub` (and, for
   OpenID, performs Discovery). Verifiers request Turtle first; Turtle / N-Triples / RDF/XML are parsed
   with Jena RIOT, JSON-LD is interpreted directly for the standardized CID shape (exotic framings are
   not expanded).
-- **Audience / token exchange.** Restrict credential audiences (Resource Indicators, RFC 8707) and use
-  OAuth 2.0 Token Exchange (RFC 8693) with each suite's token type URI where appropriate.
+- **Audience / token exchange.** Every `/verify` endpoint accepts an `audience` parameter (and the
+  OpenID one a `client_id`) so the credential can be bound to the party checking it; each result reports
+  the LWS `client` and the suite's `tokenType`, ready for an RFC 8693 exchange. Restrict credential
+  audiences at issuance too (Resource Indicators, RFC 8707).
 
 ## Layout
 

@@ -103,12 +103,23 @@ public class LWSResourceProvider implements RealmResourceProvider {
      * {@code Authorization} header carries the <em>caller's</em> own credential (see
      * {@link com.ebremer.lws.authn.verify.VerifyAccess}); only in {@code public} access mode does it
      * fall back to meaning the credential to verify.</p>
+     *
+     * <p>Two optional parameters turn on the audience half of OpenID Connect Core 3.1.3.7, which the
+     * suite incorporates by reference:</p>
+     * <ul>
+     *   <li>{@code client_id} — the relying party's own identifier. When given, {@code aud} must list
+     *       it and {@code azp} must equal it (steps 3-5).</li>
+     *   <li>{@code audience} — an additional audience the credential must be restricted to, typically
+     *       the authorization server.</li>
+     * </ul>
      */
     @POST
     @Path(LWSConstants.VERIFY_PATH)
     @Consumes(MediaType.APPLICATION_FORM_URLENCODED)
     @Produces(MediaType.APPLICATION_JSON)
     public Response verify(@FormParam("credential") String credential,
+                           @FormParam("client_id") String expectedClientId,
+                           @FormParam("audience") String expectedAudience,
                            @HeaderParam("Authorization") String authorization) {
         Response denied = access.check(session, authorization);
         if (denied != null) {
@@ -124,7 +135,8 @@ public class LWSResourceProvider implements RealmResourceProvider {
                     .type(MediaType.APPLICATION_JSON).build();
         }
 
-        VerificationResult result = new LWSCredentialVerifier(session).verify(token);
+        VerificationResult result =
+                new LWSCredentialVerifier(session).verify(token, expectedClientId, expectedAudience);
         try {
             return Response.ok(JsonSerialization.writeValueAsPrettyString(result), MediaType.APPLICATION_JSON)
                     .status(result.isValid() ? Response.Status.OK : Response.Status.UNAUTHORIZED)

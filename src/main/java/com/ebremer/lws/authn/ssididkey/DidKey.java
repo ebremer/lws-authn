@@ -2,8 +2,9 @@
  * Copyright Erich Bremer.
  *
  * Decoding (and encoding) of did:key identifiers per "The did:key Method" — multibase base58btc plus
- * a multicodec key-type prefix. Supports Ed25519 (0xed01) and P-256 (0x1200). Pure JDK: no
- * BouncyCastle, so it works under both the default and FIPS Keycloak crypto providers.
+ * a multicodec key-type prefix. Supports Ed25519 (0xed01) and the NIST curves P-256 (0x1200),
+ * P-384 (0x1201) and P-521 (0x1202). Pure JDK: no BouncyCastle, so it works under both the default
+ * and FIPS Keycloak crypto providers.
  */
 package com.ebremer.lws.authn.ssididkey;
 
@@ -13,9 +14,12 @@ import java.security.KeyFactory;
 import java.security.PublicKey;
 import java.security.interfaces.ECPublicKey;
 import java.security.spec.ECGenParameterSpec;
+import java.security.spec.ECField;
+import java.security.spec.ECFieldFp;
 import java.security.spec.ECParameterSpec;
 import java.security.spec.ECPoint;
 import java.security.spec.ECPublicKeySpec;
+import java.security.spec.EllipticCurve;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Arrays;
 
@@ -34,14 +38,51 @@ public final class DidKey {
     // multicodec varint prefixes
     private static final byte[] MC_ED25519 = {(byte) 0xed, (byte) 0x01}; // 0xed
     private static final byte[] MC_P256 = {(byte) 0x80, (byte) 0x24};    // 0x1200
-
-    // P-256 (secp256r1) domain parameters, for point decompression
-    private static final BigInteger P = new BigInteger("FFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF", 16);
-    private static final BigInteger A = P.subtract(BigInteger.valueOf(3));
-    private static final BigInteger B = new BigInteger("5AC635D8AA3A93E7B3EBBD55769886BC651D06B0CC53B0F63BCE3C3E27D2604B", 16);
+    private static final byte[] MC_P384 = {(byte) 0x81, (byte) 0x24};    // 0x1201
+    private static final byte[] MC_P521 = {(byte) 0x82, (byte) 0x24};    // 0x1202
 
     // SubjectPublicKeyInfo header preceding the 32 raw bytes of an Ed25519 public key
     private static final byte[] ED25519_SPKI_PREFIX = hex("302a300506032b6570032100");
+
+    private static final BigInteger THREE = BigInteger.valueOf(3);
+    private static final BigInteger FOUR = BigInteger.valueOf(4);
+
+    /**
+     * The elliptic curves this method supports, each with its multicodec prefix, its JDK curve name,
+     * its coordinate size in bytes and the JWS algorithm it signs with.
+     *
+     * <p>Domain parameters are read from the JDK rather than written out here: p, a and b for each
+     * curve come from {@link AlgorithmParameters}, so a new curve is one row of this table and there
+     * are no hand-transcribed constants to get subtly wrong.</p>
+     */
+    private enum Curve {
+        P256(MC_P256, "secp256r1", "P-256", 32, "ES256"),
+        P384(MC_P384, "secp384r1", "P-384", 48, "ES384"),
+        P521(MC_P521, "secp521r1", "P-521", 66, "ES512");
+
+        private final byte[] multicodec;
+        private final String jdkName;
+        private final String keyType;
+        private final int coordinateBytes;
+        private final String jwsAlgorithm;
+
+        Curve(byte[] multicodec, String jdkName, String keyType, int coordinateBytes, String jwsAlgorithm) {
+            this.multicodec = multicodec;
+            this.jdkName = jdkName;
+            this.keyType = keyType;
+            this.coordinateBytes = coordinateBytes;
+            this.jwsAlgorithm = jwsAlgorithm;
+        }
+
+        static Curve byKeyType(String keyType) {
+            for (Curve curve : values()) {
+                if (curve.keyType.equals(keyType)) {
+                    return curve;
+                }
+            }
+            return null;
+        }
+    }
 
     /** A public key decoded from a did:key, with its key type and the JWS algorithm it signs with. */
     public record DecodedKey(PublicKey publicKey, String keyType, String jwsAlgorithm) {
@@ -61,13 +102,45 @@ public final class DidKey {
             throw new IllegalArgumentException("did:key must use base58btc multibase (leading 'z')");
         }
         byte[] bytes = base58Decode(multibase.substring(1));
+
+        DecodedKey decoded = null;
         if (startsWith(bytes, MC_ED25519)) {
-            return new DecodedKey(ed25519PublicKey(Arrays.copyOfRange(bytes, 2, bytes.length)), "Ed25519", "EdDSA");
+            decoded = new DecodedKey(ed25519PublicKey(Arrays.copyOfRange(bytes, 2, bytes.length)), "Ed25519", "EdDSA");
+        } else {
+            for (Curve curve : Curve.values()) {
+                if (startsWith(bytes, curve.multicodec)) {
+                    decoded = new DecodedKey(ecPublicKey(curve, Arrays.copyOfRange(bytes, 2, bytes.length)),
+                            curve.keyType, curve.jwsAlgorithm);
+                    break;
+                }
+            }
         }
-        if (startsWith(bytes, MC_P256)) {
-            return new DecodedKey(p256PublicKey(Arrays.copyOfRange(bytes, 2, bytes.length)), "P-256", "ES256");
+        if (decoded == null) {
+            throw new IllegalArgumentException(
+                    "Unsupported did:key key type (supported: Ed25519, P-256, P-384, P-521)");
         }
-        throw new IllegalArgumentException("Unsupported did:key key type (only Ed25519 and P-256 are supported)");
+
+        // A did:key IS its key, so the mapping must be one-to-one. Re-encoding the decoded key and
+        // requiring the exact input back rejects any non-canonical spelling — a base58 string with
+        // extra leading '1's, or an uncompressed point — that would otherwise give one key two
+        // identifiers, and so let one agent present itself as two subjects.
+        String canonical = encode(decoded);
+        if (!canonical.equals(DID_KEY_PREFIX + multibase)) {
+            throw new IllegalArgumentException("did:key is not canonically encoded");
+        }
+        return decoded;
+    }
+
+    /** Re-encodes a decoded key as its canonical {@code did:key} identifier. */
+    public static String encode(DecodedKey decoded) {
+        if ("Ed25519".equals(decoded.keyType())) {
+            return encodeEd25519(decoded.publicKey());
+        }
+        Curve curve = Curve.byKeyType(decoded.keyType());
+        if (curve == null) {
+            throw new IllegalArgumentException("Cannot encode key type " + decoded.keyType());
+        }
+        return encodeEc(curve, (ECPublicKey) decoded.publicKey());
     }
 
     public static PublicKey toPublicKey(String did) {
@@ -77,11 +150,23 @@ public final class DidKey {
     // ---- did:key encoding (for minting / tests) ----
 
     public static String encodeP256(ECPublicKey key) {
+        return encodeEc(Curve.P256, key);
+    }
+
+    public static String encodeP384(ECPublicKey key) {
+        return encodeEc(Curve.P384, key);
+    }
+
+    public static String encodeP521(ECPublicKey key) {
+        return encodeEc(Curve.P521, key);
+    }
+
+    private static String encodeEc(Curve curve, ECPublicKey key) {
         ECPoint w = key.getW();
-        byte[] compressed = new byte[33];
+        byte[] compressed = new byte[curve.coordinateBytes + 1];
         compressed[0] = w.getAffineY().testBit(0) ? (byte) 0x03 : (byte) 0x02;
-        System.arraycopy(toFixed(w.getAffineX(), 32), 0, compressed, 1, 32);
-        return DID_KEY_PREFIX + "z" + base58Encode(concat(MC_P256, compressed));
+        System.arraycopy(toFixed(w.getAffineX(), curve.coordinateBytes), 0, compressed, 1, curve.coordinateBytes);
+        return DID_KEY_PREFIX + "z" + base58Encode(concat(curve.multicodec, compressed));
     }
 
     public static String encodeEd25519(PublicKey key) {
@@ -106,28 +191,46 @@ public final class DidKey {
         }
     }
 
-    private static PublicKey p256PublicKey(byte[] compressed) {
+    /**
+     * Decompresses a SEC1 compressed point onto {@code curve}. All three NIST primes are congruent to
+     * 3 mod 4, so the square root is a single modular exponentiation; that congruence is asserted
+     * rather than assumed, since it is the one property this shortcut depends on.
+     */
+    private static PublicKey ecPublicKey(Curve curve, byte[] compressed) {
         try {
-            if (compressed.length != 33 || (compressed[0] != 0x02 && compressed[0] != 0x03)) {
-                throw new IllegalArgumentException("Invalid P-256 compressed point");
-            }
-            BigInteger x = new BigInteger(1, Arrays.copyOfRange(compressed, 1, 33));
-            BigInteger rhs = x.modPow(BigInteger.valueOf(3), P).add(A.multiply(x)).add(B).mod(P);
-            BigInteger y = rhs.modPow(P.add(BigInteger.ONE).shiftRight(2), P); // p ≡ 3 (mod 4)
-            if (!y.multiply(y).mod(P).equals(rhs)) {
-                throw new IllegalArgumentException("Point is not on the P-256 curve");
-            }
-            if (y.testBit(0) != (compressed[0] == 0x03)) {
-                y = P.subtract(y);
+            if (compressed.length != curve.coordinateBytes + 1
+                    || (compressed[0] != 0x02 && compressed[0] != 0x03)) {
+                throw new IllegalArgumentException("Invalid " + curve.keyType + " compressed point");
             }
             AlgorithmParameters params = AlgorithmParameters.getInstance("EC");
-            params.init(new ECGenParameterSpec("secp256r1"));
+            params.init(new ECGenParameterSpec(curve.jdkName));
             ECParameterSpec ecSpec = params.getParameterSpec(ECParameterSpec.class);
+            EllipticCurve ec = ecSpec.getCurve();
+            ECField field = ec.getField();
+            if (!(field instanceof ECFieldFp fp)) {
+                throw new IllegalArgumentException(curve.keyType + " is not a prime-field curve");
+            }
+            BigInteger p = fp.getP();
+            if (!p.mod(FOUR).equals(THREE)) {
+                throw new IllegalStateException("Square root shortcut needs p = 3 (mod 4) for " + curve.keyType);
+            }
+            BigInteger x = new BigInteger(1, Arrays.copyOfRange(compressed, 1, compressed.length));
+            if (x.compareTo(p) >= 0) {
+                throw new IllegalArgumentException("Point x coordinate is out of range for " + curve.keyType);
+            }
+            BigInteger rhs = x.modPow(THREE, p).add(ec.getA().multiply(x)).add(ec.getB()).mod(p);
+            BigInteger y = rhs.modPow(p.add(BigInteger.ONE).shiftRight(2), p); // p = 3 (mod 4)
+            if (!y.multiply(y).mod(p).equals(rhs)) {
+                throw new IllegalArgumentException("Point is not on the " + curve.keyType + " curve");
+            }
+            if (y.testBit(0) != (compressed[0] == 0x03)) {
+                y = p.subtract(y);
+            }
             return KeyFactory.getInstance("EC").generatePublic(new ECPublicKeySpec(new ECPoint(x, y), ecSpec));
-        } catch (IllegalArgumentException e) {
+        } catch (IllegalArgumentException | IllegalStateException e) {
             throw e;
         } catch (Exception e) {
-            throw new IllegalArgumentException("Could not build P-256 key: " + e.getMessage(), e);
+            throw new IllegalArgumentException("Could not build " + curve.keyType + " key: " + e.getMessage(), e);
         }
     }
 

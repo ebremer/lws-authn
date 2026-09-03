@@ -5,13 +5,14 @@
  * https://w3c.github.io/lws-protocol/lws10-authn-ssi-cid/
  *
  * Algorithm:
- *   1. Reject alg == "none".
+ *   1. Reject alg == "none", and any critical header this provider does not implement.
  *   2. The credential is self-issued: sub == iss == client_id (the controlled identifier).
- *   3. Dereference 'sub' to a controlled identifier document.
- *   4. Select the verification method whose key matches the JWT 'kid' (from the 'authentication'
- *      relationship), and read its publicKeyJwk.
- *   5. Validate the JWT signature against that key (RFC 7515 §5.2).
- *   6. Ensure the token is not expired.
+ *   3. Dereference 'sub' to a controlled identifier document whose 'id' equals 'sub'.
+ *   4. Select, by the JWT 'kid', a JsonWebKey verification method controlled by the subject (from the
+ *      'authentication' or 'verificationMethod' relationship), and read its publicKeyJwk.
+ *   5. Validate the JWT signature against that key (RFC 7515 §5.2), with the algorithm pinned to the
+ *      key type.
+ *   6. Ensure the token carries iat and exp, is not expired, and is restricted to the target audience.
  *
  * RDF parsing of the (possibly arbitrary-syntax) controlled identifier document uses Apache Jena;
  * the JWK itself is JSON, so key extraction is JSON-native.
@@ -23,6 +24,7 @@ import java.security.PublicKey;
 import java.util.ArrayList;
 import java.util.List;
 
+import com.ebremer.lws.authn.jose.JwsChecks;
 import com.ebremer.lws.authn.net.OutboundHttp;
 import com.ebremer.lws.authn.rdf.RdfParsing;
 import com.ebremer.lws.authn.verify.Trace;
@@ -61,8 +63,20 @@ public class SelfSignedCidVerifier {
     }
 
     public SsiCidVerificationResult verify(String credential) {
+        return verify(credential, null);
+    }
+
+    /**
+     * @param credential       the self-issued JWT
+     * @param expectedAudience the authorization server this verifier speaks for. The suite says the
+     *                         {@code aud} claim "MUST include the target authorization server", which
+     *                         only means anything if the verifier knows which one it is; without it
+     *                         only the presence of an audience can be checked.
+     */
+    public SsiCidVerificationResult verify(String credential, String expectedAudience) {
         SsiCidVerificationResult result = new SsiCidVerificationResult();
         result.setTraceId(Trace.newId());
+        result.setTokenType(SsiCidConstants.TOKEN_TYPE_JWT);
         try {
             JWSInput jws = new JWSInput(credential);
             JWSHeader header = jws.getHeader();
@@ -82,6 +96,14 @@ public class SelfSignedCidVerifier {
                 return result.fail();
             }
 
+            // RFC 7515 5.2, cited normatively by this suite: reject critical headers we do not implement.
+            List<String> critical = JwsChecks.criticalHeaders(jws);
+            result.check("noUnsupportedCriticalHeaders", critical.isEmpty());
+            if (!critical.isEmpty()) {
+                result.error("Credential carries unsupported critical header parameters: " + critical);
+                return result.fail();
+            }
+
             // 2. self-issued: sub == iss == client_id
             boolean selfIssued = sub != null && !sub.isBlank() && sub.equals(iss) && sub.equals(clientId);
             result.check("selfIssued", selfIssued);
@@ -90,23 +112,60 @@ public class SelfSignedCidVerifier {
                         + "(sub=" + sub + ", iss=" + iss + ", client_id=" + clientId + ")");
                 return result.fail();
             }
+            result.setClient(clientId);
+
+            // "The verifier MUST use the `kid` (key id) value from the signed JWT header to identify a
+            // verification method." Falling back to "the only key" when there is no kid would make the
+            // selection the verifier's guess rather than the credential's assertion.
+            String kid = header.getKeyId();
+            boolean kidPresent = kid != null && !kid.isBlank();
+            result.check("keyIdPresent", kidPresent);
+            if (!kidPresent) {
+                result.error("Credential header is missing the 'kid' used to select a verification method");
+                return result.fail();
+            }
 
             // 3-4. dereference the subject and select the verification method by kid
-            List<JsonNode> publicKeyJwks = dereference(sub, result);
-            if (publicKeyJwks == null) {
+            List<VerificationMethod> methods = dereference(sub, result);
+            if (methods == null) {
                 return result.fail();
             }
-            JsonNode jwk = selectByKid(publicKeyJwks, header.getKeyId());
-            boolean keyFound = jwk != null;
+            VerificationMethod method = selectByKid(methods, kid);
+            boolean keyFound = method != null;
             result.check("verificationMethodFound", keyFound);
             if (!keyFound) {
-                result.error("No verification method in the controlled identifier document matched kid="
-                        + header.getKeyId());
+                result.error("No JsonWebKey verification method controlled by <" + sub
+                        + "> matched kid=" + kid);
                 return result.fail();
             }
+            JsonNode jwk = method.publicKeyJwk();
 
             // 5. validate the signature against the selected key
             PublicKey publicKey = toPublicKey(jwk);
+
+            // Pin the declared algorithm to the key actually published. Without this a forged token
+            // could claim a symmetric alg (HS256) and have the subject's public key treated as the HMAC
+            // secret. It fails closed inside Keycloak today, but only by accident of how the provider
+            // reacts to a PublicKey where it wants a SecretKey — which is not a security guarantee.
+            boolean algMatchesKey = JwsChecks.algMatchesKey(alg, publicKey);
+            result.check("algorithmMatchesKey", algMatchesKey);
+            if (!algMatchesKey) {
+                result.error("Credential 'alg' " + alg + " is not consistent with the published "
+                        + publicKey.getAlgorithm() + " verification method");
+                return result.fail();
+            }
+
+            // The JWK's own metadata must agree too: a key published for encryption, or declaring a
+            // different algorithm, is not a key this signature may be checked against.
+            String jwkUse = jwk.path("use").asText(null);
+            String jwkAlg = jwk.path("alg").asText(null);
+            boolean jwkUsable = (jwkUse == null || "sig".equals(jwkUse)) && (jwkAlg == null || jwkAlg.equals(alg));
+            result.check("verificationMethodUsableForSigning", jwkUsable);
+            if (!jwkUsable) {
+                result.error("The selected verification method is not published for signing with " + alg);
+                return result.fail();
+            }
+
             SignatureProvider signatureProvider = session.getProvider(SignatureProvider.class, alg);
             if (signatureProvider == null) {
                 result.check("signatureValid", false);
@@ -141,13 +200,31 @@ public class SelfSignedCidVerifier {
                 return result.fail();
             }
 
-            // the suite REQUIRES an audience restriction
+            // "The JWT MUST include an `iat` (issued at) claim." Without it there is no lower bound on
+            // the credential's age, so a stolen token's provenance cannot be reasoned about at all.
+            Long iat = token.getIat();
+            boolean issuedAtPresent = iat != null && iat != 0;
+            result.check("issuedAtPresent", issuedAtPresent);
+            if (!issuedAtPresent) {
+                result.error("Credential is missing the required 'iat' claim");
+                return result.fail();
+            }
+
+            // the suite REQUIRES an audience restriction, and that it name the target authorization server
             String[] aud = token.getAudience();
             boolean audiencePresent = aud != null && aud.length > 0;
             result.check("audiencePresent", audiencePresent);
             if (!audiencePresent) {
                 result.error("Credential is missing the required 'aud' claim");
                 return result.fail();
+            }
+            if (expectedAudience != null && !expectedAudience.isBlank()) {
+                boolean audienceMatched = JwsChecks.audienceIncludes(aud, expectedAudience);
+                result.check("audienceMatched", audienceMatched);
+                if (!audienceMatched) {
+                    result.error("Credential 'aud' does not include the target audience <" + expectedAudience + ">");
+                    return result.fail();
+                }
             }
 
             result.setValid(result.getErrors().isEmpty());
@@ -161,8 +238,8 @@ public class SelfSignedCidVerifier {
         return result;
     }
 
-    /** Dereferences the subject and returns the candidate public JWKs from its CID document. */
-    private List<JsonNode> dereference(String sub, SsiCidVerificationResult result) {
+    /** Dereferences the subject and returns the verification methods its CID document controls. */
+    private List<VerificationMethod> dereference(String sub, SsiCidVerificationResult result) {
         try {
             // OutboundHttp applies the SSRF policy, refuses a host that has been failing, and fetches
             // through a client that follows no redirects and resolves only vetted addresses.
@@ -180,12 +257,13 @@ public class SelfSignedCidVerifier {
             }
             String contentType = response.getFirstHeader("Content-Type");
             String body = response.asString();
-            List<JsonNode> jwks = RdfParsing.isJsonLd(contentType, body)
-                    ? collectFromJsonLd(body)
+            List<VerificationMethod> methods = RdfParsing.isJsonLd(contentType, body)
+                    ? collectFromJsonLd(body, sub)
                     : collectFromRdf(RdfParsing.parseRdf(body, contentType, sub), sub);
             OutboundHttp.recordSuccess(sub);
             result.check("subjectDereferenced", true);
-            return jwks;
+            result.check("subjectIdMatches", true);
+            return methods;
         } catch (Exception e) {
             // The cause can name the address the host resolved to, so it is logged, not returned.
             log.debugf(e, "[%s] could not dereference or parse sub <%s>", result.getTraceId(), sub);
@@ -198,45 +276,84 @@ public class SelfSignedCidVerifier {
 
     // ---- key extraction (static + side-effect free, so it is unit-testable without a session) ----
 
-    /** Collects every {@code publicKeyJwk} under {@code authentication}/{@code verificationMethod}. */
-    public static List<JsonNode> collectFromJsonLd(String body) throws java.io.IOException {
+    /**
+     * A {@code JsonWebKey} verification method from a controlled identifier document.
+     *
+     * @param id           the method's own identifier, conventionally {@code <subject>#<kid>}
+     * @param publicKeyJwk its public JWK
+     */
+    public record VerificationMethod(String id, JsonNode publicKeyJwk) {
+    }
+
+    /**
+     * Collects the subject's {@code JsonWebKey} verification methods from a compact JSON-LD document.
+     *
+     * <p>The document's {@code id} must equal {@code sub}: CID 1.0 requires an {@code id} in the
+     * topmost map, and a document that does not claim to describe this subject is not evidence about
+     * it. Each method must be a {@code JsonWebKey} controlled by the subject — a document may embed
+     * methods controlled by someone else, and those are not keys this subject may authenticate with.</p>
+     */
+    public static List<VerificationMethod> collectFromJsonLd(String body, String sub) throws java.io.IOException {
         JsonNode doc = JsonSerialization.mapper.readTree(body);
-        List<JsonNode> out = new ArrayList<>();
-        collectMethods(doc.get("authentication"), out);
-        collectMethods(doc.get("verificationMethod"), out);
+        String id = doc.path("id").asText(doc.path("@id").asText(null));
+        if (id == null || !id.equals(sub)) {
+            throw new java.io.IOException("controlled identifier document 'id' does not equal the subject");
+        }
+        List<VerificationMethod> out = new ArrayList<>();
+        collectMethods(doc.get("authentication"), sub, out);
+        collectMethods(doc.get("verificationMethod"), sub, out);
         return out;
     }
 
-    private static void collectMethods(JsonNode methods, List<JsonNode> out) {
+    private static void collectMethods(JsonNode methods, String sub, List<VerificationMethod> out) {
         if (methods == null) {
             return;
         }
         for (JsonNode method : methods.isArray() ? methods : List.of(methods)) {
-            JsonNode jwk = method.get("publicKeyJwk");
-            if (jwk != null && jwk.isObject()) {
-                out.add(jwk);
+            if (!method.isObject()) {
+                continue; // a bare reference to a method defined elsewhere; nothing to verify against
             }
+            JsonNode jwk = method.get("publicKeyJwk");
+            if (jwk == null || !jwk.isObject()) {
+                continue;
+            }
+            if (!"JsonWebKey".equals(method.path("type").asText(null))) {
+                continue;
+            }
+            if (!sub.equals(method.path("controller").asText(null))) {
+                continue;
+            }
+            out.add(new VerificationMethod(method.path("id").asText(null), jwk));
         }
     }
 
     /**
-     * Collects every {@code publicKeyJwk} literal reachable from the subject via Jena/SPARQL. The
-     * subject is bound as an IRI parameter (never concatenated) so it cannot inject SPARQL.
+     * Collects the subject's {@code JsonWebKey} verification methods via Jena/SPARQL. The subject is
+     * bound as an IRI parameter (never concatenated) so it cannot inject SPARQL, and the query itself
+     * requires the method to be a {@code JsonWebKey} the subject controls.
      */
-    public static List<JsonNode> collectFromRdf(Model model, String sub) {
+    public static List<VerificationMethod> collectFromRdf(Model model, String sub) {
         ParameterizedSparqlString pss = new ParameterizedSparqlString();
         pss.setNsPrefix("sec", SsiCidConstants.SEC_NS);
-        pss.setCommandText("SELECT ?jwk WHERE { ?sub ?rel ?m . "
-                + "FILTER(?rel = sec:authenticationMethod || ?rel = sec:verificationMethod) "
-                + "?m sec:publicKeyJwk ?jwk }");
+        pss.setCommandText("SELECT ?m ?jwk WHERE { ?sub ?rel ?m . "
+                + "FILTER(?rel = ?authentication || ?rel = ?verificationMethod) "
+                + "?m a ?jsonWebKey ; ?controller ?sub ; ?publicKeyJwk ?jwk }");
         pss.setIri("sub", sub);
-        List<JsonNode> out = new ArrayList<>();
+        pss.setIri("authentication", SsiCidConstants.SEC_AUTHENTICATION);
+        pss.setIri("verificationMethod", SsiCidConstants.SEC_VERIFICATION_METHOD);
+        pss.setIri("jsonWebKey", SsiCidConstants.JSON_WEB_KEY_TYPE);
+        pss.setIri("controller", SsiCidConstants.SEC_CONTROLLER);
+        pss.setIri("publicKeyJwk", SsiCidConstants.SEC_PUBLIC_KEY_JWK);
+        List<VerificationMethod> out = new ArrayList<>();
         try (QueryExecution qe = QueryExecutionFactory.create(pss.asQuery(), model)) {
             ResultSet rs = qe.execSelect();
             while (rs.hasNext()) {
-                String jwkLexical = rs.next().getLiteral("jwk").getLexicalForm();
+                var row = rs.next();
+                String jwkLexical = row.getLiteral("jwk").getLexicalForm();
                 try {
-                    out.add(JsonSerialization.mapper.readTree(jwkLexical));
+                    var node = row.get("m");
+                    out.add(new VerificationMethod(node.isURIResource() ? node.asResource().getURI() : null,
+                            JsonSerialization.mapper.readTree(jwkLexical)));
                 } catch (Exception ignore) {
                     // skip non-JSON literals
                 }
@@ -245,17 +362,26 @@ public class SelfSignedCidVerifier {
         return out;
     }
 
-    /** Picks the JWK whose {@code kid} matches the token header (or the only key if no kid). */
-    public static JsonNode selectByKid(List<JsonNode> jwks, String kid) {
-        if (jwks.isEmpty()) {
+    /**
+     * Picks the method the JWT's {@code kid} names — by the JWK's own {@code kid}, or by the fragment
+     * of the method's {@code id}, which is where CID 1.0 conventionally puts it
+     * ({@code <subject>#<kid>}). There is no fallback to "the only key": the credential says which key
+     * signed it, and honouring that is the point of the check.
+     */
+    public static VerificationMethod selectByKid(List<VerificationMethod> methods, String kid) {
+        if (methods.isEmpty() || kid == null || kid.isBlank()) {
             return null;
         }
-        if (kid == null || kid.isBlank()) {
-            return jwks.size() == 1 ? jwks.get(0) : null;
+        for (VerificationMethod method : methods) {
+            if (kid.equals(method.publicKeyJwk().path("kid").asText(null))) {
+                return method;
+            }
         }
-        for (JsonNode jwk : jwks) {
-            if (kid.equals(jwk.path("kid").asText(null))) {
-                return jwk;
+        for (VerificationMethod method : methods) {
+            String id = method.id();
+            int hash = id == null ? -1 : id.lastIndexOf('#');
+            if (hash >= 0 && kid.equals(id.substring(hash + 1))) {
+                return method;
             }
         }
         return null;

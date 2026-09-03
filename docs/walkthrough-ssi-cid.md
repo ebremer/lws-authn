@@ -17,6 +17,12 @@ Here the agent signs its own credential — Keycloak never issues a token. Keycl
 the subject's own document, which publishes the signing key as an `authentication` verification method.
 A verifier needs no prior relationship with anyone — it fetches the key from the identity itself.
 
+For that to mean anything the document has to be CID-conformant, and the verifier holds it to that: an
+`id` equal to the subject, and each verification method carrying `id`, `type: JsonWebKey` and a
+`controller` equal to the subject. A method the subject does not control is not a key it may
+authenticate with, however it got into the document. The JWT must also name its key with `kid` and
+carry both `iat` and `exp`.
+
 ---
 
 ## Prerequisites

@@ -51,6 +51,7 @@ class SamlVerifierTest {
 
     private static final String NS = "urn:oasis:names:tc:SAML:2.0:assertion";
     private static final String AUDIENCE = "https://app.example/SAML";
+    private static final String Q = "\"";
     private static final String STATUS_SUCCESS = "urn:oasis:names:tc:SAML:2.0:status:Success";
     private static final String STATUS_RESPONDER = "urn:oasis:names:tc:SAML:2.0:status:Responder";
 
@@ -199,6 +200,33 @@ class SamlVerifierTest {
         SamlVerificationResult r = new SamlCredentialVerifier().verify(serialize(doc), idpCert, AUDIENCE);
         assertFalse(r.isValid(), "a non-bearer SubjectConfirmation must be rejected");
         assertEquals(Boolean.FALSE, r.getChecks().get("bearerSubjectConfirmation"));
+    }
+
+    /**
+     * P1-M1: "The SAML token MUST use the saml:Issuer assertion for the LWS issuer identifier", and
+     * LWS core section 4.1 makes the issuer REQUIRED. It was recorded but never required.
+     */
+    @Test
+    void missingIssuerRejected() throws Exception {
+        Document doc = parse(responseTemplate("alice")
+                .replace("<saml:Assertion ID=" + Q + "a1" + Q + " Version=" + Q + "2.0" + Q
+                        + " IssueInstant=" + Q + iso(0) + Q + ">"
+                        + "<saml:Issuer>https://idp.example</saml:Issuer>",
+                         "<saml:Assertion ID=" + Q + "a1" + Q + " Version=" + Q + "2.0" + Q
+                        + " IssueInstant=" + Q + iso(0) + Q + ">"));
+        signAssertion(doc, idpKeyPair.getPrivate());
+        SamlVerificationResult r = new SamlCredentialVerifier().verify(serialize(doc), idpCert, AUDIENCE);
+        assertFalse(r.isValid(), "an assertion with no <Issuer> must be rejected");
+        assertEquals(Boolean.FALSE, r.getChecks().get("issuerPresent"));
+    }
+
+    /** P1-K1/K2: the result names the LWS client (the Recipient) and the suite token type. */
+    @Test
+    void reportsClientAndTokenType() throws Exception {
+        SamlVerificationResult r = new SamlCredentialVerifier().verify(signedResponse("alice"), idpCert, AUDIENCE);
+        assertTrue(r.isValid(), () -> "errors: " + r.getErrors());
+        assertEquals(AUDIENCE, r.getClient());
+        assertEquals("urn:ietf:params:oauth:token-type:saml2", r.getTokenType());
     }
 
     /** P0-4: a rejection carries a trace id, and never the underlying exception. */
