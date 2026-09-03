@@ -20,7 +20,7 @@
         <jena.version>6.2.0</jena.version>
         <!-- Versions of libraries Keycloak also ships, where its copy is good enough for Jena and the
              dependency can simply be `provided`. Re-check on a Keycloak upgrade. -->
-        <jspecify.version>1.0.0</jspecify.version>
+        <jspecify.version>1.0.1</jspecify.version>
         <slf4j.version>2.0.18</slf4j.version>
         <jakarta-json.version>2.0.1</jakarta-json.version>
         <!-- Base package for relocated third-party code (see the shade plugin below). -->
@@ -30,7 +30,7 @@
              nearest-wins tie-break silently prefers Keycloak's older copy. -->
         <titanium.version>1.7.0</titanium.version>
         <caffeine.version>3.2.4</caffeine.version>
-        <commons-collections4.version>4.5.0</commons-collections4.version>
+        <commons-collections4.version>4.6.0</commons-collections4.version>
     </properties>
 
     <!-- ==================================================================================== -->
@@ -123,7 +123,7 @@
         <dependency>
             <groupId>org.jboss.logging</groupId>
             <artifactId>jboss-logging</artifactId>
-            <version>3.6.2.Final</version>
+            <version>3.6.3.Final</version>
             <scope>provided</scope>
         </dependency>
 
@@ -208,7 +208,7 @@
         <dependency>
             <groupId>commons-codec</groupId>
             <artifactId>commons-codec</artifactId>
-            <version>1.20.0</version>
+            <version>1.22.1</version>
         </dependency>
 
         <!-- ============================================================== -->
@@ -258,7 +258,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.13.0</version>
+                <version>3.16.0</version>
             </plugin>
 
             <!-- forceCreation matters here. The shade plugin replaces target/lws-authn-0.1.0.jar with
@@ -269,7 +269,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
-                <version>3.4.2</version>
+                <version>3.5.1</version>
                 <configuration>
                     <forceCreation>true</forceCreation>
                 </configuration>
@@ -350,7 +350,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
-                <version>3.5.2</version>
+                <version>3.5.6</version>
                 <executions>
                     <execution>
                         <goals>
@@ -371,7 +371,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
-                <version>3.6.0</version>
+                <version>3.6.2</version>
                 <executions>
                     <execution>
                         <phase>package</phase>
