@@ -10,12 +10,16 @@ package com.ebremer.lws.authn.jose;
 
 import java.nio.charset.StandardCharsets;
 import java.security.PublicKey;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Set;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import org.keycloak.crypto.KeyType;
 import org.keycloak.jose.jws.JWSInput;
+import org.keycloak.representations.JsonWebToken;
 import org.keycloak.util.JsonSerialization;
 
 /**
@@ -92,6 +96,78 @@ public final class JwsChecks {
             return "EdDSA".equals(keyType) || "Ed25519".equals(keyType) || "Ed448".equals(keyType);
         }
         return false;
+    }
+
+    /**
+     * Leeway allowed on {@code exp} and {@code nbf}. All three JWT suites say a verifier "MAY provide
+     * for some small leeway to account for clock skew"; Keycloak's own {@code isActive()} allows 10
+     * seconds on {@code nbf} and none at all on {@code exp}, so a credential could be refused by a
+     * server whose clock ran a second fast. 60 seconds matches what the SAML verifier already applies.
+     */
+    public static final long CLOCK_SKEW_SECONDS = 60;
+
+    /** JOSE {@code typ} values this provider accepts when the header declares one (RFC 8725 §3.11). */
+    private static final Set<String> ACCEPTED_TYPES = Set.of("jwt", "at+jwt", "application/jwt");
+
+    /**
+     * True iff {@code token} is inside its validity window, allowing {@link #CLOCK_SKEW_SECONDS} of
+     * clock skew at both ends.
+     *
+     * <p>An absent or zero {@code exp} is <em>not</em> valid: Keycloak's {@code isActive()} treats a
+     * missing expiry as "never expires", which would make a captured credential replayable forever.</p>
+     */
+    public static boolean withinValidityWindow(JsonWebToken token) {
+        if (token == null) {
+            return false;
+        }
+        Long exp = token.getExp();
+        if (exp == null || exp == 0) {
+            return false;
+        }
+        long now = Instant.now().getEpochSecond();
+        if (now >= exp + CLOCK_SKEW_SECONDS) {
+            return false;
+        }
+        Long notBefore = token.getNbf();
+        return notBefore == null || notBefore == 0 || now >= notBefore - CLOCK_SKEW_SECONDS;
+    }
+
+    /**
+     * True iff the JOSE {@code typ} header is absent or names a JWT.
+     *
+     * <p>RFC 8725 §3.11 recommends explicit typing so a token minted for one purpose cannot be
+     * presented as another. It is only a recommendation, and issuers legitimately omit {@code typ}, so
+     * an absent value is accepted and a <em>wrong</em> one is not.</p>
+     */
+    public static boolean typeIsJwtOrAbsent(String typ) {
+        return typ == null || typ.isBlank() || ACCEPTED_TYPES.contains(typ.trim().toLowerCase(java.util.Locale.ROOT));
+    }
+
+    /**
+     * Keycloak's {@code KeyType} name for a JCA public key.
+     *
+     * <p>Not the same string as {@link PublicKey#getAlgorithm()}: a key built from a JWK by Keycloak's
+     * own {@code JWKParser} reports {@code "ECDSA"}, while Keycloak's signature providers check for
+     * {@code KeyType.EC} ({@code "EC"}) and refuse anything else with "Key with algorithm ES256 and
+     * type ECDSA is incorrect for provider algorithm ES256". Passing the JCA name straight through
+     * therefore made every EC-signed credential unverifiable — which is the algorithm the LWS suites'
+     * own examples use.</p>
+     */
+    public static String keycloakKeyType(PublicKey key) {
+        String algorithm = key == null ? null : key.getAlgorithm();
+        if (algorithm == null) {
+            return null;
+        }
+        if ("RSA".equals(algorithm)) {
+            return KeyType.RSA;
+        }
+        if ("EC".equals(algorithm) || "ECDSA".equals(algorithm)) {
+            return KeyType.EC;
+        }
+        if (algorithm.startsWith("Ed") || "EdDSA".equals(algorithm)) {
+            return KeyType.OKP;
+        }
+        return algorithm;
     }
 
     /** True iff {@code audience} contains {@code expected}. */

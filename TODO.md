@@ -12,10 +12,10 @@ order is roughly "cheapest first".
 failures). Nothing below is a build breakage — these are security, conformance, robustness and
 hygiene gaps.
 
-> ### P0, P1 and P4 are done
+> ### P0, P1, P2 and P4 are done
 >
-> `mvn test` is green at **93 tests** (21 before this work started), and
-> Erich confirmed `mvn verify` — the Testcontainers integration test — passes on a machine with Docker. The changes worth knowing about
+> `mvn clean verify` is green: **114 unit tests** (21 before this work started) and **10** in
+> `LwsAuthIT` against a real Keycloak 26.7.3 container. The changes worth knowing about
 > before reading further:
 >
 > - **The `…/verify` endpoints are now authenticated by default** (`access=bearer`). This is a
@@ -32,10 +32,11 @@ hygiene gaps.
 > - The SAML verifier now checks `<samlp:Status>`, the IdP certificate's own validity, and the bearer
 >   `<SubjectConfirmationData>` (method, `Recipient`, `NotOnOrAfter`).
 >
-> **Integration test:** `mvn clean verify` passes — 93 unit tests plus 8 in `LwsAuthIT`, which deploys
-> the shaded JAR into a real Keycloak 26.7.3 container. It earned its keep on P4: two of its assertions
-> failed on the first run and caught a packaging change that broke Jena's Turtle writer at runtime,
-> which no unit test could have seen.
+> **Integration test:** `mvn clean verify` passes — 114 unit tests plus 10 in `LwsAuthIT`, which deploys
+> the shaded JAR into a real Keycloak 26.7.3 container. It has earned its keep twice: on P4 it caught a
+> packaging change that broke Jena's Turtle writer, and on P2 it found that no EC-signed credential
+> could be verified in any suite. Neither was visible to a unit test — the first needs the real
+> classpath, the second needs Keycloak's crypto providers.
 >
 > P3-1 (a `401` with no `WWW-Authenticate` when a *credential* is invalid) is now more visible than it
 > was: access-control denials send a challenge and credential rejections do not, which is what
@@ -88,6 +89,38 @@ hygiene gaps.
 > - Keycloak 26.7.0 → **26.7.3**, Jena 6.1.0 → **6.2.0**, JUnit 5.11.4 → **5.14.4** (staying on the 5.x
 >   line; JUnit 6 is a separate migration), testcontainers-keycloak → **4.3.1**, bcpkix → **1.85**.
 >   Version references in the docs, scripts and the IT container image were updated to match.
+>
+> ### P2 (all nine items)
+>
+> - **JSON-LD is now processed, not pattern-matched.** The verifiers walked the exact key names this
+>   project emits, so a conforming document from any other implementation — aliased terms, an
+>   `@graph`, a referenced verification method — simply found nothing. Jena's JSON-LD 1.1 reader does
+>   the work now, with contexts served from the JAR so verification makes no outbound context fetch and
+>   does not depend on `w3.org` being up. The old reader stays as a fallback for unbundled contexts.
+> - The `cid/{userId}` endpoints honour `Accept` q-values (they were doing a substring test in a fixed
+>   order, so a client asking for JSON-LD at `q=1.0` got Turtle at `q=0.1`), answer `406` instead of
+>   serving something unasked for, and carry `Vary`, `ETag` and `Cache-Control`.
+> - The WebID user attribute must be an absolute `http(s)` URL or it is refused in favour of the hosted
+>   WebID, since a `sub` nobody can dereference produces a token that looks right and is rejected
+>   everywhere.
+> - 60 seconds of clock skew on `exp`/`nbf`, shared with the SAML verifier so one deployment does not
+>   apply two tolerances; the OpenID CID's service entry is named rather than a blank node; and the
+>   JOSE `typ` header is rejected when present and wrong (absent is still fine — issuers omit it).
+> - Replay detection exists but is **off by default**, which is the point of the item rather than a
+>   shortcut: a verify endpoint is asked about the same live credential on every request that carries
+>   it, so refusing a second look would break the primary use. See `ReplayCache`.
+>
+> **Two bugs the new integration test found, both older than P2.** `LwsAuthIT` now drives a JSON-LD
+> document served by a third party, which is the first time the self-signed-CID *verify* path had ever
+> run inside Keycloak:
+>
+> - **No EC-signed credential could be verified, in any suite.** The verifiers passed the JCA key
+>   algorithm (`ECDSA`) where Keycloak wants its own `KeyType` (`EC`), so its signature provider
+>   refused the key. ES256 is the algorithm every LWS suite example uses. Only RSA worked, which is why
+>   the OpenID path passed and nothing else was exercised.
+> - **A bodiless response became a 500.** Keycloak's `DefaultSecurityHeadersProvider` rejects any
+>   response with no content type, so the new `406` — and the pre-existing `404` for an unknown user —
+>   arrived as `unknown_error`.
 >
 > **Behaviour that got stricter.** Credentials that used to verify and now will not: an ID Token with
 > no `azp`; a self-issued JWT with no `iat` or no `kid`; a controlled identifier document whose `id`
@@ -345,7 +378,7 @@ Facts from those documents that shape the items below:
 
 ## P2 — Specification conformance: SHOULD-level, interop and privacy
 
-- [ ] **P2-1 · JSON-LD is pattern-matched, not processed.**
+- [x] **P2-1 · JSON-LD is pattern-matched, not processed.**
   `openid/verify/LWSCredentialVerifier.java:214-239` and
   `ssicid/verify/SelfSignedCidVerifier.java:187-205` understand only the compact shape this project
   itself emits. A conforming CID using `@graph`, term aliases, or an extra context will not verify — an
@@ -357,45 +390,45 @@ Facts from those documents that shape the items below:
   through Jena RIOT with a **bundled local copy** of `https://www.w3.org/ns/cid/v1` (never fetched at
   verify time); keep the compact reader as a fallback. Then fix the stale comment.
 
-- [ ] **P2-2 · Content negotiation on the CID endpoints ignores q-values.**
+- [x] **P2-2 · Content negotiation on the CID endpoints ignores q-values.**
   `openid/resource/LWSResourceProvider.java:130-145` and
   `ssicid/resource/SsiCidResourceProvider.java:137-152` do a plain substring match, so
   `Accept: application/ld+json;q=1.0, text/turtle;q=0.1` returns Turtle. An unsatisfiable `Accept`
   silently yields JSON-LD instead of 406.
   **Do:** use JAX-RS `Request.selectVariant(...)` (or parse q-values) and return 406 when nothing matches.
 
-- [ ] **P2-3 · No `Vary: Accept` on the content-negotiated CID responses.** A shared cache will serve one
+- [x] **P2-3 · No `Vary: Accept` on the content-negotiated CID responses.** A shared cache will serve one
   client's Turtle to another that asked for JSON-LD. Add the header.
 
-- [ ] **P2-4 · No `Cache-Control` / `ETag` on CID responses.** Both suite drafts' privacy sections
+- [x] **P2-4 · No `Cache-Control` / `ETag` on CID responses.** Both suite drafts' privacy sections
   encourage verifiers to *"cache controlled identifier documents to reduce … metadata leakage"*, but the
   served documents give a cache nothing to work with.
   **Do:** emit a configurable `Cache-Control: public, max-age=…` plus a strong `ETag`, and honour
   `If-None-Match`.
 
-- [ ] **P2-5 · The WebID user attribute is trimmed but never validated as an absolute URI.**
+- [x] **P2-5 · The WebID user attribute is trimmed but never validated as an absolute URI.**
   `openid/LWSSubMapper.java:137-160`. Core §4.1 requires the subject to be a URI; a value like
   `alice@example.org` becomes a `sub` no verifier can dereference.
   **Do:** validate with `java.net.URI` (absolute, `http`/`https`); on failure log a warning and fall back
   to the hosted WebID rather than issuing an unusable credential.
 
-- [ ] **P2-6 · Give the OpenID CID's service map an `id`.**
+- [x] **P2-6 · Give the OpenID CID's service map an `id`.**
   `openid/cid/ControlledIdentifierDocument.java:61` uses a blank node. CID 1.0 makes service `id`
   OPTIONAL, so this is **not** a violation — but naming it (`<webid>#openid-provider`) makes the document
   addressable and matches what most CID consumers expect.
 
-- [ ] **P2-7 · No clock-skew allowance on `exp`.** Verified: `JsonWebToken.isActive()` calls
+- [x] **P2-7 · No clock-skew allowance on `exp`.** Verified: `JsonWebToken.isActive()` calls
   `isActive(10)`, which applies 10 s of leeway to `nbf` only; `exp` is compared exactly. All three JWT
   suites say *"Implementers MAY provide for some small leeway to account for clock skew."*
   **Do:** add a small configurable skew — the SAML verifier already uses ±60 s
   (`saml/verify/SamlCredentialVerifier.java:44`); make the two consistent.
 
-- [ ] **P2-8 · No replay protection.** No suite mandates it, but nothing prevents an intercepted
+- [x] **P2-8 · No replay protection.** No suite mandates it, but nothing prevents an intercepted
   credential being replayed at every verifier until `exp`.
   **Do:** consider a bounded, TTL'd per-realm `jti` cache for the two self-issued suites, reported as a
   `jtiSeen` check.
 
-- [ ] **P2-9 · The `typ` header is not checked** (RFC 8725 §3.11). Low risk here because each endpoint is
+- [x] **P2-9 · The `typ` header is not checked** (RFC 8725 §3.11). Low risk here because each endpoint is
   suite-specific, but recording it in the result costs nothing.
 
 ---

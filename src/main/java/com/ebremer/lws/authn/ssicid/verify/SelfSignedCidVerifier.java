@@ -48,6 +48,7 @@ import org.keycloak.representations.JsonWebToken;
 import org.keycloak.util.JsonSerialization;
 
 import com.ebremer.lws.authn.ssicid.SsiCidConstants;
+import com.ebremer.lws.authn.verify.ReplayCache;
 
 /**
  * @author Erich Bremer
@@ -57,9 +58,21 @@ public class SelfSignedCidVerifier {
     private static final Logger log = Logger.getLogger(SelfSignedCidVerifier.class);
 
     private final KeycloakSession session;
+    private final ReplayCache replayCache;
 
     public SelfSignedCidVerifier(KeycloakSession session) {
+        this(session, null);
+    }
+
+    /**
+     * @param replayCache optional, and normally {@code null}. See {@link ReplayCache}: a verify
+     *                    endpoint is asked about the same live credential repeatedly, so refusing a
+     *                    second look is only correct for a caller that treats one verification as one
+     *                    use.
+     */
+    public SelfSignedCidVerifier(KeycloakSession session, ReplayCache replayCache) {
         this.session = session;
+        this.replayCache = replayCache;
     }
 
     public SsiCidVerificationResult verify(String credential) {
@@ -101,6 +114,13 @@ public class SelfSignedCidVerifier {
             result.check("noUnsupportedCriticalHeaders", critical.isEmpty());
             if (!critical.isEmpty()) {
                 result.error("Credential carries unsupported critical header parameters: " + critical);
+                return result.fail();
+            }
+
+            boolean typeOk = JwsChecks.typeIsJwtOrAbsent(header.getType());
+            result.check("typeIsJwt", typeOk);
+            if (!typeOk) {
+                result.error("Credential 'typ' header is not a JWT type");
                 return result.fail();
             }
 
@@ -175,7 +195,7 @@ public class SelfSignedCidVerifier {
             KeyWrapper keyWrapper = new KeyWrapper();
             keyWrapper.setKid(header.getKeyId());
             keyWrapper.setAlgorithm(alg);
-            keyWrapper.setType(publicKey.getAlgorithm());
+            keyWrapper.setType(JwsChecks.keycloakKeyType(publicKey));
             keyWrapper.setUse(KeyUse.SIG);
             keyWrapper.setPublicKey(publicKey);
 
@@ -191,7 +211,7 @@ public class SelfSignedCidVerifier {
             // isActive() treats a missing exp as "never expires", which would let a captured
             // self-issued JWT be replayed forever ('aud' bounds where it may be used, not for how long).
             Long exp = token.getExp();
-            boolean notExpired = exp != null && exp != 0 && token.isActive();
+            boolean notExpired = JwsChecks.withinValidityWindow(token);
             result.check("notExpired", notExpired);
             if (!notExpired) {
                 result.error(exp == null || exp == 0
@@ -227,6 +247,15 @@ public class SelfSignedCidVerifier {
                 }
             }
 
+            if (replayCache != null) {
+                boolean firstSighting = replayCache.firstSighting(iss, token.getId());
+                result.check("notReplayed", firstSighting);
+                if (!firstSighting) {
+                    result.error("Credential 'jti' has already been verified within the replay window");
+                    return result.fail();
+                }
+            }
+
             result.setValid(result.getErrors().isEmpty());
         } catch (Exception e) {
             // Never echo the exception to the caller: it can name internal hosts, ports and library
@@ -257,9 +286,18 @@ public class SelfSignedCidVerifier {
             }
             String contentType = response.getFirstHeader("Content-Type");
             String body = response.asString();
-            List<VerificationMethod> methods = RdfParsing.isJsonLd(contentType, body)
-                    ? collectFromJsonLd(body, sub)
-                    : collectFromRdf(RdfParsing.parseRdf(body, contentType, sub), sub);
+            // Processed as real JSON-LD where possible, so a conforming document from another
+            // implementation works regardless of how it spells things; the compact reader remains for
+            // a document naming a context this provider does not bundle.
+            Model model = RdfParsing.parse(body, contentType, sub);
+            List<VerificationMethod> methods;
+            if (model != null) {
+                methods = collectFromRdf(model, sub);
+            } else {
+                log.debugf("[%s] sub <%s> is JSON-LD this provider cannot process; reading the compact shape",
+                        result.getTraceId(), sub);
+                methods = collectFromJsonLd(body, sub);
+            }
             OutboundHttp.recordSuccess(sub);
             result.check("subjectDereferenced", true);
             result.check("subjectIdMatches", true);

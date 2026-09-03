@@ -51,6 +51,11 @@ public final class ControlledIdentifierDocument {
         this.issuer = issuer;
     }
 
+    /** The identifier of this document's OpenID Provider service entry. */
+    private String serviceId() {
+        return id + "#openid-provider";
+    }
+
     /** Builds the RDF graph of this controlled identifier document. */
     public Model toModel() {
         Model model = ModelFactory.createDefaultModel();
@@ -58,7 +63,10 @@ public final class ControlledIdentifierDocument {
         Property serviceEndpoint = model.createProperty(LWSConstants.DID_SERVICE_ENDPOINT);
 
         Resource subject = model.createResource(id);
-        Resource svc = model.createResource(); // blank node, matching the specification's example
+        // Named rather than a blank node: CID 1.0 makes a service `id` OPTIONAL, so this is not a
+        // conformance fix, but a named service is addressable and is the shape most CID consumers
+        // expect. A blank node cannot be referred to from anywhere else in the document.
+        Resource svc = model.createResource(serviceId());
         svc.addProperty(RDF.type, model.createResource(LWSConstants.OPENID_PROVIDER_TYPE));
         svc.addProperty(serviceEndpoint, model.createResource(issuer));
         subject.addProperty(service, svc);
@@ -79,6 +87,7 @@ public final class ControlledIdentifierDocument {
      */
     public String toJsonLd() {
         Map<String, Object> svc = new LinkedHashMap<>();
+        svc.put("id", serviceId());
         svc.put("type", LWSConstants.OPENID_PROVIDER_TYPE);
         svc.put("serviceEndpoint", issuer);
 

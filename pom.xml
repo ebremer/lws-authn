@@ -183,6 +183,15 @@
             <artifactId>jena-arq</artifactId>
             <version>${jena.version}</version>
         </dependency>
+        <!-- Titanium is Jena's JSON-LD 1.1 engine. Declared directly because RdfParsing and
+             LocalJsonLdContexts name its types (JsonLdOptions, DocumentLoader) to install a loader that
+             serves contexts from this JAR instead of fetching them. Relocated by the shade plugin, so
+             these references are rewritten along with Jena's. -->
+        <dependency>
+            <groupId>com.apicatalog</groupId>
+            <artifactId>titanium-json-ld</artifactId>
+            <version>${titanium.version}</version>
+        </dependency>
         <!-- Declared explicitly because it is easy to mistake for a Testcontainers leak: Maven prints a
              resolved node once, under whichever path won, and commons-compress is reachable through the
              test tree as well. It is not optional. jena-base declares it, and Jena's IndentedWriter

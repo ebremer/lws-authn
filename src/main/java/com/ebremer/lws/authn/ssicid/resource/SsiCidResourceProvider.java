@@ -12,7 +12,6 @@ package com.ebremer.lws.authn.ssicid.resource;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.ws.rs.Consumes;
@@ -27,6 +26,7 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
 import org.apache.jena.riot.RDFFormat;
+import com.ebremer.lws.authn.rdf.RdfContentNegotiation;
 import org.jboss.logging.Logger;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
@@ -76,11 +76,23 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
     @Path(SsiCidConstants.CID_PATH + "/{userId}")
     @Produces({SsiCidConstants.JSON_LD, SsiCidConstants.TURTLE, SsiCidConstants.N_TRIPLES, SsiCidConstants.RDF_XML})
     public Response getControlledIdentifierDocument(@PathParam("userId") String userId,
-                                                    @HeaderParam("Accept") String accept) {
+                                                    @HeaderParam("Accept") String accept,
+                                                    @HeaderParam("If-None-Match") String ifNoneMatch) {
+        // Negotiated before anything is looked up: if we cannot serve a syntax the client accepts,
+        // there is nothing useful to do with the user record.
+        String contentType = RdfContentNegotiation.best(accept);
+        if (contentType == null) {
+            return notAcceptable();
+        }
         RealmModel realm = session.getContext().getRealm();
         UserModel user = session.users().getUserById(realm, userId);
         if (user == null) {
-            return Response.status(Response.Status.NOT_FOUND).build();
+            // Typed for the same reason as the 406 above: Keycloak rejects a response with no content
+            // type and returns 500 instead.
+            return Response.status(Response.Status.NOT_FOUND)
+                    .entity("{\"error\":\"not_found\"}")
+                    .type(MediaType.APPLICATION_JSON)
+                    .build();
         }
 
         String issuer = Urls.realmIssuer(session.getContext().getUri(UrlType.FRONTEND).getBaseUri(), realm.getName());
@@ -109,14 +121,13 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
 
         SelfSignedControlledIdentifierDocument cid = new SelfSignedControlledIdentifierDocument(webId, jwks);
 
-        String contentType = negotiate(accept);
         String body = switch (contentType) {
             case SsiCidConstants.TURTLE -> cid.toRdf(RDFFormat.TURTLE);
             case SsiCidConstants.N_TRIPLES -> cid.toRdf(RDFFormat.NTRIPLES);
             case SsiCidConstants.RDF_XML -> cid.toRdf(RDFFormat.RDFXML);
             default -> cid.toJsonLd();
         };
-        return Response.ok(body, contentType).build();
+        return serve(contentType, body, ifNoneMatch);
     }
 
     /**
@@ -160,20 +171,37 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
         }
     }
 
-    private static String negotiate(String accept) {
-        if (accept == null || accept.isBlank()) {
-            return SsiCidConstants.JSON_LD;
-        }
-        String a = accept.toLowerCase(Locale.ROOT);
-        if (a.contains(SsiCidConstants.TURTLE)) {
-            return SsiCidConstants.TURTLE;
-        }
-        if (a.contains(SsiCidConstants.N_TRIPLES)) {
-            return SsiCidConstants.N_TRIPLES;
-        }
-        if (a.contains(SsiCidConstants.RDF_XML)) {
-            return SsiCidConstants.RDF_XML;
-        }
-        return SsiCidConstants.JSON_LD;
+    /**
+     * Serves a negotiated representation with the cache headers a controlled identifier document
+     * should carry. {@code Vary: Accept} because the body depends on it; an {@code ETag} and
+     * {@code Cache-Control} because both suite drafts encourage verifiers to cache these documents "to
+     * reduce unnecessary network requests and the associated metadata leakage", which they can only do
+     * if the server says how.
+     */
+    private static Response serve(String contentType, String body, String ifNoneMatch) {
+        String entityTag = RdfContentNegotiation.entityTag(body);
+        Response.ResponseBuilder response = RdfContentNegotiation.matches(ifNoneMatch, entityTag)
+                ? Response.notModified(entityTag)
+                : Response.ok(body, contentType).tag(entityTag);
+        return response
+                .header("Vary", "Accept")
+                .header("Cache-Control", "public, max-age=" + RdfContentNegotiation.CACHE_SECONDS)
+                .build();
+    }
+
+    /**
+     * 406 naming the syntaxes on offer, rather than silently serving one that was not asked for.
+     *
+     * <p>Carries a body deliberately: Keycloak's {@code DefaultSecurityHeadersProvider} logs
+     * "MediaType not set" and turns any response without a content type into a 500, so an empty 406
+     * never reaches the client as a 406.</p>
+     */
+    private static Response notAcceptable() {
+        return Response.status(Response.Status.NOT_ACCEPTABLE)
+                .entity("{\"error\":\"not_acceptable\",\"supported\":[\""
+                        + String.join("\",\"", RdfContentNegotiation.SUPPORTED) + "\"]}")
+                .type(MediaType.APPLICATION_JSON)
+                .header("Vary", "Accept")
+                .build();
     }
 }
