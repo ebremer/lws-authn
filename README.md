@@ -104,6 +104,27 @@ Getting this wrong does not fail a unit test: it fails when Jena loads inside Ke
 runs `LwsAuthIT`, which deploys the shaded JAR into a real Keycloak container and exercises RDF
 serving, parsing and SPARQL — run it after touching dependencies.
 
+### Tests
+
+`mvn test` runs 144 unit tests. `mvn verify` additionally runs 23 in `LwsAuthIT`, which needs Docker
+and is skipped without it.
+
+**`LwsAuthIT` binds host port 8080 and cannot run in parallel with itself.** The OpenID verifier
+dereferences its own issuer, so that URL has to resolve to Keycloak both from the test JVM and from
+inside the container, and `http://localhost:8080` bound straight through is the only spelling that
+does. The suite checks the port first and says so rather than timing out; the reasoning, and why a
+random port is not worth what it costs, is in the `LwsAuthIT` class javadoc.
+
+Roughly half the integration tests assert a *rejection* rather than an acceptance. That is deliberate:
+a verifier that wrongly rejects gets reported by its users, and one that wrongly accepts does not, so
+the failure branches are where a bug goes unnoticed. A host-side fixture server plays a third-party
+OpenID Provider — controlled identifier document, discovery document, JWKS — and each test breaks
+exactly one of the three, asserting *which* check fails rather than merely that the credential was
+refused.
+
+CI (`.github/workflows/ci.yml`) runs that on JDK 21, builds again on JDK 25 and asserts the class files
+are still Java 21, and runs CodeQL. Actions are pinned by commit SHA; Dependabot proposes the bumps.
+
 ## Deploy
 
 Keycloak loads provider JARs from its `providers/` directory.

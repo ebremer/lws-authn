@@ -1,0 +1,32 @@
+# Dependabot keeps the two things CI cannot check for itself up to date: the Maven dependencies that
+# end up inside the shaded provider JAR, and the pinned action SHAs in .github/workflows.
+#
+# The action pins in particular need this. Pinning by commit SHA is what stops a moved tag running
+# unreviewed code, but it also means a security fix in an action never arrives on its own — the pin has
+# to be bumped deliberately, and this is what proposes the bump.
+version: 2
+updates:
+  - package-ecosystem: maven
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for the routine version drift, so a genuinely interesting update is not buried in it.
+      # Keycloak is excluded: this provider is compiled against a specific server version and the
+      # integration test pins the matching container image, so moving it is a decision, not an update.
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+        exclude-patterns:
+          - "org.keycloak:*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - "*"

@@ -12,7 +12,7 @@ order is roughly "cheapest first".
 failures). Nothing below is a build breakage — these are security, conformance, robustness and
 hygiene gaps.
 
-> ### P0, P1, P2, P3 and P4 are done
+> ### P0, P1, P2, P3, P4 and P5 are done
 >
 > More precisely: every item those bands contained **at review time**. Three items were added
 > afterwards and are still open — **P0-10** (the live deployment still runs pre-P0 code), **P4-7**
@@ -20,7 +20,7 @@ hygiene gaps.
 > priority item in this file: it is the only one with consequences outside the repository. **P1-C6**
 > was checked off in the P1 pass without its fix being made; P3-3 finished it, and its entry now says so.
 >
-> `mvn clean verify` is green: **139 unit tests** (21 before this work started) and **12** in
+> `mvn clean verify` is green: **144 unit tests** (21 before this work started) and **23** in
 > `LwsAuthIT` against a real Keycloak 26.7.3 container. The changes worth knowing about
 > before reading further:
 >
@@ -64,6 +64,21 @@ hygiene gaps.
 >   half to P3-3: every published method now has the `id` CID 1.0 requires.
 > - An unrecognised `Content-Type` on a dereferenced document is refused by name instead of being fed
 >   to the Turtle parser.
+>
+> ### P5 (all five items)
+>
+> - **`LwsAuthIT` went from 10 tests to 23**, and roughly half of the new ones assert a *rejection*.
+>   The host-side server is now a general fixture server, and an `OpenIdFixture` stands up a complete
+>   third-party OpenID Provider from it so each test can break exactly one document — a discovery
+>   `issuer` mismatch, an absent `jwks_uri`, a JWKS with no matching `kid`, `HS256` against an RSA key,
+>   a subject that declares no provider, a token minted for another relying party.
+> - **`assertRejected` names the check that must fail.** An assertion that only looked at
+>   `valid: false` keeps passing once the branch it was written for stops being reachable.
+> - **The port-8080 constraint is documented where it cannot be missed** and now fails fast with the
+>   reason, instead of surfacing as a two-minute container-start timeout.
+> - **CI is hardened:** a least-privilege `permissions:` block, every action pinned by commit SHA,
+>   CodeQL, `dependency-review-action` on pull requests, Dependabot for the bumps that SHA pinning
+>   would otherwise freeze, SBOM upload, and a JDK 25 job that asserts the class files are still Java 21.
 >
 > ### P1 (all 19 items)
 >
@@ -639,63 +654,85 @@ Facts from those documents that shape the items below:
 
 ## P5 — Tests and CI
 
-- [ ] **P5-1 · The verifiers' *network* half is only ever exercised on the happy path.**
-  *(Rewritten. The original item asked for a `com.sun.net.httpserver.HttpServer` stub so both verifiers
-  could be driven in `mvn test` without Docker. That premise no longer holds — see "why not a unit-level
-  stub" below — but the coverage gap it pointed at is real and has moved.)*
+- [x] **P5-1 · The verifiers' *network* half is only ever exercised on the happy path.**
+  Everything between the outbound fetch and the signature was untested in its failure modes — the
+  direction where a bug is silent, because a verifier that wrongly rejects gets reported and a verifier
+  that wrongly *accepts* does not.
+  **Done, where the item said to do it:** the host-side server already running in `LwsAuthIT` is now a
+  general fixture server (a route map and one catch-all handler, so a test registers whatever documents
+  it needs), and an `OpenIdFixture` stands up a complete third-party OpenID Provider — CID document,
+  discovery document, JWKS — from it. Each negative test breaks exactly one of the three and asserts
+  the verifier notices *that* one thing. `LwsAuthIT` went from 10 tests to 23; the container start is
+  still the whole cost.
+  **`assertRejected` names the check that must fail**, not just `valid: false`: an assertion that only
+  looked at `valid` would keep passing after the branch it was written for stopped being reachable —
+  a fixture that simply failed to load satisfies it. `aThirdPartyOpenIdProviderVerifies` is the control
+  that keeps the negatives honest: the same fixture, unbroken, must verify.
 
-  What is covered now: `LWSCredentialVerifierTest` (6) and `SelfSignedCidVerifierTest` (10) between them
-  cover every claim- and document-level rule that is decided *before* anything is dereferenced, plus the
-  static collectors. `LwsAuthIT` (10) drives both verifiers end to end inside a real Keycloak, including
-  a third-party JSON-LD document served over the Testcontainers host bridge.
+- [x] **P5-2 · Add a negative test for every P0/P1/P2 rule.** The six that were still missing, all on
+  the network half, now exist in `LwsAuthIT`:
+  | Case | Failing check |
+  |---|---|
+  | Discovery declares a different `issuer` | `issuerDiscoveryMatches` |
+  | Configuration has no `jwks_uri` | `jwksResolved` |
+  | JWKS publishes no key matching the token's `kid` | `jwksResolved` |
+  | `HS256` token against the provider's RSA key (algorithm confusion) | `jwksResolved` |
+  | Subject's CID declares no `OpenIdProvider` service | `openIdProviderServiceLocated` |
+  | ID Token minted for another relying party (§3.1.3.7 steps 3–5) | `audienceContainsClient` / `audienceMatched` |
 
-  What is not: everything between the outbound fetch and the signature, in its failure modes. Nothing
-  exercises OpenID Connect Discovery returning a mismatched `issuer`, a configuration with no
-  `jwks_uri`, a JWKS with no key matching the token's `kid`, an `HS256` token against an RSA discovery
-  key (the algorithm-confusion case `algMatchesKey` exists for), a CID that dereferences but declares no
-  `OpenIdProvider` service, or OpenID Connect Core §3.1.3.7 steps 3–5 rejecting a token minted for a
-  different relying party. On the self-signed side: a `controller` that is not the subject, a
-  `publicKeyJwk` published `use: enc`, an `alg` inconsistent with the published key. Each of these is a
-  branch that returns "invalid" — the direction where a bug is silent, because a verifier that wrongly
-  rejects gets reported and a verifier that wrongly *accepts* does not.
+  Plus three the item did not list but the same fixture made cheap: a self-signed-CID method with a
+  foreign `controller` (`verificationMethodFound`), one published `use: enc`, and one whose `alg` is
+  not the token's (`verificationMethodUsableForSigning`).
+  **Worth recording about the HS256 case:** it is refused at *key selection* — `resolveSigningKey`
+  will not return a key whose type cannot produce the declared algorithm — so `algorithmMatchesKey`,
+  which exists for exactly this attack, is never reached. It stays as defence in depth for a future
+  path that selects a key some other way; the test asserts the rejection, not which of the two layers
+  caught it.
 
-  **Why not a unit-level stub, as originally written.** `verify()` needs a `KeycloakSession`: it resolves
-  `SignatureProvider` from it and fetches through it. Driving the full path off-container means mocking
-  a large SPI interface, and what comes back is Keycloak's crypto only by imitation. Both bugs the
-  integration test has caught — Jena's Turtle writer losing `commons-compress`, and no EC-signed
-  credential verifying in any suite — were invisible to unit tests *by construction*: one needed the
-  real shaded classpath, the other needed Keycloak's real signature providers. A stub that mocks the
-  session would have passed both. `OutboundHttpClientTest` already shows where an off-container HTTP
-  stub does pay: for `OutboundHttp` itself, which takes no session.
+- [x] **P5-3 · `LwsAuthIT` pins host port 8080.**
+  **Done: documented prominently, which is the option this item offered first, and made to fail
+  usefully.** The constraint is now the `LwsAuthIT` class javadoc rather than a comment halfway down
+  `startKeycloak`, and it explains the *reason* — the OpenID verifier dereferences its own issuer, so
+  the issuer URL has to resolve to Keycloak from both this JVM and inside the container, and
+  `http://localhost:8080` bound straight through is the only spelling that does. `requirePort8080()`
+  probes the port before the container starts and throws with that explanation, instead of letting the
+  symptom be a two-minute health-check timeout.
+  **Why not the random port.** `ExtendableKeycloakContainer` hardcodes 8080 in three places — the
+  exposed port, the HTTP wait strategy and the log-wait regex — so moving Keycloak's own port means
+  replacing all three and owning startup detection. That trades a loud, immediate, obviously-fixable
+  failure for a subtle flaky one. The javadoc records this so the next reader does not rediscover it.
+  The suite still cannot run in parallel with itself; that is stated too.
 
-  **Do:** extend the host-side server already running in `LwsAuthIT` (`startCidServer`) to serve
-  deliberately broken documents and discovery responses, and add the negative cases there. The container
-  start is the ~28 s; each additional case costs a fraction of a second, so this is close to free in
-  wall-clock and runs against the real classpath and the real crypto. Fold P5-2's list into the same
-  pass rather than duplicating it.
+- [x] **P5-4 · `LwsAuthIT` never asserts a rejection.** Every suite now has at least one, so a verifier
+  that degrades to "accept everything" fails CI: OpenID (six cases above), self-signed CID (three),
+  `did:key` (a token signed by a key the DID does not name → `signatureValid`), and SAML (a Response
+  that does not verify against a supplied certificate). P3-1's
+  `anInvalidCredentialIsTwoHundredWithValidFalse` covers all four again at the HTTP level.
 
-- [ ] **P5-2 · Add a negative test for every P0/P1/P2 rule.** Partly done: `alg: none`, missing `iat`,
-  missing `azp`, missing `kid`, non-empty `crit`, CID `id ≠ sub`, wrong `controller`, non-canonical
-  `did:key`, expired IdP certificate, `StatusCode != Success`, missing `Recipient`, missing `<Issuer>`,
-  a `publicKeyJwk` containing `d`, and a non-matching `aud` all have tests now.
-  Still missing, and all of them on the network half: HS256 confusion against an RSA key, `use: enc` on
-  the selected verification method, discovery `issuer` mismatch, absent `jwks_uri`, no JWK matching the
-  `kid`, and §3.1.3.7 steps 3–5. **Do these in the P5-1 pass** — they need the same fixture, and the
-  point of both items is the same: the "invalid" branches are where a wrong answer goes unnoticed.
-
-- [ ] **P5-3 · `LwsAuthIT` pins host port 8080** (`src/test/.../LwsAuthIT.java:71`) because the OpenID
-  verifier dereferences its own issuer from inside the container. The suite therefore fails whenever
-  anything else holds the port, and cannot run in parallel.
-  **Do:** document the constraint prominently, or use a random port plus a container-visible hostname
-  alias so the issuer URL resolves identically on both sides.
-
-- [ ] **P5-4 · `LwsAuthIT` never asserts a rejection.** Every assertion is "valid: true". Add at least one
-  negative case per suite, so a verifier that degrades to "accept everything" fails CI.
-
-- [ ] **P5-5 · CI hardening.** `.github/workflows/ci.yml` has no `permissions:` block, pins actions by tag
-  rather than commit SHA, and runs no dependency/vulnerability scan, SBOM upload or CodeQL. It also
-  builds only on JDK 21 while development here happens on JDK 25 — add a second job that builds on 25 and
-  asserts the class-file version is still 21.
+- [x] **P5-5 · CI hardening.** `.github/workflows/ci.yml` had no `permissions:` block, pinned actions by
+  tag, ran no scanning, and built only on JDK 21.
+  **Done:**
+  - A top-level `permissions: contents: read`, with `security-events: write` granted only to the CodeQL
+    job. Without the block a workflow inherits the repository default, which for an older repository is
+    often read-write on everything.
+  - **Every action pinned by commit SHA**, with the release recorded in a trailing comment. A tag is a
+    mutable pointer: whoever controls the action repository can move `v4` at any time and every
+    workflow referencing it runs the new code on the next build, unreviewed.
+  - **CodeQL** (`java-kotlin`, `security-and-quality`) as its own job, building explicitly rather than
+    via autobuild so it does not re-run the tests.
+  - **`dependency-review-action`** gating pull requests at `fail-on-severity: high`, plus
+    **`.github/dependabot.yml`** for the continuous half — weekly Maven and github-actions updates.
+    Dependabot matters more than usual here precisely *because* the actions are SHA-pinned: a pin is
+    what stops a moved tag, but it also means a security fix in an action never arrives on its own.
+    Keycloak is excluded from the grouped updates — this provider is compiled against a specific server
+    version and the IT pins the matching container image, so moving it is a decision, not an update.
+  - **A JDK 25 job** that builds and then reads the class-file version back out of `target/classes`,
+    failing unless it is 65 (Java 21). Development happens on 25 while the artifact targets 21, and
+    `maven.compiler.release` silently not applying is exactly the kind of regression that would
+    otherwise surface as a `LinkageError` inside a customer's Keycloak.
+  - The **SBOM the build already produces** (`cyclonedx-maven-plugin`, bound to `package` since P4) is
+    now uploaded per build, so what shipped can be matched against an advisory later without rebuilding
+    the commit.
 
 ---
 

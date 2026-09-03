@@ -5,27 +5,132 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Least privilege by default: every job below that needs more says so itself. Without this block a
+# workflow inherits whatever the repository default is, which for an older repository is often
+# read-write on everything — so a compromised action, or a compromised dependency of one, would hold a
+# token that can push to the default branch.
+permissions:
+  contents: read
+
+# Actions are pinned by commit SHA, not by tag. A tag is a mutable pointer: whoever controls the action
+# repository can move `v4` to any commit at any time, and every workflow that referenced it runs the
+# new code on the next build with no review and no signal. The trailing comment records which release
+# each SHA was, so the pin can be read and bumped deliberately.
+
 jobs:
   build-and-integration-test:
+    name: Build + integration test (JDK 21)
     runs-on: ubuntu-latest   # GitHub-hosted runners include Docker, which the integration test needs
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
         with:
           distribution: temurin
           java-version: '21'
           cache: maven
 
-      # `mvn verify` packages the shaded provider JAR, then the Failsafe plugin runs LwsAuthIT,
-      # which deploys that JAR into a real Keycloak 26.7.3 container and exercises every suite.
+      # `mvn verify` packages the shaded provider JAR, then the Failsafe plugin runs LwsAuthIT, which
+      # deploys that JAR into a real Keycloak 26.7.3 container and exercises every suite. LwsAuthIT
+      # binds host port 8080 — see its class javadoc — which is free on a hosted runner.
       - name: Build and run integration tests
         run: mvn -B -ntp verify
 
       - name: Upload provider JAR
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: lws-authn-jar
           path: target/lws-authn-0.1.0.jar
+
+      # The CycloneDX SBOM the build already produces (cyclonedx-maven-plugin, bound to `package`), kept
+      # per build so what actually shipped can be matched against an advisory later without having to
+      # rebuild this commit.
+      - name: Upload SBOM
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lws-authn-sbom
+          path: target/bom.*
+
+  # Development happens on JDK 25 while the artifact targets 21, so the toolchain that most builds use
+  # is not the one most edits are made under. This job closes that gap: it builds on 25 and then reads
+  # the class-file version back out of the JAR, because `maven.compiler.release` silently doing nothing
+  # is exactly the kind of regression that only shows up as a LinkageError inside Keycloak.
+  build-on-jdk-25:
+    name: Build on JDK 25, targeting 21
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      # Unit tests only: the integration test is covered by the JDK 21 job, and running two Keycloak
+      # containers per push buys nothing.
+      - name: Build
+        run: mvn -B -ntp package -DskipITs
+
+      - name: Assert the class files are still Java 21
+        run: |
+          set -euo pipefail
+          version=$(javap -verbose -cp target/classes com.ebremer.lws.authn.openid.LWSConstants \
+                    | awk '/major version:/ { print $3 }')
+          echo "class-file major version: $version"
+          if [ "$version" != "65" ]; then
+            echo "::error::Expected class-file major version 65 (Java 21), got $version." \
+                 "maven.compiler.release is not being honoured, and the JAR will not load in a" \
+                 "Keycloak running on 21."
+            exit 1
+          fi
+
+  # Static analysis for the vulnerability classes a test suite does not look for. Java only; the build
+  # is explicit rather than autobuild so it does not re-run the tests.
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # to upload the SARIF results
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@3c3833e0f8c1c83d449a7478aa59c036a9165498 # v3.29.11
+        with:
+          languages: java-kotlin
+          queries: security-and-quality
+
+      - name: Build for analysis
+        run: mvn -B -ntp compile -DskipTests
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@3c3833e0f8c1c83d449a7478aa59c036a9165498 # v3.29.11
+
+  # Blocks a pull request that introduces a dependency with a known advisory. Pull requests only —
+  # it diffs the dependency graph against the base branch, so there is nothing for it to do on a push.
+  # Continuous alerts for dependencies already on the default branch come from Dependabot instead
+  # (.github/dependabot.yml).
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@da24556b548a50705dd671f47852072ea4c105d9 # v4.7.1
+        with:
+          fail-on-severity: high
