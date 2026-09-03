@@ -30,6 +30,7 @@ import org.keycloak.util.JsonSerialization;
 import com.ebremer.lws.authn.jose.JwsChecks;
 import com.ebremer.lws.authn.ssididkey.DidKey;
 import com.ebremer.lws.authn.ssididkey.DidKeyConstants;
+import com.ebremer.lws.authn.verify.ReplayCache;
 import com.ebremer.lws.authn.verify.Trace;
 
 /**
@@ -38,6 +39,19 @@ import com.ebremer.lws.authn.verify.Trace;
 public class SelfSignedDidKeyVerifier {
 
     private static final Logger log = Logger.getLogger(SelfSignedDidKeyVerifier.class);
+
+    private final ReplayCache replayCache;
+
+    public SelfSignedDidKeyVerifier() {
+        this(null);
+    }
+
+    /**
+     * @param replayCache optional, and normally {@code null} — see {@link ReplayCache}.
+     */
+    public SelfSignedDidKeyVerifier(ReplayCache replayCache) {
+        this.replayCache = replayCache;
+    }
 
     public DidKeyVerificationResult verify(String credential) {
         return verify(credential, null);
@@ -77,6 +91,13 @@ public class SelfSignedDidKeyVerifier {
             result.check("noUnsupportedCriticalHeaders", critical.isEmpty());
             if (!critical.isEmpty()) {
                 result.error("Credential carries unsupported critical header parameters: " + critical);
+                return result.fail();
+            }
+
+            boolean typeOk = JwsChecks.typeIsJwtOrAbsent(header.getType());
+            result.check("typeIsJwt", typeOk);
+            if (!typeOk) {
+                result.error("Credential 'typ' header is not a JWT type");
                 return result.fail();
             }
 
@@ -127,7 +148,7 @@ public class SelfSignedDidKeyVerifier {
             // 5. expiry + audience. Require 'exp' explicitly: Keycloak's isActive() treats a missing
             // exp as "never expires", which would make a captured credential replayable forever.
             Long exp = token.getExp();
-            boolean notExpired = exp != null && exp != 0 && token.isActive();
+            boolean notExpired = JwsChecks.withinValidityWindow(token);
             result.check("notExpired", notExpired);
             if (!notExpired) {
                 result.error(exp == null || exp == 0
@@ -156,6 +177,15 @@ public class SelfSignedDidKeyVerifier {
                 result.check("audienceMatched", audienceMatched);
                 if (!audienceMatched) {
                     result.error("Credential 'aud' does not include the target audience <" + expectedAudience + ">");
+                    return result.fail();
+                }
+            }
+
+            if (replayCache != null) {
+                boolean firstSighting = replayCache.firstSighting(iss, token.getId());
+                result.check("notReplayed", firstSighting);
+                if (!firstSighting) {
+                    result.error("Credential 'jti' has already been verified within the replay window");
                     return result.fail();
                 }
             }

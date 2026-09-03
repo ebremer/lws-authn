@@ -366,9 +366,19 @@ variable `LWS_AUTHN_VERIFY_ACCESS=public`.
 - **`frontendUrl`.** Derived identifiers and served documents are built from the realm front-end URL;
   set it (or run behind a stable hostname) so they stay consistent and publicly dereferenceable.
 - **Verifier networking & syntaxes.** OpenID/self-signed-CID verification dereferences `sub` (and, for
-  OpenID, performs Discovery). Verifiers request Turtle first; Turtle / N-Triples / RDF/XML are parsed
-  with Jena RIOT, JSON-LD is interpreted directly for the standardized CID shape (exotic framings are
-  not expanded).
+  OpenID, performs Discovery). Verifiers request Turtle first. Turtle / N-Triples / RDF/XML are parsed
+  with Jena RIOT, and **JSON-LD is processed properly** — Jena's JSON-LD 1.1 reader — so a conforming
+  controlled identifier document verifies whatever shape it is written in: aliased terms, an
+  `@graph` wrapper, referenced rather than embedded verification methods, additional contexts.
+  - Contexts are resolved from **copies bundled in the JAR**, never fetched. A JSON-LD processor left
+    to itself would request every `@context` URL a credential's document names — an unvetted outbound
+    fetch during verification, and a dependency on `w3.org` being reachable for anything to verify at
+    all. A document naming a context this provider does not bundle is refused as unverifiable rather
+    than guessed at; the older key-walking reader remains as a fallback for the compact shape.
+- **Cacheable identity documents.** The `cid/{userId}` endpoints negotiate on `Accept` q-values,
+  answer `406` when nothing on offer is acceptable, and carry `Vary: Accept`, `ETag` and
+  `Cache-Control` so a verifier can cache them — which both suite drafts encourage, "to reduce
+  unnecessary network requests and the associated metadata leakage".
 - **Audience / token exchange.** Every `/verify` endpoint accepts an `audience` parameter (and the
   OpenID one a `client_id`) so the credential can be bound to the party checking it; each result reports
   the LWS `client` and the suite's `tokenType`, ready for an RFC 8693 exchange. Restrict credential

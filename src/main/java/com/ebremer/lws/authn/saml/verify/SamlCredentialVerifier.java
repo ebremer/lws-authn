@@ -45,7 +45,8 @@ public class SamlCredentialVerifier {
 
     private static final Logger log = Logger.getLogger(SamlCredentialVerifier.class);
 
-    private static final long CLOCK_SKEW_SECONDS = 60;
+    /** Shared with the JWT suites, so one deployment does not apply two different tolerances. */
+    private static final long CLOCK_SKEW_SECONDS = com.ebremer.lws.authn.jose.JwsChecks.CLOCK_SKEW_SECONDS;
     private static final String XMLDSIG_NS = "http://www.w3.org/2000/09/xmldsig#";
     private static final String NS = SamlConstants.SAML_ASSERTION_NS;
     private static final String PROTOCOL_NS = SamlConstants.SAML_PROTOCOL_NS;

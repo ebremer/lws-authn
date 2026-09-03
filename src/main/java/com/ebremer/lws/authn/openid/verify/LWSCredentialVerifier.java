@@ -113,6 +113,13 @@ public class LWSCredentialVerifier {
                 return result.fail();
             }
 
+            boolean typeOk = JwsChecks.typeIsJwtOrAbsent(header.getType());
+            result.check("typeIsJwt", typeOk);
+            if (!typeOk) {
+                result.error("ID Token 'typ' header is not a JWT type");
+                return result.fail();
+            }
+
             if (isBlank(sub)) {
                 result.check("subjectPresent", false);
                 result.error("ID Token is missing the 'sub' claim");
@@ -179,7 +186,7 @@ public class LWSCredentialVerifier {
             KeyWrapper keyWrapper = new KeyWrapper();
             keyWrapper.setKid(header.getKeyId());
             keyWrapper.setAlgorithm(alg);
-            keyWrapper.setType(publicKey.getAlgorithm());
+            keyWrapper.setType(JwsChecks.keycloakKeyType(publicKey));
             keyWrapper.setUse(KeyUse.SIG);
             keyWrapper.setPublicKey(publicKey);
 
@@ -196,7 +203,7 @@ public class LWSCredentialVerifier {
             // isActive() treats a missing 'exp' as "never expires", so require it explicitly: a
             // captured ID Token must not be replayable indefinitely.
             Long exp = token.getExp();
-            boolean notExpired = exp != null && exp != 0 && token.isActive();
+            boolean notExpired = JwsChecks.withinValidityWindow(token);
             result.check("notExpired", notExpired);
             if (!notExpired) {
                 result.error(exp == null || exp == 0
@@ -268,9 +275,16 @@ public class LWSCredentialVerifier {
             }
             String contentType = response.getFirstHeader("Content-Type");
             String body = response.asString();
-            Model model = RdfParsing.isJsonLd(contentType, body)
-                    ? modelFromCompactJsonLd(body, sub)
-                    : RdfParsing.parseRdf(body, contentType, sub);
+            // JSON-LD is processed properly (Jena + Titanium, contexts served from this JAR) so a
+            // conforming document verifies whatever shape it is written in. The compact reader stays
+            // as a fallback for a document whose context this provider does not bundle, which is the
+            // only interpretation it can offer without having read the term definitions.
+            Model model = RdfParsing.parse(body, contentType, sub);
+            if (model == null) {
+                log.debugf("[%s] sub <%s> is JSON-LD this provider cannot process; reading the compact shape",
+                        result.getTraceId(), sub);
+                model = modelFromCompactJsonLd(body, sub);
+            }
             OutboundHttp.recordSuccess(sub);
             result.check("subjectDereferenced", true);
 

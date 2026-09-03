@@ -15,6 +15,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -34,6 +36,7 @@ import java.util.stream.Collectors;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sun.net.httpserver.HttpServer;
 import dasniko.testcontainers.keycloak.KeycloakContainer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assumptions;
@@ -41,6 +44,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.testcontainers.DockerClientFactory;
+import org.testcontainers.Testcontainers;
 
 import com.ebremer.lws.authn.ssididkey.DidKey;
 
@@ -56,16 +60,35 @@ class LwsAuthIT {
     private KeycloakContainer keycloak;
     private String base; // http://localhost:8080
 
+    /**
+     * A host-side server publishing a controlled identifier document as JSON-LD, reachable from inside
+     * the Keycloak container. Nothing else exercises the JSON-LD path in a real deployment: this
+     * provider's own CID endpoints serve Turtle to the verifiers, which ask for it first.
+     */
+    private HttpServer cidServer;
+    private int cidPort;
+    private KeyPair agentKeyPair;
+    private String agentWebId;
+
     @BeforeAll
-    void startKeycloak() {
+    void startKeycloak() throws Exception {
         Assumptions.assumeTrue(DockerClientFactory.instance().isDockerAvailable(),
                 "Docker is required for the Testcontainers integration test");
+        startCidServer();
+        Testcontainers.exposeHostPorts(cidPort);
         keycloak = new KeycloakContainer(IMAGE)
                 .withProviderLibsFrom(List.of(new File(PROVIDER_JAR)))
                 .withRealmImportFile("lws-demo-realm.json")
                 // The OpenID verifier self-dereferences the realm issuer (a loopback URL here), so the
                 // SSRF guard must be told that loopback is an intended target in this deployment.
-                .withEnv("LWS_AUTHN_ALLOWED_INTERNAL_HOSTS", "localhost,127.0.0.1");
+                // host.testcontainers.internal resolves to the host from inside the container, so the
+                // SSRF guard must be told it is an intended target here — the same opt-in a single-box
+                // deployment needs to dereference its own documents.
+                .withEnv("LWS_AUTHN_ALLOWED_INTERNAL_HOSTS", "localhost,127.0.0.1,host.testcontainers.internal")
+                // The verifiers deliberately return terse errors and log the detail under a trace id,
+                // so without this a failure here says only "could not be validated".
+                .withEnv("KC_LOG_LEVEL", "INFO,com.ebremer.lws.authn:DEBUG")
+                .withLogConsumer(f -> { String l = f.getUtf8String(); if (l.contains("com.ebremer")) System.out.print(l); });
         // Pin to host port 8080 so the issuer URL (http://localhost:8080/...) resolves to Keycloak
         // BOTH from this test and from inside the container — the OpenID verifier dereferences its
         // own issuer, and a random mapped port would be unreachable from within the container.
@@ -79,6 +102,57 @@ class LwsAuthIT {
         if (keycloak != null) {
             keycloak.stop();
         }
+        if (cidServer != null) {
+            cidServer.stop(0);
+        }
+    }
+
+    /**
+     * Publishes a JSON-LD controlled identifier document for a freshly minted EC key, at a URL the
+     * container can reach.
+     */
+    private void startCidServer() throws Exception {
+        KeyPairGenerator generator = KeyPairGenerator.getInstance("EC");
+        generator.initialize(new ECGenParameterSpec("secp256r1"));
+        agentKeyPair = generator.generateKeyPair();
+
+        cidServer = HttpServer.create(new InetSocketAddress("0.0.0.0", 0), 0);
+        cidPort = cidServer.getAddress().getPort();
+        agentWebId = "http://host.testcontainers.internal:" + cidPort + "/cid";
+
+        ECPublicKey publicKey = (ECPublicKey) agentKeyPair.getPublic();
+        String x = b64(publicKey.getW().getAffineX());
+        String y = b64(publicKey.getW().getAffineY());
+        // Deliberately not the compact spelling this provider emits: an aliased term and an @graph
+        // wrapper, both of which the old key-walking reader would have silently found nothing in.
+        String document = "{\"@context\":[\"https://www.w3.org/ns/cid/v1\","
+                + "{\"auth\":\"https://w3id.org/security#authenticationMethod\"}],"
+                + "\"@graph\":[{\"id\":\"" + agentWebId + "\","
+                + "\"auth\":[{\"id\":\"" + agentWebId + "#k1\",\"type\":\"JsonWebKey\","
+                + "\"controller\":\"" + agentWebId + "\","
+                + "\"publicKeyJwk\":{\"kid\":\"k1\",\"kty\":\"EC\",\"crv\":\"P-256\","
+                + "\"x\":\"" + x + "\",\"y\":\"" + y + "\"}}]}]}";
+
+        cidServer.createContext("/cid", exchange -> {
+            byte[] bytes = document.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/ld+json");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream out = exchange.getResponseBody()) {
+                out.write(bytes);
+            }
+        });
+        cidServer.start();
+    }
+
+    private static String b64(java.math.BigInteger coordinate) {
+        byte[] raw = coordinate.toByteArray();
+        byte[] fixed = new byte[32];
+        if (raw.length >= 32) {
+            System.arraycopy(raw, raw.length - 32, fixed, 0, 32);
+        } else {
+            System.arraycopy(raw, 0, fixed, 32 - raw.length, raw.length);
+        }
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(fixed);
     }
 
     // ----------------------------------------------------------------- the smoke flow as assertions
@@ -95,10 +169,10 @@ class LwsAuthIT {
     @Test
     void cidServedAsTurtleAndJsonLd() throws Exception {
         String sub = claim(idToken(), "sub");
-        String turtle = get(sub, "text/turtle");
+        String turtle = body(sub, "text/turtle");
         assertTrue(turtle.contains("https://www.w3.org/ns/lws#OpenIdProvider"), turtle);
         assertTrue(turtle.contains("https://www.w3.org/ns/did#serviceEndpoint"), turtle);
-        String jsonld = get(sub, "application/ld+json");
+        String jsonld = body(sub, "application/ld+json");
         assertTrue(jsonld.contains("\"@context\""), jsonld);
         assertTrue(jsonld.contains("OpenIdProvider"), jsonld);
     }
@@ -123,12 +197,61 @@ class LwsAuthIT {
         }
     }
 
+    /**
+     * P2-1, and the packaging that carries it. The verifier dereferences a document served as JSON-LD
+     * by a third party, written with an aliased term inside an {@code @graph} — a shape the old
+     * key-walking reader could not see at all. Passing means Jena's JSON-LD 1.1 reader works inside
+     * Keycloak with Titanium *relocated* and jakarta.json taken from the server, which no unit test can
+     * establish: they run against the unshaded classpath.
+     */
+    @Test
+    void jsonLdControlledIdentifierDocumentVerifies() throws Exception {
+        long now = System.currentTimeMillis() / 1000;
+        String signingInput = b64("{\"alg\":\"ES256\",\"kid\":\"k1\",\"typ\":\"JWT\"}") + "."
+                + b64("{\"sub\":\"" + agentWebId + "\",\"iss\":\"" + agentWebId + "\","
+                        + "\"client_id\":\"" + agentWebId + "\",\"aud\":[\"https://as.example\"],"
+                        + "\"iat\":" + now + ",\"exp\":" + (now + 300) + "}");
+        Signature signer = Signature.getInstance("SHA256withECDSAinP1363Format");
+        signer.initSign(agentKeyPair.getPrivate());
+        signer.update(signingInput.getBytes(StandardCharsets.UTF_8));
+        String jwt = signingInput + "." + Base64.getUrlEncoder().withoutPadding().encodeToString(signer.sign());
+
+        JsonNode r = JSON.readTree(postForm(base + "/realms/" + REALM + "/lws-ssi-cid/verify",
+                Map.of("credential", jwt, "audience", "https://as.example"), accessToken()).body());
+        assertTrue(r.get("valid").asBoolean(), () -> "expected valid, got: " + r);
+        assertEquals(agentWebId, r.get("subject").asText());
+    }
+
+    /** P2-2/3/4: the CID endpoint honours q-values and carries cache headers. */
+    @Test
+    void cidEndpointNegotiatesAndIsCacheable() throws Exception {
+        String sub = claim(idToken(), "sub");
+
+        HttpResponse<String> turtle = get(sub, "application/ld+json;q=0.1, text/turtle;q=1.0");
+        assertEquals(200, turtle.statusCode());
+        assertTrue(turtle.headers().firstValue("Content-Type").orElse("").startsWith("text/turtle"),
+                "the highest q-value must win: " + turtle.headers().map());
+        assertEquals("Accept", turtle.headers().firstValue("Vary").orElse(null));
+        assertTrue(turtle.headers().firstValue("Cache-Control").orElse("").contains("max-age"));
+
+        String etag = turtle.headers().firstValue("ETag").orElse(null);
+        assertNotNull(etag, "a cacheable document needs a validator");
+        HttpResponse<String> conditional = HTTP.send(HttpRequest.newBuilder(URI.create(sub))
+                .header("Accept", "text/turtle").header("If-None-Match", etag).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertEquals(304, conditional.statusCode(), "an unchanged document should answer If-None-Match");
+
+        HttpResponse<String> unacceptable = get(sub, "text/html");
+        assertEquals(406, unacceptable.statusCode(),
+                "an Accept naming nothing on offer used to be answered with JSON-LD anyway");
+    }
+
     /** The self-signed CID endpoint mounts and serves a controlled identifier document. */
     @Test
     void ssiCidEndpointServes() throws Exception {
         String sub = claim(idToken(), "sub");
         String uid = sub.substring(sub.lastIndexOf('/') + 1);
-        String jsonld = get(base + "/realms/" + REALM + "/lws-ssi-cid/cid/" + uid, "application/ld+json");
+        String jsonld = body(base + "/realms/" + REALM + "/lws-ssi-cid/cid/" + uid, "application/ld+json");
         assertTrue(jsonld.contains("\"@context\""), jsonld);
         assertTrue(jsonld.contains("/lws-ssi-cid/cid/" + uid), jsonld);
     }
@@ -221,9 +344,13 @@ class LwsAuthIT {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(s.getBytes(StandardCharsets.UTF_8));
     }
 
-    private static String get(String url, String accept) throws Exception {
+    private static HttpResponse<String> get(String url, String accept) throws Exception {
         return HTTP.send(HttpRequest.newBuilder(URI.create(url)).header("Accept", accept).GET().build(),
-                HttpResponse.BodyHandlers.ofString()).body();
+                HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static String body(String url, String accept) throws Exception {
+        return get(url, accept).body();
     }
 
     /** POSTs a form, optionally authenticating the caller with {@code bearer}. */

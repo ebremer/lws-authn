@@ -45,6 +45,8 @@ import org.keycloak.urls.UrlType;
 public class LWSSubMapper extends AbstractOIDCProtocolMapper
         implements OIDCAccessTokenMapper, OIDCIDTokenMapper, UserInfoTokenMapper {
 
+    private static final org.jboss.logging.Logger log = org.jboss.logging.Logger.getLogger(LWSSubMapper.class);
+
     public static final String PROVIDER_ID = "lws-webid-sub-mapper";
 
     /** Config key: name of the user attribute holding an externally-hosted WebID. */
@@ -154,12 +156,35 @@ public class LWSSubMapper extends AbstractOIDCProtocolMapper
                 // A blank-after-trim value is treated as no value at all, exactly as an unset
                 // attribute already is, and falls through to the Keycloak-hosted WebID.
                 String webId = value.trim();
+                // The subject of an LWS credential MUST be a URI (core §4.1), and the OpenID suite has
+                // a verifier dereference it. A value that is not an absolute http(s) URL cannot be
+                // dereferenced by anyone, so emitting it would produce a token that looks right and is
+                // refused everywhere, with nothing to point at. Fall back to the hosted WebID, which at
+                // least works, and say why in the log.
                 if (!webId.isEmpty()) {
-                    return webId;
+                    if (isDereferenceableUrl(webId)) {
+                        return webId;
+                    }
+                    log.warnf("User %s has a '%s' attribute that is not an absolute http(s) URL; "
+                            + "falling back to the Keycloak-hosted WebID", user.getId(), attribute);
                 }
             }
         }
         return hostedWebId(token, session, userSession.getRealm(), user);
+    }
+
+    /** True iff {@code value} is an absolute {@code http}/{@code https} URL a verifier could fetch. */
+    private static boolean isDereferenceableUrl(String value) {
+        try {
+            java.net.URI uri = new java.net.URI(value);
+            if (!uri.isAbsolute() || uri.getHost() == null || uri.getHost().isBlank()) {
+                return false;
+            }
+            String scheme = uri.getScheme();
+            return "http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme);
+        } catch (java.net.URISyntaxException notAUri) {
+            return false;
+        }
     }
 
     /** Derives {@code {issuer}/lws/cid/{userId}} — the document served by {@code LWSResourceProvider}. */
