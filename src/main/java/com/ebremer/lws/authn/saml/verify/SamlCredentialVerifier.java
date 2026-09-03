@@ -77,6 +77,7 @@ public class SamlCredentialVerifier {
                                          boolean allowExpiredCertificate) {
         SamlVerificationResult result = new SamlVerificationResult();
         result.setTraceId(Trace.newId());
+        result.setTokenType(SamlConstants.TOKEN_TYPE_SAML2);
         try {
             // --- the trust anchor itself ---
             // A signature is only as good as the certificate it is checked against. An expired or
@@ -146,8 +147,18 @@ public class SamlCredentialVerifier {
                 return result.fail();
             }
 
+            // "The SAML token MUST use the `saml:Issuer` assertion for the LWS issuer identifier", and
+            // LWS core §4.1 makes the issuer a REQUIRED claim. Recording it without requiring it would
+            // let a credential through with no identified issuing party at all.
             Element issuer = firstChild(assertion, NS, "Issuer");
-            result.setIssuer(issuer == null ? null : issuer.getTextContent().trim());
+            String issuerValue = issuer == null ? null : issuer.getTextContent().trim();
+            result.setIssuer(issuerValue);
+            boolean issuerPresent = issuerValue != null && !issuerValue.isEmpty();
+            result.check("issuerPresent", issuerPresent);
+            if (!issuerPresent) {
+                result.error("The verified assertion has no <Issuer>");
+                return result.fail();
+            }
 
             // --- subject confirmation (the bearer window and the LWS client identifier) ---
             // The suite carries the LWS client identifier in SubjectConfirmationData/@Recipient, and the
@@ -178,6 +189,7 @@ public class SamlCredentialVerifier {
                 return result.fail();
             }
             result.setRecipient(recipient);
+            result.setClient(recipient); // the suite puts the LWS client identifier in Recipient
 
             String scdNotOnOrAfter = attr(scd, "NotOnOrAfter");
             if (scdNotOnOrAfter == null || scdNotOnOrAfter.isBlank()) {

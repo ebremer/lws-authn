@@ -19,7 +19,7 @@ import com.fasterxml.jackson.annotation.JsonPropertyOrder;
  * @author Erich Bremer
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
-@JsonPropertyOrder({"valid", "subject", "checks", "errors", "traceId"})
+@JsonPropertyOrder({"valid", "subject", "client", "tokenType", "checks", "errors", "traceId"})
 public class SsiCidVerificationResult {
 
     private boolean valid;
@@ -27,6 +27,8 @@ public class SsiCidVerificationResult {
     private final Map<String, Boolean> checks = new LinkedHashMap<>();
     private final List<String> errors = new ArrayList<>();
     private String traceId;
+    private String client;
+    private String tokenType;
 
     public boolean isValid() {
         return valid;
@@ -50,6 +52,32 @@ public class SsiCidVerificationResult {
 
     public List<String> getErrors() {
         return errors;
+    }
+
+    /**
+     * The LWS client identifier the credential names. LWS core §4.1 makes the client a REQUIRED claim
+     * of every authentication credential, so a valid result always carries one: {@code azp} for
+     * OpenID, {@code client_id} for the self-issued suites, and the {@code Recipient} of the bearer
+     * {@code <SubjectConfirmationData>} for SAML.
+     */
+    public String getClient() {
+        return client;
+    }
+
+    public void setClient(String client) {
+        this.client = client;
+    }
+
+    /**
+     * The token type URI this suite is associated with (LWS core §4.3), reported so a caller can feed
+     * the credential straight into an RFC 8693 token exchange.
+     */
+    public String getTokenType() {
+        return tokenType;
+    }
+
+    public void setTokenType(String tokenType) {
+        this.tokenType = tokenType;
     }
 
     /**

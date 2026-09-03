@@ -5,12 +5,15 @@
  * https://w3c.github.io/lws-protocol/lws10-authn-openid/#authentication-credential-validation
  *
  * Algorithm:
- *   1. The signing algorithm MUST NOT be "none".
- *   2. Dereference the 'sub' claim to a controlled identifier document (CID).
- *   3. The CID MUST list a service with type https://www.w3.org/ns/lws#OpenIdProvider whose
+ *   1. The signing algorithm MUST NOT be "none", and no critical header may be present (RFC 7515).
+ *   2. The credential MUST carry sub, iss and azp (the LWS subject, issuer and client identifiers).
+ *   3. Dereference the 'sub' claim to a controlled identifier document (CID) whose 'id' equals 'sub'.
+ *   4. The CID MUST list a service with type https://www.w3.org/ns/lws#OpenIdProvider whose
  *      serviceEndpoint equals the 'iss' claim.
- *   4. Perform OpenID Connect Discovery on 'iss' and locate the signing JWK.
- *   5. Validate the JWT signature and the active (exp/nbf) window.
+ *   5. Perform OpenID Connect Discovery on 'iss' and locate the signing JWK.
+ *   6. Validate the JWT signature and the active (exp/nbf) window.
+ *   7. Apply OpenID Connect Core 3.1.3.7 steps 3-5 (aud/azp) against the expected client and
+ *      audience, when the caller supplies them.
  *
  * RDF parsing of the (possibly arbitrary-syntax) controlled identifier document uses Apache Jena.
  */
@@ -21,6 +24,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.PublicKey;
 import java.util.List;
 
+import com.ebremer.lws.authn.jose.JwsChecks;
 import com.ebremer.lws.authn.net.OutboundHttp;
 import com.ebremer.lws.authn.rdf.RdfParsing;
 import com.ebremer.lws.authn.verify.Trace;
@@ -64,8 +68,23 @@ public class LWSCredentialVerifier {
     }
 
     public VerificationResult verify(String credential) {
+        return verify(credential, null, null);
+    }
+
+    /**
+     * @param credential       the ID Token
+     * @param expectedClientId the relying party's own client identifier. When supplied, OpenID Connect
+     *                         Core 3.1.3.7 steps 3-5 are enforced: {@code aud} must contain it and
+     *                         {@code azp} must equal it. The LWS suite says the JWT "MUST be validated
+     *                         as described by OpenID Connect Core Section 3.1.3.7", and those steps are
+     *                         what stops a token minted for one relying party being replayed at another.
+     * @param expectedAudience an additional audience the credential must be restricted to, typically the
+     *                         authorization server this verifier speaks for
+     */
+    public VerificationResult verify(String credential, String expectedClientId, String expectedAudience) {
         VerificationResult result = new VerificationResult();
         result.setTraceId(Trace.newId());
+        result.setTokenType(LWSConstants.TOKEN_TYPE_ID_TOKEN);
         try {
             JWSInput jws = new JWSInput(credential);
             JWSHeader header = jws.getHeader();
@@ -84,6 +103,16 @@ public class LWSCredentialVerifier {
                 result.error("ID Token MUST NOT use 'none' as the signing algorithm");
                 return result.fail();
             }
+
+            // RFC 7515 5.2: a JWS carrying critical header parameters the verifier does not implement
+            // must be rejected. This provider implements none, so any 'crit' at all is fatal.
+            List<String> critical = JwsChecks.criticalHeaders(jws);
+            result.check("noUnsupportedCriticalHeaders", critical.isEmpty());
+            if (!critical.isEmpty()) {
+                result.error("ID Token carries unsupported critical header parameters: " + critical);
+                return result.fail();
+            }
+
             if (isBlank(sub)) {
                 result.check("subjectPresent", false);
                 result.error("ID Token is missing the 'sub' claim");
@@ -95,7 +124,20 @@ public class LWSCredentialVerifier {
                 return result.fail();
             }
 
+            // The suite: "The ID Token MUST use the `azp` (authorized party) claim for the LWS client
+            // identifier", and LWS core 4.1 makes the client a REQUIRED claim of every credential.
+            String azp = token.getIssuedFor();
+            result.setClient(azp);
+            boolean clientPresent = !isBlank(azp);
+            result.check("clientPresent", clientPresent);
+            if (!clientPresent) {
+                result.error("ID Token is missing the 'azp' claim (the LWS client identifier)");
+                return result.fail();
+            }
+
             // 2. Trust establishment: dereference the subject to a controlled identifier document.
+            //    The suite requires "a valid controlled identifier document with an `id` value equal to
+            //    the subject identifier", so the document must actually claim to be about this subject.
             Model cid = dereference(sub, result);
             if (cid == null) {
                 return result.fail();
@@ -119,7 +161,7 @@ public class LWSCredentialVerifier {
             // 4b. Pin the token's declared algorithm to the discovered key type. Without this a forged
             // token could claim a symmetric alg (e.g. HS256) and have the OP's RSA public key treated
             // as the HMAC secret — the classic algorithm-confusion attack.
-            boolean algMatchesKey = algMatchesKey(alg, publicKey);
+            boolean algMatchesKey = JwsChecks.algMatchesKey(alg, publicKey);
             result.check("algorithmMatchesKey", algMatchesKey);
             if (!algMatchesKey) {
                 result.error("ID Token 'alg' " + alg + " is not consistent with the discovered "
@@ -163,10 +205,34 @@ public class LWSCredentialVerifier {
                 return result.fail();
             }
 
-            // The ID Token's 'aud' (the OIDC client) is intentionally not validated here: the LWS OpenID
-            // suite establishes identity via sub + iss + the CID's OpenIdProvider service. Audience
-            // confinement is applied by the relying party via Resource Indicators (RFC 8707) / Token
-            // Exchange (RFC 8693). See the README "Audience / token exchange" note.
+            // OpenID Connect Core 3.1.3.7 steps 3-5. Without an expected client identifier there is
+            // nothing to compare against, so these are enforced only when the caller says who it is —
+            // but step 4 (multiple audiences require azp) holds unconditionally, and azp is already
+            // required above, so the multi-audience case is covered either way.
+            String[] audience = token.getAudience();
+            if (!isBlank(expectedClientId)) {
+                boolean audienceHasClient = JwsChecks.audienceIncludes(audience, expectedClientId);
+                result.check("audienceContainsClient", audienceHasClient);
+                if (!audienceHasClient) {
+                    result.error("ID Token 'aud' does not list the expected client <" + expectedClientId + ">");
+                    return result.fail();
+                }
+                boolean azpMatches = expectedClientId.equals(azp);
+                result.check("authorizedPartyMatchesClient", azpMatches);
+                if (!azpMatches) {
+                    result.error("ID Token 'azp' is not the expected client <" + expectedClientId + ">");
+                    return result.fail();
+                }
+            }
+            if (!isBlank(expectedAudience)) {
+                boolean audienceMatched = JwsChecks.audienceIncludes(audience, expectedAudience);
+                result.check("audienceMatched", audienceMatched);
+                if (!audienceMatched) {
+                    result.error("ID Token 'aud' does not include <" + expectedAudience + ">");
+                    return result.fail();
+                }
+            }
+
             result.setValid(result.getErrors().isEmpty());
         } catch (Exception e) {
             // Never echo the exception to the caller: it can name internal hosts, ports and library
@@ -207,6 +273,18 @@ public class LWSCredentialVerifier {
                     : RdfParsing.parseRdf(body, contentType, sub);
             OutboundHttp.recordSuccess(sub);
             result.check("subjectDereferenced", true);
+
+            // CID 1.0: "A controlled identifier document MUST contain an `id` value in the topmost
+            // map", and the suite requires that id to equal the subject. On the JSON-LD path
+            // modelFromCompactJsonLd has already refused a document with no id or a different one; on
+            // the RDF path the base IRI is the subject, so this asserts the graph really describes it
+            // rather than some unrelated resource that merely happens to be served from that URL.
+            boolean describesSubject = model.contains(model.createResource(sub), null, (org.apache.jena.rdf.model.RDFNode) null);
+            result.check("subjectIdMatches", describesSubject);
+            if (!describesSubject) {
+                result.error("The document at 'sub' <" + sub + "> is not a controlled identifier document for it");
+                return null;
+            }
             return model;
         } catch (Exception e) {
             // The cause can name the address the host resolved to, so it is logged, not returned.
@@ -225,6 +303,11 @@ public class LWSCredentialVerifier {
      * other LWS implementations: a subject {@code id} with one or more {@code service} entries each
      * carrying {@code type} and {@code serviceEndpoint}. Exotic JSON-LD framings that remap these
      * terms are not expanded.
+     *
+     * <p>The document's {@code id} must be present and equal to {@code sub}. Defaulting a missing
+     * {@code id} to the subject, as this once did, would accept a document that never claimed to
+     * describe that subject at all — which is exactly what the suite's "with an `id` value equal to
+     * the subject identifier" exists to prevent.</p>
      */
     private Model modelFromCompactJsonLd(String body, String sub) throws IOException {
         JsonNode doc = JsonSerialization.mapper.readTree(body);
@@ -232,7 +315,13 @@ public class LWSCredentialVerifier {
         Property service = model.createProperty(LWSConstants.DID_SERVICE);
         Property serviceEndpoint = model.createProperty(LWSConstants.DID_SERVICE_ENDPOINT);
 
-        String id = firstNonBlank(text(doc, "id"), text(doc, "@id"), sub);
+        String id = firstNonBlank(text(doc, "id"), text(doc, "@id"), null);
+        if (id == null) {
+            throw new IOException("controlled identifier document has no 'id'");
+        }
+        if (!id.equals(sub)) {
+            throw new IOException("controlled identifier document 'id' does not equal the subject");
+        }
         Resource subject = model.createResource(id);
 
         JsonNode services = doc.get("service");
@@ -338,7 +427,7 @@ public class LWSCredentialVerifier {
                         continue;
                     }
                     PublicKey pk = JWKParser.create(jwk).toPublicKey();
-                    if (!algMatchesKey(alg, pk)) {
+                    if (!JwsChecks.algMatchesKey(alg, pk)) {
                         continue; // ignore keys whose type cannot produce this token's alg
                     }
                     result.check("jwksResolved", true);
@@ -357,29 +446,6 @@ public class LWSCredentialVerifier {
             result.error("OpenID Connect Discovery failed for <" + iss + ">");
             return null;
         }
-    }
-
-    /**
-     * True iff the JOSE {@code alg} is an asymmetric signature algorithm whose key type matches
-     * {@code key}. Pinning the token's declared algorithm to the discovered signing key blocks
-     * algorithm-confusion: symmetric ({@code HS*}), {@code none} and unknown algorithms never match,
-     * so an RSA/EC public key can never be misused as an HMAC secret.
-     */
-    private static boolean algMatchesKey(String alg, PublicKey key) {
-        if (alg == null || key == null) {
-            return false;
-        }
-        String keyType = key.getAlgorithm();
-        if (alg.startsWith("RS") || alg.startsWith("PS")) {   // RSASSA-PKCS1-v1_5 / RSASSA-PSS
-            return "RSA".equals(keyType);
-        }
-        if (alg.startsWith("ES")) {                           // ECDSA
-            return "EC".equals(keyType) || "ECDSA".equals(keyType);
-        }
-        if ("EdDSA".equals(alg) || alg.startsWith("Ed")) {    // Edwards-curve EdDSA
-            return "EdDSA".equals(keyType) || "Ed25519".equals(keyType) || "Ed448".equals(keyType);
-        }
-        return false;
     }
 
     private static String text(JsonNode node, String field) {

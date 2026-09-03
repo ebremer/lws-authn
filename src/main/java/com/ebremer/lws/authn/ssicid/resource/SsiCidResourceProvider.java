@@ -124,12 +124,17 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
      * the {@code credential} form parameter; the {@code Authorization} header carries the
      * <em>caller's</em> own credential (see {@link com.ebremer.lws.authn.verify.VerifyAccess}), and
      * only falls back to meaning the credential to verify in {@code public} access mode.
+     *
+     * <p>The optional {@code audience} parameter names the target authorization server, which the
+     * suite requires the credential's {@code aud} to include. Without it only the presence of an
+     * audience restriction can be checked.</p>
      */
     @POST
     @Path(SsiCidConstants.VERIFY_PATH)
     @Consumes(MediaType.APPLICATION_FORM_URLENCODED)
     @Produces(MediaType.APPLICATION_JSON)
     public Response verify(@FormParam("credential") String credential,
+                           @FormParam("audience") String expectedAudience,
                            @HeaderParam("Authorization") String authorization) {
         Response denied = access.check(session, authorization);
         if (denied != null) {
@@ -145,7 +150,7 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
                     .type(MediaType.APPLICATION_JSON).build();
         }
 
-        SsiCidVerificationResult result = new SelfSignedCidVerifier(session).verify(token);
+        SsiCidVerificationResult result = new SelfSignedCidVerifier(session).verify(token, expectedAudience);
         try {
             return Response.ok(JsonSerialization.writeValueAsPrettyString(result), MediaType.APPLICATION_JSON)
                     .status(result.isValid() ? Response.Status.OK : Response.Status.UNAUTHORIZED)

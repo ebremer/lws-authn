@@ -31,8 +31,8 @@ public final class SamlConstants {
     /** SAML 2.0 protocol namespace. */
     public static final String SAML_PROTOCOL_NS = "urn:oasis:names:tc:SAML:2.0:protocol";
 
-    /** Persistent NameID format (used by the specification's example for the controlled identifier). */
-    public static final String NAMEID_FORMAT_PERSISTENT = "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent";
+    // No NameID Format constant: the suite's example uses the persistent format, but nothing in it
+    // requires one, so the verifier does not constrain it and there is nothing here to name.
 
     /**
      * {@code RealmResourceProviderFactory} id. Endpoints are mounted at

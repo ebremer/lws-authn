@@ -105,9 +105,14 @@ prior relationship and no lookups.
 
 ## Notes
 
-- **Supported key types:** Ed25519 and P-256 only. secp256k1 and other multicodecs are rejected with a
-  clear error. The codec is pure JDK (no BouncyCastle), so it works under default and FIPS Keycloak.
+- **Supported key types:** Ed25519 (`z6Mk…`, EdDSA), P-256 (`zDn…`, ES256), P-384 (ES384) and P-521
+  (ES512). secp256k1 and RSA are rejected with a clear error — the JDK cannot do secp256k1 without
+  BouncyCastle, and this codec stays pure JDK so it works under default and FIPS Keycloak.
+- **The encoding must be canonical.** A decoded key is re-encoded and must reproduce the identifier
+  byte for byte, so one key can never have two `did:key` spellings.
 - **No hosting, no rotation endpoint.** A new key means a new `did:key` (a new identifier). There is
   nothing to publish or update.
 - **Audience / token type.** The credential carries token type `urn:ietf:params:oauth:token-type:jwt`
-  when exchanged; the verifier requires an `aud`. Restrict it to the target server in production.
+  when exchanged, and the result reports it. The verifier requires `aud` and `iat`; pass
+  `audience=<authorization server>` to require that `aud` actually names the server doing the checking,
+  which is what the suite means by "the `aud` claim MUST include the target authorization server".
