@@ -15,6 +15,7 @@ import java.security.cert.X509Certificate;
 
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.FormParam;
+import jakarta.ws.rs.HeaderParam;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
@@ -22,17 +23,27 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
 import org.keycloak.common.util.PemUtils;
+import org.keycloak.models.KeycloakSession;
 import org.keycloak.services.resource.RealmResourceProvider;
 import org.keycloak.util.JsonSerialization;
 
 import com.ebremer.lws.authn.saml.SamlConstants;
 import com.ebremer.lws.authn.saml.verify.SamlCredentialVerifier;
 import com.ebremer.lws.authn.saml.verify.SamlVerificationResult;
+import com.ebremer.lws.authn.verify.VerifyAccess;
 
 /**
  * @author Erich Bremer
  */
 public class SamlResourceProvider implements RealmResourceProvider {
+
+    private final KeycloakSession session;
+    private final VerifyAccess access;
+
+    public SamlResourceProvider(KeycloakSession session, VerifyAccess access) {
+        this.session = session;
+        this.access = access;
+    }
 
     @Override
     public Object getResource() {
@@ -51,6 +62,9 @@ public class SamlResourceProvider implements RealmResourceProvider {
      *   <li>{@code certificate} — the trusted IdP signing certificate, PEM-encoded (required; SAML
      *       trust is out of band)</li>
      *   <li>{@code audience} — optional audience the assertion must be restricted to</li>
+     *   <li>{@code allowExpiredCertificate} — {@code true} to accept an IdP certificate that is
+     *       outside its own validity period. Off by default; only for offline analysis of an old
+     *       credential, never for a live authentication decision.</li>
      * </ul>
      */
     @POST
@@ -59,7 +73,13 @@ public class SamlResourceProvider implements RealmResourceProvider {
     @Produces(MediaType.APPLICATION_JSON)
     public Response verify(@FormParam("credential") String credential,
                            @FormParam("certificate") String certificatePem,
-                           @FormParam("audience") String audience) {
+                           @FormParam("audience") String audience,
+                           @FormParam("allowExpiredCertificate") String allowExpiredCertificate,
+                           @HeaderParam("Authorization") String authorization) {
+        Response denied = access.check(session, authorization);
+        if (denied != null) {
+            return denied;
+        }
         if (credential == null || credential.isBlank()) {
             return badRequest("missing 'credential' form parameter (the SAML Response)");
         }
@@ -78,7 +98,8 @@ public class SamlResourceProvider implements RealmResourceProvider {
             return badRequest("could not parse 'certificate' as a PEM X.509 certificate");
         }
 
-        SamlVerificationResult result = new SamlCredentialVerifier().verify(credential, certificate, audience);
+        SamlVerificationResult result = new SamlCredentialVerifier()
+                .verify(credential, certificate, audience, Boolean.parseBoolean(allowExpiredCertificate));
         try {
             return Response.ok(JsonSerialization.writeValueAsPrettyString(result), MediaType.APPLICATION_JSON)
                     .status(result.isValid() ? Response.Status.OK : Response.Status.UNAUTHORIZED)

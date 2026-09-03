@@ -19,13 +19,14 @@ import com.fasterxml.jackson.annotation.JsonPropertyOrder;
  * @author Erich Bremer
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
-@JsonPropertyOrder({"valid", "subject", "checks", "errors"})
+@JsonPropertyOrder({"valid", "subject", "checks", "errors", "traceId"})
 public class SsiCidVerificationResult {
 
     private boolean valid;
     private String subject;
     private final Map<String, Boolean> checks = new LinkedHashMap<>();
     private final List<String> errors = new ArrayList<>();
+    private String traceId;
 
     public boolean isValid() {
         return valid;
@@ -49,6 +50,18 @@ public class SsiCidVerificationResult {
 
     public List<String> getErrors() {
         return errors;
+    }
+
+    /**
+     * Correlation id for the server log. Failure detail that would describe this server's network is
+     * logged rather than returned; this id ties the two together.
+     */
+    public String getTraceId() {
+        return traceId;
+    }
+
+    public void setTraceId(String traceId) {
+        this.traceId = traceId;
     }
 
     public void check(String name, boolean ok) {

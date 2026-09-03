@@ -20,7 +20,7 @@ import com.fasterxml.jackson.annotation.JsonPropertyOrder;
  * @author Erich Bremer
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
-@JsonPropertyOrder({"valid", "subject", "issuer", "checks", "errors"})
+@JsonPropertyOrder({"valid", "subject", "issuer", "checks", "errors", "traceId"})
 public class VerificationResult {
 
     private boolean valid;
@@ -28,6 +28,7 @@ public class VerificationResult {
     private String issuer;
     private final Map<String, Boolean> checks = new LinkedHashMap<>();
     private final List<String> errors = new ArrayList<>();
+    private String traceId;
 
     public boolean isValid() {
         return valid;
@@ -59,6 +60,18 @@ public class VerificationResult {
 
     public List<String> getErrors() {
         return errors;
+    }
+
+    /**
+     * Correlation id for the server log. Failure detail that would describe this server's network is
+     * logged rather than returned; this id ties the two together.
+     */
+    public String getTraceId() {
+        return traceId;
+    }
+
+    public void setTraceId(String traceId) {
+        this.traceId = traceId;
     }
 
     /** Records the outcome of a single validation step. */

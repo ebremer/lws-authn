@@ -24,9 +24,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 import com.ebremer.lws.authn.net.OutboundHttp;
-import com.ebremer.lws.authn.net.SsrfGuard;
 import com.ebremer.lws.authn.rdf.RdfParsing;
+import com.ebremer.lws.authn.verify.Trace;
 import com.fasterxml.jackson.databind.JsonNode;
+import org.jboss.logging.Logger;
 import org.apache.jena.query.ParameterizedSparqlString;
 import org.apache.jena.query.QueryExecution;
 import org.apache.jena.query.QueryExecutionFactory;
@@ -51,6 +52,8 @@ import com.ebremer.lws.authn.ssicid.SsiCidConstants;
  */
 public class SelfSignedCidVerifier {
 
+    private static final Logger log = Logger.getLogger(SelfSignedCidVerifier.class);
+
     private final KeycloakSession session;
 
     public SelfSignedCidVerifier(KeycloakSession session) {
@@ -59,6 +62,7 @@ public class SelfSignedCidVerifier {
 
     public SsiCidVerificationResult verify(String credential) {
         SsiCidVerificationResult result = new SsiCidVerificationResult();
+        result.setTraceId(Trace.newId());
         try {
             JWSInput jws = new JWSInput(credential);
             JWSHeader header = jws.getHeader();
@@ -148,7 +152,10 @@ public class SelfSignedCidVerifier {
 
             result.setValid(result.getErrors().isEmpty());
         } catch (Exception e) {
-            result.error(e.getClass().getSimpleName() + ": " + String.valueOf(e.getMessage()));
+            // Never echo the exception to the caller: it can name internal hosts, ports and library
+            // internals. The detail goes to the log under the result's trace id.
+            log.debugf(e, "[%s] LWS self-signed CID credential verification failed", result.getTraceId());
+            result.error("Credential could not be validated");
             return result.fail();
         }
         return result;
@@ -157,14 +164,18 @@ public class SelfSignedCidVerifier {
     /** Dereferences the subject and returns the candidate public JWKs from its CID document. */
     private List<JsonNode> dereference(String sub, SsiCidVerificationResult result) {
         try {
-            SsrfGuard.verify(sub); // refuse to dereference internal/loopback targets (SSRF)
+            // OutboundHttp applies the SSRF policy, refuses a host that has been failing, and fetches
+            // through a client that follows no redirects and resolves only vetted addresses.
             SimpleHttp.Response response = OutboundHttp.get(sub, session)
                     .header("Accept", SsiCidConstants.TURTLE + ", " + SsiCidConstants.JSON_LD + ";q=0.9, "
                             + SsiCidConstants.N_TRIPLES + ";q=0.8, " + SsiCidConstants.RDF_XML + ";q=0.7")
                     .asResponse();
             if (response.getStatus() != 200) {
+                log.debugf("[%s] dereferencing sub <%s> returned HTTP %d", result.getTraceId(), sub,
+                        response.getStatus());
+                OutboundHttp.recordFailure(sub);
                 result.check("subjectDereferenced", false);
-                result.error("Dereferencing 'sub' <" + sub + "> returned HTTP " + response.getStatus());
+                result.error("Dereferencing 'sub' <" + sub + "> did not return a controlled identifier document");
                 return null;
             }
             String contentType = response.getFirstHeader("Content-Type");
@@ -172,11 +183,15 @@ public class SelfSignedCidVerifier {
             List<JsonNode> jwks = RdfParsing.isJsonLd(contentType, body)
                     ? collectFromJsonLd(body)
                     : collectFromRdf(RdfParsing.parseRdf(body, contentType, sub), sub);
+            OutboundHttp.recordSuccess(sub);
             result.check("subjectDereferenced", true);
             return jwks;
         } catch (Exception e) {
+            // The cause can name the address the host resolved to, so it is logged, not returned.
+            log.debugf(e, "[%s] could not dereference or parse sub <%s>", result.getTraceId(), sub);
+            OutboundHttp.recordFailure(sub);
             result.check("subjectDereferenced", false);
-            result.error("Failed to dereference/parse 'sub' <" + sub + ">: " + e.getMessage());
+            result.error("Failed to dereference 'sub' <" + sub + "> as a controlled identifier document");
             return null;
         }
     }

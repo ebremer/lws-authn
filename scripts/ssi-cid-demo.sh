@@ -4,7 +4,9 @@
 #
 # Unlike the OpenID demo, Keycloak does NOT issue the credential here — the agent does. The script:
 #   1. logs in as the Keycloak admin
-#   2. ensures a realm, and enables unmanaged user attributes (so 'lws_jwk' can be stored)
+#   2. ensures a realm, and allows admin-managed unmanaged user attributes (so 'lws_jwk' can be
+#      stored by an admin but NOT by the end user -- a user who can set their own key can mint
+#      credentials for their own identity)
 #   3. ensures a user
 #   4. generates an EC P-256 keypair (the agent keeps the private key)
 #   5. registers the PUBLIC JWK on the user as the 'lws_jwk' attribute
@@ -35,6 +37,19 @@ for tool in curl jq openssl xxd; do command -v "$tool" >/dev/null || { echo "$to
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+# The /verify endpoints are authenticated by default (see the README, "Securing the verify
+# endpoints"). VERIFY_TOKEN is the *caller's* credential; the credential being verified always
+# travels in the form body. Leave VERIFY_TOKEN empty only if the deployment runs them in
+# `public` mode.
+verify_post() {
+  local url="$1"; shift
+  if [ -n "${VERIFY_TOKEN:-}" ]; then
+    curl -sS -X POST "$url" -H "Authorization: Bearer $VERIFY_TOKEN" "$@"
+  else
+    curl -sS -X POST "$url" "$@"
+  fi
+}
+
 note() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 die()  { printf '\033[1;31m%s\033[0m\n' "$*" >&2; exit 1; }
 api()  { curl -sS -H "Authorization: Bearer $ADMIN_TOKEN" "$@"; }
@@ -48,17 +63,20 @@ ADMIN_TOKEN=$(curl -sS -X POST "$KC_URL/realms/master/protocol/openid-connect/to
 [ -n "$ADMIN_TOKEN" ] || die "Admin login failed. Is Keycloak up at $KC_URL, and ADMIN_USER/ADMIN_PASS correct?"
 echo "ok"
 
-note "2. Ensure realm '$REALM' and enable unmanaged attributes"
+note "2. Ensure realm '$REALM' and allow admin-managed unmanaged attributes"
 if [ "$(api -o /dev/null -w '%{http_code}' "$KC_URL/admin/realms/$REALM")" = 404 ]; then
   api -X POST "$KC_URL/admin/realms" -H 'Content-Type: application/json' \
       -d "{\"realm\":\"$REALM\",\"enabled\":true,\"sslRequired\":\"external\"}"
   echo "created realm $REALM"
 fi
 # Keycloak 26 rejects undeclared attributes unless unmanaged attributes are allowed.
+# ADMIN_EDIT, not ENABLED: ENABLED lets the *end user* manage unmanaged attributes, and 'lws_jwk'
+# is the key their own controlled identifier document publishes. A user who can write it can register
+# any key against their identity and sign credentials for it.
 api "$KC_URL/admin/realms/$REALM/users/profile" \
-  | jq '.unmanagedAttributePolicy = "ENABLED"' > "$WORK/profile.json"
+  | jq '.unmanagedAttributePolicy = "ADMIN_EDIT"' > "$WORK/profile.json"
 api -X PUT "$KC_URL/admin/realms/$REALM/users/profile" -H 'Content-Type: application/json' -d @"$WORK/profile.json" >/dev/null
-echo "unmanaged attributes enabled"
+echo "unmanaged attributes set to ADMIN_EDIT (admins may write lws_jwk; users may not)"
 
 note "3. Ensure user '$USERNAME'"
 USER_UUID=$(api "$KC_URL/admin/realms/$REALM/users?username=$USERNAME&exact=true" | jq -r '.[0].id // empty')
@@ -74,7 +92,14 @@ else
   echo "user $USERNAME already exists ($USER_UUID)"
 fi
 
-note "4. Generate the agent's EC P-256 keypair (private key stays with the agent)"
+note "4. Obtain a caller token for the verify endpoint"
+# admin-cli exists in every realm and allows the password grant, so this needs no extra client.
+VERIFY_TOKEN="${VERIFY_TOKEN:-$(curl -sS -X POST "$KC_URL/realms/$REALM/protocol/openid-connect/token" \
+  -d grant_type=password -d client_id=admin-cli \
+  -d username="$USERNAME" -d password="$PASSWORD" | jq -r '.access_token // empty')}"
+[ -n "$VERIFY_TOKEN" ] || echo "warning: no caller token; /verify will refuse unless it runs in 'public' mode"
+
+note "5. Generate the agent's EC P-256 keypair (private key stays with the agent)"
 openssl ecparam -name prime256v1 -genkey -noout -out "$WORK/priv.pem" 2>/dev/null
 # Uncompressed public point (04 || X(32) || Y(32)) is the last 65 bytes of the DER SubjectPublicKeyInfo.
 openssl ec -in "$WORK/priv.pem" -pubout -outform DER 2>/dev/null | tail -c 65 > "$WORK/point.bin"
@@ -83,13 +108,13 @@ Y=$(dd if="$WORK/point.bin" bs=1 skip=33 count=32 2>/dev/null | b64u_bin)
 JWK="{\"kid\":\"$KID\",\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"$X\",\"y\":\"$Y\"}"
 echo "public JWK: $JWK"
 
-note "5. Register the public JWK on the user (lws_jwk attribute)"
+note "6. Register the public JWK on the user (lws_jwk attribute)"
 api "$KC_URL/admin/realms/$REALM/users/$USER_UUID" \
   | jq --arg jwk "$JWK" '.attributes = ((.attributes // {}) + {"lws_jwk":[$jwk]})' > "$WORK/user.json"
 api -X PUT "$KC_URL/admin/realms/$REALM/users/$USER_UUID" -H 'Content-Type: application/json' -d @"$WORK/user.json" >/dev/null
 echo "registered"
 
-note "6. Dereference the controlled identifier document (publishes the key)"
+note "7. Dereference the controlled identifier document (publishes the key)"
 CID=$(curl -sS -H 'Accept: application/ld+json' "$KC_URL/realms/$REALM/lws-ssi-cid/cid/$USER_UUID")
 echo "$CID" | jq .
 WEBID=$(echo "$CID" | jq -r .id)
@@ -98,7 +123,7 @@ if [ "$(echo "$CID" | jq '[.authentication[]?.publicKeyJwk] | length')" = 0 ]; t
   die "The document has no authentication key — the lws_jwk attribute was not stored (unmanaged attributes?)."
 fi
 
-note "7. Mint a self-issued ES256 JWT (sub == iss == client_id == $WEBID)"
+note "8. Mint a self-issued ES256 JWT (sub == iss == client_id == $WEBID)"
 NOW=$(date +%s)
 HEADER="{\"alg\":\"ES256\",\"kid\":\"$KID\",\"typ\":\"JWT\"}"
 PAYLOAD="{\"sub\":\"$WEBID\",\"iss\":\"$WEBID\",\"client_id\":\"$WEBID\",\"aud\":[\"$AUDIENCE\"],\"iat\":$NOW,\"exp\":$((NOW+300))}"
@@ -114,8 +139,8 @@ SIG=$(printf '%s' "$R$S" | xxd -r -p | b64u_bin)   # 64-byte raw R||S (JOSE), ba
 JWT="$SIGNING_INPUT.$SIG"
 echo "$JWT"
 
-note "8. Verify the self-signed credential with the provider's /lws-ssi-cid/verify endpoint"
-RESULT=$(curl -sS -X POST "$KC_URL/realms/$REALM/lws-ssi-cid/verify" --data-urlencode "credential=$JWT")
+note "9. Verify the self-signed credential with the provider's /lws-ssi-cid/verify endpoint"
+RESULT=$(verify_post "$KC_URL/realms/$REALM/lws-ssi-cid/verify" --data-urlencode "credential=$JWT")
 echo "$RESULT" | jq .
 
 if [ "$(printf '%s' "$RESULT" | jq -r '.valid // false')" = true ]; then

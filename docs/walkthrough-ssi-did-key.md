@@ -62,8 +62,14 @@ payload = {"sub":"<did:key>","iss":"<did:key>","client_id":"<did:key>",
 
 ```bash
 curl -s -X POST "$KC/realms/$REALM/lws-ssi-did-key/verify" \
+  -H "Authorization: Bearer $CALLER_ACCESS_TOKEN" \
   --data-urlencode "credential=$JWT" | jq
 ```
+
+> `Authorization` identifies **you**, the caller: the `…/verify` endpoints are authenticated by
+> default. The credential being checked always travels in the request body. See
+> [Securing the verify endpoints](../README.md#securing-the-verify-endpoints).
+
 
 ```json
 {
@@ -105,4 +111,3 @@ prior relationship and no lookups.
   nothing to publish or update.
 - **Audience / token type.** The credential carries token type `urn:ietf:params:oauth:token-type:jwt`
   when exchanged; the verifier requires an `aud`. Restrict it to the target server in production.
-```

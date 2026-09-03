@@ -3,6 +3,7 @@ package com.ebremer.lws.authn.saml.verify;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayInputStream;
@@ -50,6 +51,8 @@ class SamlVerifierTest {
 
     private static final String NS = "urn:oasis:names:tc:SAML:2.0:assertion";
     private static final String AUDIENCE = "https://app.example/SAML";
+    private static final String STATUS_SUCCESS = "urn:oasis:names:tc:SAML:2.0:status:Success";
+    private static final String STATUS_RESPONDER = "urn:oasis:names:tc:SAML:2.0:status:Responder";
 
     private KeyPair idpKeyPair;
     private X509Certificate idpCert;
@@ -122,6 +125,101 @@ class SamlVerifierTest {
         assertEquals(Boolean.FALSE, r.getChecks().get("withinValidityWindow"));
     }
 
+    /**
+     * P0-8: a Response that reports a failure status is not a credential, however well signed the
+     * assertion it happens to carry is.
+     */
+    @Test
+    void nonSuccessStatusRejected() throws Exception {
+        Document doc = parse(responseTemplate("alice").replace(STATUS_SUCCESS, STATUS_RESPONDER));
+        signAssertion(doc, idpKeyPair.getPrivate());
+        SamlVerificationResult r = new SamlCredentialVerifier().verify(serialize(doc), idpCert, AUDIENCE);
+        assertFalse(r.isValid(), "a Response whose StatusCode is not Success must be rejected");
+        assertEquals(Boolean.FALSE, r.getChecks().get("statusSuccess"));
+    }
+
+    /** P0-8: a Response with no {@code <samlp:Status>} at all is equally not a success. */
+    @Test
+    void missingStatusRejected() throws Exception {
+        Document doc = parse(responseTemplate("alice").replace(status(STATUS_SUCCESS), ""));
+        signAssertion(doc, idpKeyPair.getPrivate());
+        SamlVerificationResult r = new SamlCredentialVerifier().verify(serialize(doc), idpCert, AUDIENCE);
+        assertFalse(r.isValid(), "a Response with no StatusCode must be rejected");
+        assertEquals(Boolean.FALSE, r.getChecks().get("statusSuccess"));
+    }
+
+    /**
+     * P0-7: a signature is only as good as the certificate it is checked against. An expired IdP
+     * certificate is not a trust anchor, even though the maths still verifies.
+     */
+    @Test
+    void expiredIdpCertificateRejected() throws Exception {
+        KeyPair kp = rsa();
+        X509Certificate expired = certificate(kp, -172_800_000L, -86_400_000L); // expired a day ago
+        Document doc = parse(responseTemplate("alice"));
+        signAssertion(doc, kp.getPrivate());
+        String xml = serialize(doc);
+
+        SamlVerificationResult r = new SamlCredentialVerifier().verify(xml, expired, AUDIENCE);
+        assertFalse(r.isValid(), "an expired IdP certificate must not be accepted as a trust anchor");
+        assertEquals(Boolean.FALSE, r.getChecks().get("certificateValid"));
+
+        // ...but an operator analysing an old credential offline can opt in explicitly.
+        SamlVerificationResult allowed = new SamlCredentialVerifier().verify(xml, expired, AUDIENCE, true);
+        assertTrue(allowed.isValid(), () -> "expected valid with the opt-in, errors: " + allowed.getErrors());
+        assertEquals(Boolean.FALSE, allowed.getChecks().get("certificateValid"));
+    }
+
+    /** P0-9: the bearer SubjectConfirmationData window is enforced, not only {@code <Conditions>}. */
+    @Test
+    void expiredSubjectConfirmationRejected() throws Exception {
+        Document doc = parse(withSubjectConfirmationExpiry(responseTemplate("alice"), iso(-3600)));
+        signAssertion(doc, idpKeyPair.getPrivate());
+        SamlVerificationResult r = new SamlCredentialVerifier().verify(serialize(doc), idpCert, AUDIENCE);
+        assertFalse(r.isValid(), "an expired bearer SubjectConfirmationData must be rejected");
+        assertEquals(Boolean.FALSE, r.getChecks().get("subjectConfirmationWithinWindow"));
+    }
+
+    /** P0-9 / LWS SAML suite: Recipient carries the LWS client identifier, so it is required. */
+    @Test
+    void missingRecipientRejected() throws Exception {
+        Document doc = parse(responseTemplate("alice").replace("Recipient=" + '"' + AUDIENCE + '"' + " ", ""));
+        signAssertion(doc, idpKeyPair.getPrivate());
+        SamlVerificationResult r = new SamlCredentialVerifier().verify(serialize(doc), idpCert, AUDIENCE);
+        assertFalse(r.isValid(), "an assertion with no SubjectConfirmationData/@Recipient must be rejected");
+        assertEquals(Boolean.FALSE, r.getChecks().get("recipientPresent"));
+    }
+
+    /** P0-9: only a bearer subject confirmation is an LWS credential. */
+    @Test
+    void nonBearerSubjectConfirmationRejected() throws Exception {
+        Document doc = parse(responseTemplate("alice")
+                .replace("urn:oasis:names:tc:SAML:2.0:cm:bearer", "urn:oasis:names:tc:SAML:2.0:cm:holder-of-key"));
+        signAssertion(doc, idpKeyPair.getPrivate());
+        SamlVerificationResult r = new SamlCredentialVerifier().verify(serialize(doc), idpCert, AUDIENCE);
+        assertFalse(r.isValid(), "a non-bearer SubjectConfirmation must be rejected");
+        assertEquals(Boolean.FALSE, r.getChecks().get("bearerSubjectConfirmation"));
+    }
+
+    /** P0-4: a rejection carries a trace id, and never the underlying exception. */
+    @Test
+    void failureIsOpaqueButTraceable() {
+        SamlVerificationResult r = new SamlCredentialVerifier().verify("not xml at all", idpCert, AUDIENCE);
+        assertFalse(r.isValid());
+        assertNotNull(r.getTraceId(), "a failed verification must carry a trace id");
+        assertEquals(List.of("Credential could not be validated"), r.getErrors(),
+                "the parser exception must not be reflected back to the caller");
+    }
+
+    /** Rewrites the SubjectConfirmationData NotOnOrAfter in a response template. */
+    private static String withSubjectConfirmationExpiry(String xml, String notOnOrAfter) {
+        int start = xml.indexOf("<saml:SubjectConfirmationData");
+        int end = xml.indexOf("/>", start);
+        String replacement = "<saml:SubjectConfirmationData Recipient=" + '"' + AUDIENCE + '"'
+                + " NotOnOrAfter=" + '"' + notOnOrAfter + '"';
+        return xml.substring(0, start) + replacement + xml.substring(end);
+    }
+
     // --------------------------------------------------------------------------- SAML construction
 
     private String signedResponse(String nameId) throws Exception {
@@ -135,6 +233,7 @@ class SamlVerifierTest {
         return "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"" + NS
                 + "\" ID=\"r1\" Version=\"2.0\" IssueInstant=\"" + now + "\">"
                 + "<saml:Issuer>https://idp.example</saml:Issuer>"
+                + status(STATUS_SUCCESS)
                 + "<saml:Assertion ID=\"a1\" Version=\"2.0\" IssueInstant=\"" + now + "\">"
                 + "<saml:Issuer>https://idp.example</saml:Issuer>"
                 + "<saml:Subject><saml:NameID Format=\"urn:oasis:names:tc:SAML:2.0:nameid-format:persistent\">"
@@ -153,14 +252,18 @@ class SamlVerifierTest {
 
     /** Like {@link #responseTemplate} but the assertion's {@code <Conditions>} has no NotOnOrAfter. */
     private static String responseTemplateNoExpiry(String nameId) {
-        String now = iso(0), nb = iso(-60);
+        String now = iso(0), nb = iso(-60), exp = iso(3600);
         return "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"" + NS
                 + "\" ID=\"r1\" Version=\"2.0\" IssueInstant=\"" + now + "\">"
                 + "<saml:Issuer>https://idp.example</saml:Issuer>"
+                + status(STATUS_SUCCESS)
                 + "<saml:Assertion ID=\"a1\" Version=\"2.0\" IssueInstant=\"" + now + "\">"
                 + "<saml:Issuer>https://idp.example</saml:Issuer>"
                 + "<saml:Subject><saml:NameID Format=\"urn:oasis:names:tc:SAML:2.0:nameid-format:persistent\">"
-                + nameId + "</saml:NameID></saml:Subject>"
+                + nameId + "</saml:NameID>"
+                + "<saml:SubjectConfirmation Method=\"urn:oasis:names:tc:SAML:2.0:cm:bearer\">"
+                + "<saml:SubjectConfirmationData Recipient=\"" + AUDIENCE + "\" NotOnOrAfter=\"" + exp + "\"/>"
+                + "</saml:SubjectConfirmation></saml:Subject>"
                 + "<saml:Conditions NotBefore=\"" + nb + "\">" // no NotOnOrAfter -> unbounded
                 + "<saml:AudienceRestriction><saml:Audience>" + AUDIENCE + "</saml:Audience></saml:AudienceRestriction>"
                 + "</saml:Conditions>"
@@ -196,6 +299,10 @@ class SamlVerifierTest {
 
     // ---------------------------------------------------------------------------------- utilities
 
+    private static String status(String code) {
+        return "<samlp:Status><samlp:StatusCode Value=\"" + code + "\"/></samlp:Status>";
+    }
+
     private static String iso(long offsetSec) {
         return Instant.now().plusSeconds(offsetSec).truncatedTo(ChronoUnit.SECONDS).toString();
     }
@@ -220,11 +327,18 @@ class SamlVerifierTest {
     }
 
     private static X509Certificate selfSigned(KeyPair kp) throws Exception {
+        return certificate(kp, -1000L, 86_400_000L);
+    }
+
+    /** A self-signed certificate whose validity window is offset from now by the given milliseconds. */
+    private static X509Certificate certificate(KeyPair kp, long notBeforeOffset, long notAfterOffset)
+            throws Exception {
         long now = System.currentTimeMillis();
         X500Name dn = new X500Name("CN=test-idp");
         ContentSigner signer = new JcaContentSignerBuilder("SHA256withRSA").build(kp.getPrivate());
         return new JcaX509CertificateConverter().getCertificate(
                 new JcaX509v3CertificateBuilder(dn, BigInteger.valueOf(now),
-                        new Date(now - 1000), new Date(now + 86_400_000L), dn, kp.getPublic()).build(signer));
+                        new Date(now + notBeforeOffset), new Date(now + notAfterOffset),
+                        dn, kp.getPublic()).build(signer));
     }
 }

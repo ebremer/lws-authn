@@ -35,6 +35,7 @@ import com.ebremer.lws.authn.openid.LWSConstants;
 import com.ebremer.lws.authn.openid.cid.ControlledIdentifierDocument;
 import com.ebremer.lws.authn.openid.verify.LWSCredentialVerifier;
 import com.ebremer.lws.authn.openid.verify.VerificationResult;
+import com.ebremer.lws.authn.verify.VerifyAccess;
 
 /**
  * @author Erich Bremer
@@ -42,9 +43,11 @@ import com.ebremer.lws.authn.openid.verify.VerificationResult;
 public class LWSResourceProvider implements RealmResourceProvider {
 
     private final KeycloakSession session;
+    private final VerifyAccess access;
 
-    public LWSResourceProvider(KeycloakSession session) {
+    public LWSResourceProvider(KeycloakSession session, VerifyAccess access) {
         this.session = session;
+        this.access = access;
     }
 
     @Override
@@ -96,8 +99,10 @@ public class LWSResourceProvider implements RealmResourceProvider {
      * lists {@code iss} as an OpenID Provider service, perform OpenID Connect Discovery and validate
      * the signature.
      *
-     * <p>The credential may be supplied as the {@code credential} form parameter or as a
-     * {@code Bearer} authorization header.</p>
+     * <p>The credential is supplied as the {@code credential} form parameter. The
+     * {@code Authorization} header carries the <em>caller's</em> own credential (see
+     * {@link com.ebremer.lws.authn.verify.VerifyAccess}); only in {@code public} access mode does it
+     * fall back to meaning the credential to verify.</p>
      */
     @POST
     @Path(LWSConstants.VERIFY_PATH)
@@ -105,10 +110,13 @@ public class LWSResourceProvider implements RealmResourceProvider {
     @Produces(MediaType.APPLICATION_JSON)
     public Response verify(@FormParam("credential") String credential,
                            @HeaderParam("Authorization") String authorization) {
+        Response denied = access.check(session, authorization);
+        if (denied != null) {
+            return denied;
+        }
         String token = credential;
-        if ((token == null || token.isBlank()) && authorization != null
-                && authorization.regionMatches(true, 0, "Bearer ", 0, 7)) {
-            token = authorization.substring(7).trim();
+        if ((token == null || token.isBlank()) && access.allowsCredentialInAuthorizationHeader()) {
+            token = VerifyAccess.bearerToken(authorization);
         }
         if (token == null || token.isBlank()) {
             return Response.status(Response.Status.BAD_REQUEST)

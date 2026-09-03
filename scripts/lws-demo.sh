@@ -37,6 +37,19 @@ WEBID_ATTRIBUTE="${WEBID_ATTRIBUTE:-}"   # empty => Keycloak hosts the WebID at 
 command -v curl >/dev/null || { echo "curl is required"; exit 1; }
 command -v jq   >/dev/null || { echo "jq is required";   exit 1; }
 
+# The /verify endpoints are authenticated by default (see the README, "Securing the verify
+# endpoints"). VERIFY_TOKEN is the *caller's* credential; the credential being verified always
+# travels in the form body. Leave VERIFY_TOKEN empty only if the deployment runs them in
+# `public` mode.
+verify_post() {
+  local url="$1"; shift
+  if [ -n "${VERIFY_TOKEN:-}" ]; then
+    curl -sS -X POST "$url" -H "Authorization: Bearer $VERIFY_TOKEN" "$@"
+  else
+    curl -sS -X POST "$url" "$@"
+  fi
+}
+
 note() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 die()  { printf '\033[1;31m%s\033[0m\n' "$*" >&2; exit 1; }
 api()  { curl -sS -H "Authorization: Bearer $ADMIN_TOKEN" "$@"; }
@@ -134,6 +147,9 @@ TOKEN_RESPONSE=$(curl -sS -X POST "$KC_URL/realms/$REALM/protocol/openid-connect
   -d username="$USERNAME" -d password="$PASSWORD")
 ID_TOKEN=$(printf '%s' "$TOKEN_RESPONSE" | jq -r '.id_token // empty')
 [ -n "$ID_TOKEN" ] || { echo "$TOKEN_RESPONSE" | jq .; die "Could not obtain an id_token."; }
+# The access token from the same response authenticates *us* to the verify endpoint; the ID Token is
+# the credential being verified. Two different things, two different places in the request.
+VERIFY_TOKEN="${VERIFY_TOKEN:-$(printf '%s' "$TOKEN_RESPONSE" | jq -r '.access_token // empty')}"
 
 PAYLOAD=$(jwt_payload "$ID_TOKEN")
 SUB=$(printf '%s' "$PAYLOAD" | jq -r .sub)
@@ -146,7 +162,7 @@ curl -sS -H 'Accept: text/turtle' "$SUB" || echo "(could not fetch $SUB — is i
 echo
 
 note "7. Verify the credential with the provider's /verify endpoint"
-RESULT=$(curl -sS -X POST "$ISS/lws/verify" --data-urlencode "credential=$ID_TOKEN")
+RESULT=$(verify_post "$ISS/lws/verify" --data-urlencode "credential=$ID_TOKEN")
 echo "$RESULT" | jq .
 
 if [ "$(printf '%s' "$RESULT" | jq -r '.valid // false')" = true ]; then

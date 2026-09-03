@@ -63,10 +63,26 @@ test SP can capture it. Save the base64 (or decoded XML) to `response.b64`.
 
 ```bash
 curl -s -X POST "$KC/realms/$REALM/lws-saml/verify" \
+  -H "Authorization: Bearer $CALLER_ACCESS_TOKEN" \
   --data-urlencode "credential@response.b64" \
   --data-urlencode "certificate@idp.pem" \
   --data-urlencode "audience=https://app.example/SAML" | jq
 ```
+
+> `Authorization` identifies **you**, the caller: the `…/verify` endpoints are authenticated by
+> default. The credential being checked always travels in the request body. See
+> [Securing the verify endpoints](../README.md#securing-the-verify-endpoints).
+
+The assertion must also satisfy the parts of SAML 2.0 that make a bearer assertion an authentication
+credential, none of which `<Conditions>` implies on its own:
+
+- the Response's `<samlp:StatusCode>` is `urn:oasis:names:tc:SAML:2.0:status:Success`;
+- there is exactly one `<SubjectConfirmation>`, with `Method="…:cm:bearer"`;
+- its `<SubjectConfirmationData>` carries a `Recipient` — the LWS client identifier, which the suite
+  makes mandatory — and a `NotOnOrAfter` that has not passed;
+- the IdP certificate you supply is itself inside its validity period. Pass
+  `allowExpiredCertificate=true` to override that, but only for offline analysis of an old
+  credential — an expired certificate is not a trust anchor.
 
 ```json
 {
@@ -104,12 +120,13 @@ the credential is presented as a bearer token (`Authorization: Bearer …`) with
 - **Out-of-band trust.** This suite adds no discovery — the verifier must already trust the IdP's
   certificate (e.g. pinned, or taken from the realm metadata as above). Rotating the IdP's SAML key
   means re-distributing the certificate.
-- **What is validated.** Signature (XML-DSig, against the supplied cert), the `<Conditions>` time
-  window, and the audience. The verifier does not build an X.509 trust chain or fetch metadata — it
-  trusts the certificate you give it.
+- **What is validated.** The XML-DSig signature against the supplied certificate; that the certificate
+  is itself within its validity period; the Response's `<samlp:StatusCode>`; a single bearer
+  `<SubjectConfirmation>` with a `Recipient` and an unexpired `NotOnOrAfter`; the `<Conditions>` time
+  window; and the audience. The verifier does not build an X.509 trust chain or fetch metadata — it
+  trusts the certificate you give it, and only checks that the certificate has not expired.
 - **Audience / token exchange.** Restrict the assertion's audience to the target server, and use OAuth
   2.0 Token Exchange (RFC 8693, token type `urn:ietf:params:oauth:token-type:saml2`) where a broadly
   scoped assertion must be narrowed.
 - **Encrypted assertions / Redirect-binding deflate** are not handled; supply the signed Response as
   XML or base64-encoded XML.
-```

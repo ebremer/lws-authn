@@ -21,17 +21,27 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
+import org.keycloak.models.KeycloakSession;
 import org.keycloak.services.resource.RealmResourceProvider;
 import org.keycloak.util.JsonSerialization;
 
 import com.ebremer.lws.authn.ssididkey.DidKeyConstants;
 import com.ebremer.lws.authn.ssididkey.verify.DidKeyVerificationResult;
 import com.ebremer.lws.authn.ssididkey.verify.SelfSignedDidKeyVerifier;
+import com.ebremer.lws.authn.verify.VerifyAccess;
 
 /**
  * @author Erich Bremer
  */
 public class DidKeyResourceProvider implements RealmResourceProvider {
+
+    private final KeycloakSession session;
+    private final VerifyAccess access;
+
+    public DidKeyResourceProvider(KeycloakSession session, VerifyAccess access) {
+        this.session = session;
+        this.access = access;
+    }
 
     @Override
     public Object getResource() {
@@ -44,8 +54,10 @@ public class DidKeyResourceProvider implements RealmResourceProvider {
     }
 
     /**
-     * Verifies a self-issued did:key JWT. The credential may be supplied as the {@code credential}
-     * form parameter or as a {@code Bearer} authorization header.
+     * Verifies a self-issued did:key JWT. The credential is supplied as the {@code credential} form
+     * parameter; the {@code Authorization} header carries the <em>caller's</em> own credential (see
+     * {@link com.ebremer.lws.authn.verify.VerifyAccess}), and only falls back to meaning the
+     * credential to verify in {@code public} access mode.
      */
     @POST
     @Path(DidKeyConstants.VERIFY_PATH)
@@ -53,10 +65,13 @@ public class DidKeyResourceProvider implements RealmResourceProvider {
     @Produces(MediaType.APPLICATION_JSON)
     public Response verify(@FormParam("credential") String credential,
                            @HeaderParam("Authorization") String authorization) {
+        Response denied = access.check(session, authorization);
+        if (denied != null) {
+            return denied;
+        }
         String token = credential;
-        if ((token == null || token.isBlank()) && authorization != null
-                && authorization.regionMatches(true, 0, "Bearer ", 0, 7)) {
-            token = authorization.substring(7).trim();
+        if ((token == null || token.isBlank()) && access.allowsCredentialInAuthorizationHeader()) {
+            token = VerifyAccess.bearerToken(authorization);
         }
         if (token == null || token.isBlank()) {
             return Response.status(Response.Status.BAD_REQUEST)

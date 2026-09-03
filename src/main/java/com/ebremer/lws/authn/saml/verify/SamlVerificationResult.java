@@ -19,7 +19,7 @@ import com.fasterxml.jackson.annotation.JsonPropertyOrder;
  * @author Erich Bremer
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
-@JsonPropertyOrder({"valid", "subject", "issuer", "audiences", "recipient", "notBefore", "notOnOrAfter", "checks", "errors"})
+@JsonPropertyOrder({"valid", "subject", "issuer", "audiences", "recipient", "notBefore", "notOnOrAfter", "checks", "errors", "traceId"})
 public class SamlVerificationResult {
 
     private boolean valid;
@@ -31,6 +31,7 @@ public class SamlVerificationResult {
     private List<String> audiences = new ArrayList<>();
     private final Map<String, Boolean> checks = new LinkedHashMap<>();
     private final List<String> errors = new ArrayList<>();
+    private String traceId;
 
     public boolean isValid() {
         return valid;
@@ -94,6 +95,18 @@ public class SamlVerificationResult {
 
     public List<String> getErrors() {
         return errors;
+    }
+
+    /**
+     * Correlation id for the server log. Failure detail that would describe this server's network is
+     * logged rather than returned; this id ties the two together.
+     */
+    public String getTraceId() {
+        return traceId;
+    }
+
+    public void setTraceId(String traceId) {
+        this.traceId = traceId;
     }
 
     public void check(String name, boolean ok) {

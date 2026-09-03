@@ -18,6 +18,11 @@ establishes trust *dynamically* — it dereferences your `sub` (WebID), sees tha
 names this Keycloak as its `OpenIdProvider`, and only then trusts tokens from that issuer. Your
 identity is self-describing.
 
+> If you point the mapper at a **WebID user attribute**, that attribute becomes the credential's
+> subject — so it must not be user-writable. Keep the realm's unmanaged attribute policy at
+> `ADMIN_EDIT`, or declare the attribute in the user profile with admin-only write permission.
+> A user who can set their own `sub` can claim any WebID.
+
 ---
 
 ## Prerequisites
