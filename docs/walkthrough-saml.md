@@ -21,7 +21,7 @@ IdP's signing certificate; LWS adds no discovery mechanism on top of SAML.
 
 ## Prerequisites
 
-- Keycloak **26.7.0** with the `lws-authn` provider deployed — see the [README](../README.md).
+- Keycloak **26.7.3** with the `lws-authn` provider deployed — see the [README](../README.md).
 - `curl`, `jq`, `openssl`.
 
 > Unlike the JWT suites, there is **no shell demo** for SAML — producing a signed SAML Response means

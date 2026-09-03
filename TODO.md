@@ -12,9 +12,10 @@ order is roughly "cheapest first".
 failures). Nothing below is a build breakage — these are security, conformance, robustness and
 hygiene gaps.
 
-> ### P0 and P1 are done
+> ### P0, P1 and P4 are done
 >
-> `mvn test` is green at **93 tests** (21 before this work started). The changes worth knowing about
+> `mvn test` is green at **93 tests** (21 before this work started), and
+> Erich confirmed `mvn verify` — the Testcontainers integration test — passes on a machine with Docker. The changes worth knowing about
 > before reading further:
 >
 > - **The `…/verify` endpoints are now authenticated by default** (`access=bearer`). This is a
@@ -31,9 +32,10 @@ hygiene gaps.
 > - The SAML verifier now checks `<samlp:Status>`, the IdP certificate's own validity, and the bearer
 >   `<SubjectConfirmationData>` (method, `Recipient`, `NotOnOrAfter`).
 >
-> **Not run here:** the Testcontainers integration test. It was updated for the new access control
-> (including a case asserting anonymous verification is refused) and it compiles, but Docker was not
-> available in this environment, so it has not executed. Run `mvn verify` where Docker is.
+> **Integration test:** `mvn clean verify` passes — 93 unit tests plus 8 in `LwsAuthIT`, which deploys
+> the shaded JAR into a real Keycloak 26.7.3 container. It earned its keep on P4: two of its assertions
+> failed on the first run and caught a packaging change that broke Jena's Turtle writer at runtime,
+> which no unit test could have seen.
 >
 > P3-1 (a `401` with no `WWW-Authenticate` when a *credential* is invalid) is now more visible than it
 > was: access-control denials send a challenge and credential rejections do not, which is what
@@ -56,6 +58,36 @@ hygiene gaps.
 >   re-encoded and must reproduce the identifier, so one key cannot have two identifiers. Curve
 >   parameters now come from the JDK instead of hand-transcribed constants.
 > - **SAML:** `<Issuer>` is required rather than merely recorded.
+>
+> ### P4 (all six items)
+>
+> - **Libraries Keycloak already ships were bundled unrelocated** — including
+>   `org.glassfish:jakarta.json` 2.0.1, an *older* copy of the same `jakarta.json.*` packages the server
+>   supplies at 2.1.3. Two implementations of one package is a split-package hazard.
+> - The fix is two strategies, chosen per library, and getting it wrong fails either way: where
+>   Keycloak's copy satisfies Jena it is now `provided`; where **Jena needs a newer version**
+>   (`titanium-json-ld` 1.7.0 vs Keycloak's 1.3.3, `commons-collections4` 4.5.0 vs 4.4, `caffeine`
+>   3.2.4 vs 3.2.3) it is bundled and **relocated**, as `commons-codec` already was. Those versions are
+>   pinned explicitly: Maven breaks the tie by declaration order and would otherwise have relocated
+>   Keycloak's older copy — a four-minor downgrade of the library Jena parses JSON-LD with.
+> - `maven-enforcer-plugin` (duplicate classes over the bundled scopes, duplicate POM versions, Java and
+>   Maven floors) and a CycloneDX SBOM at `target/bom.json`. The shade `artifactSet` excludes are the
+>   guard that actually holds for what must never be bundled. Note `banDuplicateClasses` cannot cover
+>   `provided`: Keycloak's own tree duplicates classes across its modules.
+> - **`maven-jar-plugin` now sets `forceCreation`.** Shade replaces `target/lws-authn-0.1.0.jar` with
+>   its own output, so on a second `package` without `clean` the jar plugin saw a file newer than
+>   `target/classes`, skipped rebuilding, and shade re-shaded its own previous output. That was latent
+>   before; adding a licence entry turned it into a hard `duplicate entry` failure, which is how it
+>   surfaced.
+> - **P4-1 turned out to be a misreading** — see the item below. `commons-compress` is Jena's, not a
+>   Testcontainers leak, and removing it broke Turtle serialisation.
+> - LICENSE/NOTICE are merged rather than one surviving arbitrarily, `META-INF/maven/**` and
+>   multi-release `module-info` no longer collide, and the JAR now actually carries a licence — the
+>   Apache transformer drops every `META-INF/LICENSE` it sees, ours included, so it is re-added as
+>   `META-INF/LICENSE-lws-authn.txt`.
+> - Keycloak 26.7.0 → **26.7.3**, Jena 6.1.0 → **6.2.0**, JUnit 5.11.4 → **5.14.4** (staying on the 5.x
+>   line; JUnit 6 is a separate migration), testcontainers-keycloak → **4.3.1**, bcpkix → **1.85**.
+>   Version references in the docs, scripts and the IT container image were updated to match.
 >
 > **Behaviour that got stricter.** Credentials that used to verify and now will not: an ID Token with
 > no `azp`; a self-issued JWT with no `iat` or no `kid`; a controlled identifier document whose `id`
@@ -142,7 +174,7 @@ Facts from those documents that shape the items below:
   does not expose this. Keep the existing pre-check as defence in depth.
 
 - [x] **P0-6 · Redirect handling is safe only because of a Keycloak default that can be turned off.**
-  Verified in `keycloak-services` 26.7.0: `DefaultHttpClientFactory` calls `disableRedirectHandling()`
+  Verified in `keycloak-services` 26.7.x: `DefaultHttpClientFactory` calls `disableRedirectHandling()`
   and documents `allow-redirects` as *"Default: false"*. But a deployment that sets
   `spi-connections-http-client-default-allow-redirects=true` silently makes every `SsrfGuard` check
   bypassable via a 302 to an internal address, with no signal to the operator.
@@ -420,14 +452,22 @@ Facts from those documents that shape the items below:
 
 ## P4 — Packaging and build
 
-- [ ] **P4-1 · A test-scoped dependency leaks a compile-scope artifact into the production JAR.**
-  Verified with `mvn dependency:list -DincludeScope=runtime`: `org.testcontainers:testcontainers:2.0.4`
-  (test) pulls **`org.apache.commons:commons-compress:1.28.0` at `compile` scope**, and the shade plugin
-  bundles it into `lws-authn-0.1.0.jar` — dead weight and pure CVE surface in a Keycloak provider.
-  **Do:** add `<exclusions>` on the test dependencies (or pin `commons-compress` as `provided`), then
-  re-verify with the same command.
+- [x] **P4-1 · ~~A test-scoped dependency leaks a compile-scope artifact into the production JAR.~~
+  This finding was wrong.** The original reading — `org.testcontainers:testcontainers` (test) pulling
+  `org.apache.commons:commons-compress` in at `compile` scope — came from `mvn dependency:tree`, which
+  prints a resolved node **once, under whichever path won**. commons-compress showed under the
+  Testcontainers branch, but `jena-base` declares it too, and that is why it was at compile scope.
+  It is a genuine Jena runtime dependency: `org.apache.jena.atlas.io.IndentedWriter` touches
+  `BZip2CompressorInputStream` in a static initialiser, so without it on the classpath Jena cannot
+  write **Turtle**, let alone anything compressed.
+  Acting on the wrong reading — pinning it to `test` — broke the CID endpoint with
+  `NoClassDefFoundError`, which `LwsAuthIT` caught. It is now declared explicitly at compile scope with
+  a comment saying why, so the next reader does not re-derive the same mistake.
+  **Lesson for the rest of this file:** `dependency:tree` shows one path per artifact. Use
+  `dependency:tree -Dincludes=<ga>` or read the dependency's own POM before concluding that something
+  is only reachable through a test dependency.
 
-- [ ] **P4-2 · Libraries Keycloak already ships are bundled unrelocated.**
+- [x] **P4-2 · Libraries Keycloak already ships are bundled unrelocated.**
   The shaded JAR currently contains, under their own package names:
   `com.apicatalog:titanium-json-ld:1.3.3`, `com.github.ben-manes.caffeine:3.2.3`,
   `org.apache.commons:commons-collections4:4.4`, `org.jspecify:jspecify:1.0.0`,
@@ -437,23 +477,23 @@ Facts from those documents that shape the items below:
   **Do:** mark the ones Keycloak provides as `provided`, and relocate anything that must stay, exactly
   as `commons-codec` already is in `pom.xml`'s `<relocations>`.
 
-- [ ] **P4-3 · Shade resource collisions, one of them a licence obligation.**
+- [x] **P4-3 · Shade resource collisions, one of them a licence obligation.**
   The build warns on overlapping `META-INF/LICENSE`, `META-INF/LICENSE.txt`, `META-INF/MANIFEST.MF` and
   `META-INF/versions/9/module-info`. Only one `LICENSE`/`NOTICE` survives — for a fat JAR of
   Apache-licensed code that is an Apache-2.0 §4(d) obligation, not just noise.
   **Do:** add `ApacheLicenseResourceTransformer` and `ApacheNoticeResourceTransformer`, and exclude
   `META-INF/versions/*/module-info.class` alongside the existing `module-info.class` filter.
 
-- [ ] **P4-4 · Dependency updates.** `keycloak.version` 26.7.0 → **26.7.3**; `jena.version` 6.1.0 →
+- [x] **P4-4 · Dependency updates.** `keycloak.version` 26.7.0 → **26.7.3**; `jena.version` 6.1.0 →
   **6.2.0** (both confirmed latest on Maven Central). Also review `junit-jupiter` 5.11.4,
   `testcontainers-keycloak` 4.2.1 and `bcpkix-jdk18on` 1.84. Re-run the container IT after each bump, and
   update the version strings in `README.md`, `INSTALL.md` and the four walkthroughs in the same commit.
 
-- [ ] **P4-5 · No build-time guards.** Add `maven-enforcer-plugin` (dependency convergence, banned
+- [x] **P4-5 · No build-time guards.** Add `maven-enforcer-plugin` (dependency convergence, banned
   duplicate classes, required Java version), `cyclonedx-maven-plugin` for an SBOM, and a
   `dependency:analyze` check — so P4-1 and P4-2 fail the build next time instead of needing a review.
 
-- [ ] **P4-6 · `pom.xml`'s `<description>` still describes a single-suite project** ("implementing the LWS
+- [x] **P4-6 · `pom.xml`'s `<description>` still describes a single-suite project** ("implementing the LWS
   1.0 OpenID Connect Authentication Suite"). It implements four.
 
 ---

@@ -1,7 +1,7 @@
 /*
  * Copyright Erich Bremer.
  *
- * Integration test: deploys the built provider JAR into a real Keycloak 26.7.0 via Testcontainers and
+ * Integration test: deploys the built provider JAR into a real Keycloak 26.7.3 via Testcontainers and
  * runs the same end-to-end smoke flow that was validated by hand — the mapper fires, all four suite
  * endpoints mount, shaded Jena serves/parses RDF, and the OpenID and did:key credentials verify.
  *
@@ -50,7 +50,7 @@ class LwsAuthIT {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final HttpClient HTTP = HttpClient.newHttpClient();
     private static final String REALM = "lws-demo";
-    private static final String IMAGE = "quay.io/keycloak/keycloak:26.7.0";
+    private static final String IMAGE = "quay.io/keycloak/keycloak:26.7.3";
     private static final String PROVIDER_JAR = "target/lws-authn-0.1.0.jar";
 
     private KeycloakContainer keycloak;
