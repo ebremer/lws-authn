@@ -7,7 +7,7 @@
 # key generation, point compression, base58btc, ES256/EdDSA signing) since base58 is impractical in
 # pure shell.
 #
-# Requirements: curl, jq, node, and a running Keycloak 26.7.0 with the lws-authn provider deployed.
+# Requirements: curl, jq, node, and a running Keycloak 26.7.3 with the lws-authn provider deployed.
 # Defaults target `kc.sh start-dev` on http://localhost:8080, realm `master` (any realm works —
 # the verifier is realm-agnostic).
 #

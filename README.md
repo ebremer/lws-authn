@@ -1,6 +1,6 @@
 # lws-authn — Keycloak providers for LWS authentication suites
 
-A [Keycloak](https://www.keycloak.org/) **26.7.0** extension implementing **all four** authentication
+A [Keycloak](https://www.keycloak.org/) **26.7.3** extension implementing **all four** authentication
 suites of the W3C [Linked Web Storage (LWS)](https://www.w3.org/TR/lws10-core/) 1.0 protocol, in which
 a **signed token bound to an identity** is used as an authentication credential:
 
@@ -17,7 +17,7 @@ a **signed token bound to an identity** is used as an authentication credential:
   the verifier decodes the key directly, with nothing to dereference.
 
 The OpenID and self-signed-CID suites dereference the subject's
-[Controlled Identifier Document](https://www.w3.org/TR/cid-1.0/) and use **Apache Jena 6.1.0** for RDF;
+[Controlled Identifier Document](https://www.w3.org/TR/cid-1.0/) and use **Apache Jena 6.2.0** for RDF;
 SAML uses Keycloak's SAML library for XML signature validation; `did:key` is pure JDK crypto.
 
 ---
@@ -79,17 +79,37 @@ Keycloak's runtime; a newer build JDK such as 25 is fine.)
 mvn clean package
 ```
 
-This produces a single, self-contained provider JAR: **`target/lws-authn-0.1.0.jar`**. Apache Jena and
-its dependencies are shaded in, and `commons-codec` is relocated so Jena binds to the version it needs
-(≥ 1.19, for `MurmurHash3`) regardless of the older copy Keycloak ships. Keycloak's own SAML and crypto
-libraries are used at `provided` scope (they are part of the server runtime).
+This produces a single, self-contained provider JAR: **`target/lws-authn-0.1.0.jar`**, plus a CycloneDX
+SBOM (`target/bom.json`, `target/bom.xml`) listing exactly what is inside it and under what licence.
+
+Apache Jena and its dependencies are shaded in. Where Jena and Keycloak want the same library, the
+build picks one of two strategies deliberately, because the wrong one is a runtime failure either way:
+
+| Situation | Treatment | Examples |
+|---|---|---|
+| Keycloak's copy satisfies Jena | `provided` — use the server's, bundle nothing | `slf4j-api`, `jcl-over-slf4j`, `jakarta.json`, `jspecify` |
+| Jena needs a **newer** version than Keycloak ships | bundle Jena's version and **relocate** it | `commons-codec` 1.20 (vs 1.11), `titanium-json-ld` 1.7.0 (vs 1.3.3), `commons-collections4` 4.5.0 (vs 4.4), `caffeine` 3.2.4 (vs 3.2.3) |
+
+Bundling an unrelocated second copy of a library the server already has puts two implementations of one
+package on the classpath; marking one `provided` when Jena needs a newer version silently downgrades it.
+The relocated versions are pinned explicitly, because Maven resolves the tie between Jena's and
+Keycloak's copies by declaration order and would otherwise pick Keycloak's older one.
+
+`mvn package` enforces this: `maven-enforcer-plugin` fails the build on duplicate classes among the
+bundled artifacts, and the shade plugin's `artifactSet` excludes hold regardless of what Maven's scope
+mediation decides. Keycloak's own SAML, crypto and HTTP libraries are `provided` — they are part of the
+server runtime.
+
+Getting this wrong does not fail a unit test: it fails when Jena loads inside Keycloak. `mvn verify`
+runs `LwsAuthIT`, which deploys the shaded JAR into a real Keycloak container and exercises RDF
+serving, parsing and SPARQL — run it after touching dependencies.
 
 ## Deploy
 
 Keycloak loads provider JARs from its `providers/` directory.
 
 ```bash
-# from the project root, with $KC_HOME pointing at your Keycloak 26.7.0 install
+# from the project root, with $KC_HOME pointing at your Keycloak 26.7.3 install
 cp target/lws-authn-0.1.0.jar "$KC_HOME/providers/"
 
 "$KC_HOME/bin/kc.sh" build      # re-augment with the new provider

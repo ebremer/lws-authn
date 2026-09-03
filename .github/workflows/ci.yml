@@ -19,7 +19,7 @@ jobs:
           cache: maven
 
       # `mvn verify` packages the shaded provider JAR, then the Failsafe plugin runs LwsAuthIT,
-      # which deploys that JAR into a real Keycloak 26.7.0 container and exercises every suite.
+      # which deploys that JAR into a real Keycloak 26.7.3 container and exercises every suite.
       - name: Build and run integration tests
         run: mvn -B -ntp verify
 

@@ -27,7 +27,7 @@ carry both `iat` and `exp`.
 
 ## Prerequisites
 
-- Keycloak **26.7.0** with the `lws-authn` provider deployed — see the [README](../README.md).
+- Keycloak **26.7.3** with the `lws-authn` provider deployed — see the [README](../README.md).
 - `curl`, `jq`, and `openssl`.
 - For a quick local run: `bin/kc.sh start-dev` (admin/admin) at `http://localhost:8080`.
 

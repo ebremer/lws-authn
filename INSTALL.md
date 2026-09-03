@@ -40,14 +40,14 @@ Throughout, replace **`id.example.com`** with your server's public hostname and 
 
 | Component | Version | Notes |
 |-----------|---------|-------|
-| Keycloak server | **26.7.0** | **Must match** `keycloak.version` in the provider's `pom.xml`. |
+| Keycloak server | **26.7.3** | **Must match** `keycloak.version` in the provider's `pom.xml`. |
 | `lws-authn` provider | **0.1.0** | Produces `lws-authn-0.1.0.jar`. |
 | JDK (Keycloak runtime) | **21** | Keycloak 26.x is built and tested on OpenJDK 21. |
 | JDK (build) | **21+** | Any JDK ≥ 21 builds it; it compiles to Java 21 bytecode. |
 
 ```bash
 # Handy shell variables used in the commands below
-export KC_VERSION=26.7.0
+export KC_VERSION=26.7.3
 export PROVIDER_VERSION=0.1.0
 export KC_HOSTNAME=id.example.com     # your public hostname
 ```
@@ -127,7 +127,7 @@ sudo useradd  --system --gid keycloak \
 
 ## 5. Download & install Keycloak
 
-Download the distribution that matches the provider's build (`26.7.0`) and unpack it under `/opt`,
+Download the distribution that matches the provider's build (`26.7.3`) and unpack it under `/opt`,
 using a version-independent symlink so future upgrades are a one-line switch:
 
 ```bash

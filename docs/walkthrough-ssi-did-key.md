@@ -21,7 +21,7 @@ client_id ==` the `did:key`, and the verifier reconstructs the public key from i
 
 ## Prerequisites
 
-- Keycloak **26.7.0** with the `lws-authn` provider deployed — see the [README](../README.md).
+- Keycloak **26.7.3** with the `lws-authn` provider deployed — see the [README](../README.md).
 - `curl`, `jq`, and `node` (Node is used to mint the key/JWT; base58btc is impractical in pure shell).
 
 ---
