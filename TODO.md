@@ -14,11 +14,11 @@ hygiene gaps.
 
 > ### P0, P1, P2, P3, P4, P5 and P6 are done
 >
-> More precisely: every item those bands contained **at review time**, plus **P6-8**, added
-> afterwards. Two added items are still open — **P0-10** (the live deployment still runs pre-P0 code)
-> and **P4-7** (no `.gitattributes`). P0-10 is the highest priority item in this file: it is the only
-> one with consequences outside the repository. **P1-C6** was checked off in the P1 pass without its
-> fix being made; P3-3 finished it, and its entry now says so.
+> More precisely: every item those bands contained **at review time**, plus **P4-7** and **P6-8**,
+> added afterwards. **One item is open: P0-10** — the live deployment still runs pre-P0 code. It is the
+> highest priority item in this file and the only one with consequences outside the repository; it is
+> also the only one that cannot be closed from inside the repository. **P1-C6** was checked off in the
+> P1 pass without its fix being made; P3-3 finished it, and its entry now says so.
 >
 > `mvn clean verify` is green: **144 unit tests** (21 before this work started) and **23** in
 > `LwsAuthIT` against a real Keycloak 26.7.3 container. The changes worth knowing about
@@ -642,27 +642,31 @@ Facts from those documents that shape the items below:
 - [x] **P4-6 · `pom.xml`'s `<description>` still describes a single-suite project** ("implementing the LWS
   1.0 OpenID Connect Authentication Suite"). It implements four.
 
-- [ ] **P4-7 · No `.gitattributes`, so line endings are whatever each clone decides — and the shell
+- [x] **P4-7 · No `.gitattributes`, so line endings are whatever each clone decides — and the shell
   scripts break on Linux.** *(Added after the P4 pass, from a Windows-specific review.)*
   Git for Windows sets `core.autocrlf=true` at system level (neither local nor global config chooses
-  it). Git *stores* `scripts/*.sh` with LF, so the repository content is correct and Linux CI is
-  unaffected — but a Windows working tree has CRLF, including the scripts.
+  it). Git *stores* `scripts/*.sh` with LF, so the repository content was already correct and Linux CI
+  unaffected — but a Windows working tree had CRLF, including the scripts, and with no `.gitattributes`
+  the outcome depended on each contributor's setting, so someone with `input` or `false` could commit
+  CRLF *into* the repository and break Linux CI for everyone.
 
-  Verified: same Keycloak image, same bash 5.1.8, two scripts differing only in line endings — the LF
-  one exits 0, the CRLF one fails with `env: 'bash\r': No such file or directory`, exit 127. Git Bash
-  runs CRLF scripts happily, which is exactly why this is invisible from a Windows box; `bash -n` passes
-  too, so a syntax check does not catch it either. `README.md` documents `bash scripts/lws-demo.sh` as
-  the primary way to try each suite, so anyone taking a Windows checkout into WSL, a container or a
-  Linux host hits it.
+  **Done.** `.gitattributes` at the root:
+  - `* text=auto` — normalises every text file to LF **in the repository**, whatever the local setting
+    says. Working trees still get the platform convention, which is what a Windows editor expects.
+  - `*.sh text eol=lf` — LF in the *working tree* too, on every platform.
 
-  The latent half is worse than the immediate one: with no `.gitattributes` the outcome depends on each
-  contributor's `core.autocrlf`, so someone with `input` or `false` can commit CRLF *into* the
-  repository, at which point Linux CI breaks for everyone.
+  `git add --renormalize .` reported **no changes**, confirming the stored content was already LF; the
+  three scripts were re-checked-out to pick up `eol=lf` and are now LF locally as well. The file itself
+  carries the reasoning, so the next person does not have to rediscover why `eol=lf` is there.
 
-  **Do:** add at the root —
-  `* text=auto` and `*.sh text eol=lf` — then `git add --renormalize .` once. `text=auto` normalises to
-  LF in the repository whatever the local setting; `eol=lf` on `*.sh` forces LF in the *working tree*
-  too, even on Windows. It also silences the CRLF warning printed on every commit.
+  **Verified in a Linux container, both directions**, since the whole point is a failure invisible from
+  Windows (Git Bash runs a CRLF script happily, and `bash -n` passes it):
+
+  | Working-tree form | `./scripts/lws-demo.sh` under `debian:stable-slim` |
+  |---|---|
+  | LF (after this change) | runs; reaches the script's own `curl is required` check |
+  | CRLF (before) | `env: 'bash
+': No such file or directory`, exit 127 |
 
 ---
 
