@@ -221,7 +221,7 @@
             <artifactId>junit-jupiter</artifactId>
             <!-- Latest of the 5.x line. JUnit 6 is available but is a major bump with its own
                  migration; it does not belong in a packaging change. -->
-            <version>5.14.4</version>
+            <version>6.1.3</version>
             <scope>test</scope>
         </dependency>
         <dependency>
