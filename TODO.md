@@ -533,17 +533,49 @@ Facts from those documents that shape the items below:
 
 ## P5 — Tests and CI
 
-- [ ] **P5-1 · `LWSCredentialVerifier` has no unit test at all**, and `SelfSignedCidVerifier` is covered
-  only for `collectFromRdf` (`src/test/.../SelfSignedCidVerifierTest.java`, 2 tests). The full OpenID and
-  SSI-CID validation paths run only under the Docker-gated `LwsAuthIT`, and only on the happy path.
-  **Do:** stand up a JDK `com.sun.net.httpserver.HttpServer` stub serving CIDs, OIDC discovery and JWKS
-  so both verifiers can be driven in `mvn test` without Docker.
+- [ ] **P5-1 · The verifiers' *network* half is only ever exercised on the happy path.**
+  *(Rewritten. The original item asked for a `com.sun.net.httpserver.HttpServer` stub so both verifiers
+  could be driven in `mvn test` without Docker. That premise no longer holds — see "why not a unit-level
+  stub" below — but the coverage gap it pointed at is real and has moved.)*
 
-- [ ] **P5-2 · Add a negative test for every P0/P1 item.** At minimum: `alg: none`; missing `iat`;
-  missing / non-matching `aud`; missing `azp`; missing `kid`; CID `id ≠ sub`; wrong `controller`;
-  non-empty `crit`; HS256 confusion against an RSA CID key; non-canonical `did:key`; expired IdP
-  certificate; `StatusCode != Success`; missing `Recipient`; missing `<Issuer>`; and a `publicKeyJwk`
-  containing `d`.
+  What is covered now: `LWSCredentialVerifierTest` (6) and `SelfSignedCidVerifierTest` (10) between them
+  cover every claim- and document-level rule that is decided *before* anything is dereferenced, plus the
+  static collectors. `LwsAuthIT` (10) drives both verifiers end to end inside a real Keycloak, including
+  a third-party JSON-LD document served over the Testcontainers host bridge.
+
+  What is not: everything between the outbound fetch and the signature, in its failure modes. Nothing
+  exercises OpenID Connect Discovery returning a mismatched `issuer`, a configuration with no
+  `jwks_uri`, a JWKS with no key matching the token's `kid`, an `HS256` token against an RSA discovery
+  key (the algorithm-confusion case `algMatchesKey` exists for), a CID that dereferences but declares no
+  `OpenIdProvider` service, or OpenID Connect Core §3.1.3.7 steps 3–5 rejecting a token minted for a
+  different relying party. On the self-signed side: a `controller` that is not the subject, a
+  `publicKeyJwk` published `use: enc`, an `alg` inconsistent with the published key. Each of these is a
+  branch that returns "invalid" — the direction where a bug is silent, because a verifier that wrongly
+  rejects gets reported and a verifier that wrongly *accepts* does not.
+
+  **Why not a unit-level stub, as originally written.** `verify()` needs a `KeycloakSession`: it resolves
+  `SignatureProvider` from it and fetches through it. Driving the full path off-container means mocking
+  a large SPI interface, and what comes back is Keycloak's crypto only by imitation. Both bugs the
+  integration test has caught — Jena's Turtle writer losing `commons-compress`, and no EC-signed
+  credential verifying in any suite — were invisible to unit tests *by construction*: one needed the
+  real shaded classpath, the other needed Keycloak's real signature providers. A stub that mocks the
+  session would have passed both. `OutboundHttpClientTest` already shows where an off-container HTTP
+  stub does pay: for `OutboundHttp` itself, which takes no session.
+
+  **Do:** extend the host-side server already running in `LwsAuthIT` (`startCidServer`) to serve
+  deliberately broken documents and discovery responses, and add the negative cases there. The container
+  start is the ~28 s; each additional case costs a fraction of a second, so this is close to free in
+  wall-clock and runs against the real classpath and the real crypto. Fold P5-2's list into the same
+  pass rather than duplicating it.
+
+- [ ] **P5-2 · Add a negative test for every P0/P1/P2 rule.** Partly done: `alg: none`, missing `iat`,
+  missing `azp`, missing `kid`, non-empty `crit`, CID `id ≠ sub`, wrong `controller`, non-canonical
+  `did:key`, expired IdP certificate, `StatusCode != Success`, missing `Recipient`, missing `<Issuer>`,
+  a `publicKeyJwk` containing `d`, and a non-matching `aud` all have tests now.
+  Still missing, and all of them on the network half: HS256 confusion against an RSA key, `use: enc` on
+  the selected verification method, discovery `issuer` mismatch, absent `jwks_uri`, no JWK matching the
+  `kid`, and §3.1.3.7 steps 3–5. **Do these in the P5-1 pass** — they need the same fixture, and the
+  point of both items is the same: the "invalid" branches are where a wrong answer goes unnoticed.
 
 - [ ] **P5-3 · `LwsAuthIT` pins host port 8080** (`src/test/.../LwsAuthIT.java:71`) because the OpenID
   verifier dereferences its own issuer from inside the container. The suite therefore fails whenever
