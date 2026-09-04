@@ -91,7 +91,7 @@ Keycloak's runtime; a newer build JDK such as 25 is fine.)
 mvn clean package
 ```
 
-This produces a single, self-contained provider JAR: **`target/lws-authn-0.1.0.jar`**, plus a CycloneDX
+This produces a single, self-contained provider JAR: **`target/lws-authn-0.2.0.jar`**, plus a CycloneDX
 SBOM (`target/bom.json`, `target/bom.xml`) listing exactly what is inside it and under what licence.
 
 Apache Jena and its dependencies are shaded in. Where Jena and Keycloak want the same library, the
@@ -143,7 +143,7 @@ Keycloak loads provider JARs from its `providers/` directory.
 
 ```bash
 # from the project root, with $KC_HOME pointing at your Keycloak 26.7.3 install
-cp target/lws-authn-0.1.0.jar "$KC_HOME/providers/"
+cp target/lws-authn-0.2.0.jar "$KC_HOME/providers/"
 
 "$KC_HOME/bin/kc.sh" build      # re-augment with the new provider
 "$KC_HOME/bin/kc.sh" start      # or start-dev

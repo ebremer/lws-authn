@@ -41,14 +41,14 @@ Throughout, replace **`id.example.com`** with your server's public hostname and 
 | Component | Version | Notes |
 |-----------|---------|-------|
 | Keycloak server | **26.7.3** | **Must match** `keycloak.version` in the provider's `pom.xml`. |
-| `lws-authn` provider | **0.1.0** | Produces `lws-authn-0.1.0.jar`. |
+| `lws-authn` provider | **0.2.0** | Produces `lws-authn-0.2.0.jar`. |
 | JDK (Keycloak runtime) | **21** | Keycloak 26.x is built and tested on OpenJDK 21. |
 | JDK (build) | **21+** | Any JDK ≥ 21 builds it; it compiles to Java 21 bytecode. |
 
 ```bash
 # Handy shell variables used in the commands below
 export KC_VERSION=26.7.3
-export PROVIDER_VERSION=0.1.0
+export PROVIDER_VERSION=0.2.0
 export KC_HOSTNAME=id.example.com     # your public hostname
 ```
 
@@ -152,7 +152,7 @@ sudo -u keycloak /opt/keycloak/bin/kc.sh --version
 
 ## 6. Build the `lws-authn` provider
 
-You need the file **`lws-authn-0.1.0.jar`**. Pick one option.
+You need the file **`lws-authn-0.2.0.jar`**. Pick one option.
 
 ### Option A — build on the server (recommended, self-contained)
 
@@ -166,7 +166,7 @@ mvn clean package
 This produces a single, self-contained provider JAR:
 
 ```
-/tmp/lws-authn/target/lws-authn-0.1.0.jar
+/tmp/lws-authn/target/lws-authn-0.2.0.jar
 ```
 
 Apache Jena and its dependencies are shaded in and `commons-codec` is relocated, so the JAR drops
@@ -179,7 +179,7 @@ Docker-based integration test (that's bound to `mvn verify`). To skip tests for 
 If you already ran `mvn clean package` on another machine, copy the artifact over:
 
 ```bash
-scp target/lws-authn-0.1.0.jar you@id.example.com:/tmp/
+scp target/lws-authn-0.2.0.jar you@id.example.com:/tmp/
 ```
 
 ---
@@ -193,7 +193,7 @@ sudo cp /tmp/lws-authn/target/lws-authn-${PROVIDER_VERSION}.jar /opt/keycloak/pr
 sudo chown keycloak:keycloak /opt/keycloak/providers/lws-authn-${PROVIDER_VERSION}.jar
 ```
 
-> Adjust the source path if you used Option B (e.g. `/tmp/lws-authn-0.1.0.jar`).
+> Adjust the source path if you used Option B (e.g. `/tmp/lws-authn-0.2.0.jar`).
 
 You'll register it with the server via `kc.sh build` in [step 10](#10-build-the-optimized-image)
 (or immediately, in the dev-mode smoke test below).

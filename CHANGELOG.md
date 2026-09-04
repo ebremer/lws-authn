@@ -7,7 +7,7 @@ Item ids like **P0-3** refer to [`TODO.md`](TODO.md), which carries the full rea
 
 ---
 
-## [Unreleased]
+## [0.2.0] — 2026-09-03
 
 Everything below has landed since the `lws-authn-0.1.0` tag (14 June 2026). It is a large change: the
 whole repository was reviewed against the current W3C LWS Working Drafts and the specifications they
@@ -122,11 +122,14 @@ each suite.
 
 ## Versioning
 
-`pom.xml` still reads `0.1.0`, and the `lws-authn-0.1.0` tag points at the first commit — so the JAR
-this tree builds is named `lws-authn-0.1.0.jar` but is **not** the 0.1.0 release. That is fine while
-the only consumer is the author, and a trap the moment two builds exist on one machine.
+**0.2.0 is the first release whose version actually identifies it.** Until this release `pom.xml` read
+`0.1.0` while the `lws-authn-0.1.0` tag pointed at the first commit, so the JAR this tree produced was
+*named* `lws-authn-0.1.0.jar` without being the 0.1.0 release — harmless while the only consumer was
+the author, a trap the moment two builds existed on one machine. The build now produces
+`lws-authn-0.2.0.jar`, so a deployed artifact can be identified by its filename again.
 
-**If you are deploying alongside an existing instance, check what you actually have** — compare the
-JAR's checksum, or look for a behaviour this changelog lists as breaking (an anonymous `POST …/verify`
-returning `401` with a `WWW-Authenticate` header means the new code; returning a verification result
-means the old). Bumping the version before the next deployment would remove the ambiguity.
+**Identifying an already-deployed instance**, which by definition predates this fix and is named
+`lws-authn-0.1.0.jar` whichever code it holds: send an anonymous `POST …/verify`. A `401` carrying a
+`WWW-Authenticate` header is 0.2.0; a verification result is the older code.
+
+Tag each release commit `lws-authn-<version>` so the tag, the POM and the JAR filename agree.

@@ -127,7 +127,7 @@ hygiene gaps.
 >   Maven floors) and a CycloneDX SBOM at `target/bom.json`. The shade `artifactSet` excludes are the
 >   guard that actually holds for what must never be bundled. Note `banDuplicateClasses` cannot cover
 >   `provided`: Keycloak's own tree duplicates classes across its modules.
-> - **`maven-jar-plugin` now sets `forceCreation`.** Shade replaces `target/lws-authn-0.1.0.jar` with
+> - **`maven-jar-plugin` now sets `forceCreation`.** Shade replaces `target/lws-authn-0.2.0.jar` with
 >   its own output, so on a second `package` without `clean` the jar plugin saw a file newer than
 >   `target/classes`, skipped rebuilding, and shade re-shaded its own previous output. That was latent
 >   before; adding a licence entry turned it into a hard `duplicate entry` failure, which is how it
@@ -805,9 +805,10 @@ Facts from those documents that shape the items below:
     comments cite specifications, why a new rule needs a *negative* test, which layer to test at (with
     the two bugs only the container caught as the argument), and the shaded-JAR dependency rules.
   - **`CHANGELOG.md`** — with an explicit **⚠ Breaking** section for the upgrade path, since the
-    defaults themselves changed. It also records that `pom.xml` still reads `0.1.0` while the
-    `lws-authn-0.1.0` tag points at the first commit, so the JAR this tree builds is *named* 0.1.0 but
-    is not 0.1.0 — harmless with one consumer, a trap the moment two builds exist on one machine.
+    defaults themselves changed. It also recorded that `pom.xml` still read `0.1.0` while the
+    `lws-authn-0.1.0` tag pointed at the first commit, so the JAR this tree built was *named* 0.1.0
+    without being 0.1.0 — harmless with one consumer, a trap the moment two builds exist on one
+    machine. **That is now fixed: the version is `0.2.0`.**
 
 - [x] **P6-7 · Licence headers.** `LICENSE` is Apache-2.0 but only 19 of 63 source files said so in a
   form any tool could read.

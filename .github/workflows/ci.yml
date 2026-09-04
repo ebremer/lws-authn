@@ -42,7 +42,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: lws-authn-jar
-          path: target/lws-authn-0.1.0.jar
+          path: target/lws-authn-0.2.0.jar
 
       # The CycloneDX SBOM the build already produces (cyclonedx-maven-plugin, bound to `package`), kept
       # per build so what actually shipped can be matched against an advisory later without having to

@@ -95,7 +95,7 @@ class LwsAuthIT {
     private static final HttpClient HTTP = HttpClient.newHttpClient();
     private static final String REALM = "lws-demo";
     private static final String IMAGE = "quay.io/keycloak/keycloak:26.7.3";
-    private static final String PROVIDER_JAR = "target/lws-authn-0.1.0.jar";
+    private static final String PROVIDER_JAR = "target/lws-authn-0.2.0.jar";
 
     private KeycloakContainer keycloak;
     private String base; // http://localhost:8080

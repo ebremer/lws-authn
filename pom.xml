@@ -3,7 +3,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>com.ebremer</groupId>
     <artifactId>lws-authn</artifactId>
-    <version>0.1.0</version>
+    <version>0.2.0</version>
     <packaging>jar</packaging>
 
     <name>lws-authn</name>
@@ -261,7 +261,7 @@
                 <version>3.13.0</version>
             </plugin>
 
-            <!-- forceCreation matters here. The shade plugin replaces target/lws-authn-0.1.0.jar with
+            <!-- forceCreation matters here. The shade plugin replaces target/lws-authn-0.2.0.jar with
                  the shaded artifact, so on a second `package` without `clean` the jar plugin sees a
                  file newer than target/classes, skips rebuilding, and shade takes its own previous
                  output as input — re-shading an already-shaded JAR. Rebuilding unconditionally keeps
