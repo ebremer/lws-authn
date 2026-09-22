@@ -12,7 +12,7 @@
 # (<did>#<multibase>) — that suite requires one. ENDPOINT=lws-ssi-did-key calls the deprecated
 # endpoint instead, which still answers and marks its responses with a Deprecation header.
 #
-# Requirements: curl, jq, node, and a running Keycloak 26.7.3 with the lws-authn provider deployed.
+# Requirements: curl, jq, node, and a running Keycloak 26.7.4 with the lws-authn provider deployed.
 # Defaults target `kc.sh start-dev` on http://localhost:8080, realm `master` (any realm works —
 # the verifier is realm-agnostic).
 #

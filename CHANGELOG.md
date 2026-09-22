@@ -96,6 +96,13 @@ each may reject a document that used to verify. Check your issuers' documents be
 
 ### Changed
 
+- **Built and tested against Keycloak 26.7.4** (was 26.7.3), released 16 September 2026 with six security
+  fixes, among them an unauthenticated denial of service through locale caching (CVE-2026-79651) and
+  the `impersonation` role reaching a realm administrator (CVE-2026-17526). Run the provider on 26.7.4;
+  its only breaking change concerns Authorization Services resource matching, which this provider does
+  not use. The libraries the provider shares with Keycloak or relocates are unchanged from 26.7.3 — the
+  distribution differs only in Quarkus (3.33.3.1 → 3.33.3.2) and Keycloak's own JARs — so the shading
+  and `provided` decisions stand. `LwsAuthIT` now takes its container image from `keycloak.version`.
 - **Version `0.3.0-SNAPSHOT`.** The JAR is `lws-authn-0.3.0-SNAPSHOT.jar`, so a build of this tree cannot
   be mistaken for the 0.2.0 release (commit `e539362`, which is untagged — see *Versioning*).
   `LwsAuthIT` now takes the JAR's path from Failsafe and CI uploads `target/lws-authn-*.jar`, so neither

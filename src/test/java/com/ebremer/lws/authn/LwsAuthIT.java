@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Integration test: deploys the built provider JAR into a real Keycloak 26.7.3 via Testcontainers and
+ * Integration test: deploys the built provider JAR into a real Keycloak — the version in the POM — via Testcontainers and
  * runs the same end-to-end smoke flow that was validated by hand — the mapper fires, all four suite
  * endpoints mount, shaded Jena serves/parses RDF, and the OpenID and did:key credentials verify.
  *
@@ -94,7 +94,8 @@ class LwsAuthIT {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final HttpClient HTTP = HttpClient.newHttpClient();
     private static final String REALM = "lws-demo";
-    private static final String IMAGE = "quay.io/keycloak/keycloak:26.7.3";
+    /** The Keycloak image: Failsafe passes the POM's {@code keycloak.version}; the default is for IDE runs. */
+    private static final String IMAGE = System.getProperty("lws.authn.keycloakImage", "quay.io/keycloak/keycloak:26.7.4");
     /**
      * The shaded provider JAR under test. Failsafe passes its exact path (see the POM); run from an IDE,
      * the newest shaded JAR in {@code target/} is used, so no version number is written down here.

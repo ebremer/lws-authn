@@ -37,7 +37,7 @@ for some other purpose, or has marked `revoked` or let `expire`. The JWT must al
 
 ## Prerequisites
 
-- Keycloak **26.7.3** with the `lws-authn` provider deployed — see the [README](../README.md).
+- Keycloak **26.7.4** with the `lws-authn` provider deployed — see the [README](../README.md).
 - `curl`, `jq`, and `openssl`.
 - For a quick local run: `bin/kc.sh start-dev` (admin/admin) at `http://localhost:8080`.
 

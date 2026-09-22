@@ -193,7 +193,7 @@ editorial. The OpenID and SAML suites did not change. Implementing S-2 properly 
 normatively for key selection; they were gaps in 0.2.0, not changes in the drafts.
 
 **State after this band:** 190 unit tests green (from 144); `LwsAuthIT` 25 (from 23); and a local
-end-to-end run against Keycloak 26.7.3 in dev mode — 21 checks covering `did:key` for every key type,
+end-to-end run against Keycloak 26.7.3 in dev mode, repeated on 26.7.4 after S-17 — 21 checks covering `did:key` for every key type,
 `did:web` over HTTPS, CID 1.0 relationship, `Multikey` and revocation rules, a subject with a fragment,
 and the deprecation headers
 — plus the three demo scripts, all passing.
@@ -266,6 +266,14 @@ and the deprecation headers
 - [x] **S-12 · A build of this tree would have been named like the 0.2.0 release.** **Done:** the POM is
   `0.3.0-SNAPSHOT`; `LwsAuthIT` takes the JAR path from Failsafe and CI uploads `target/lws-authn-*.jar`,
   so the next release bump touches neither.
+
+- [x] **S-17 · Keycloak 26.7.3 → 26.7.4** (16 September 2026; six CVEs). **Done:** `keycloak.version`,
+  the docs, and `LwsAuthIT`, whose image now comes from the POM through Failsafe. Checked, as the POM
+  asks on every Keycloak upgrade: the libraries the provider marks `provided` (slf4j, jspecify) or
+  relocates (titanium-json-ld, caffeine, commons-collections4, commons-codec) are the same versions in
+  both distributions. Aside: the POM's comment says Keycloak ships commons-codec 1.11 and
+  commons-collections4 4.4, but both distributions actually bundle 1.21.0 and 4.5.0. Relocating is
+  still harmless, but the stated reason is out of date.
 
 - [ ] **S-13 · Tag the 0.2.0 release.** *Versioning* in `CHANGELOG.md` says to tag each release commit
   `lws-authn-<version>`; `e539362` (the 0.2.0 bump, the build deployed to both hellion servers) has no

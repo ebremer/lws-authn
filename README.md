@@ -1,6 +1,6 @@
 # lws-authn — Keycloak providers for LWS authentication suites
 
-A [Keycloak](https://www.keycloak.org/) **26.7.3** extension implementing the authentication suites of
+A [Keycloak](https://www.keycloak.org/) **26.7.4** extension implementing the authentication suites of
 the W3C [Linked Web Storage (LWS)](https://www.w3.org/TR/lws10-core/) 1.0 protocol, in which a **signed
 token bound to an identity** is used as an authentication credential — the three current suites, plus
 the discontinued fourth for callers that still use it:
@@ -149,7 +149,7 @@ are still Java 21, and runs CodeQL. Actions are pinned by commit SHA; Dependabot
 Keycloak loads provider JARs from its `providers/` directory.
 
 ```bash
-# from the project root, with $KC_HOME pointing at your Keycloak 26.7.3 install
+# from the project root, with $KC_HOME pointing at your Keycloak 26.7.4 install
 cp target/lws-authn-*.jar "$KC_HOME/providers/"   # the one shaded JAR `mvn package` produced
 
 "$KC_HOME/bin/kc.sh" build      # re-augment with the new provider

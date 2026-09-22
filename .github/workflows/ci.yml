@@ -32,7 +32,7 @@ jobs:
           cache: maven
 
       # `mvn verify` packages the shaded provider JAR, then the Failsafe plugin runs LwsAuthIT, which
-      # deploys that JAR into a real Keycloak 26.7.3 container and exercises every suite. LwsAuthIT
+      # deploys that JAR into a real Keycloak container (the POM's keycloak.version) and exercises every suite. LwsAuthIT
       # binds host port 8080 — see its class javadoc — which is free on a hosted runner.
       - name: Build and run integration tests
         run: mvn -B -ntp verify
