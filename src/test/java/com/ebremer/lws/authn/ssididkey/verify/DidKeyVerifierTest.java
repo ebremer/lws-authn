@@ -21,7 +21,7 @@ import java.util.Base64;
 
 import org.junit.jupiter.api.Test;
 
-import com.ebremer.lws.authn.ssididkey.DidKey;
+import com.ebremer.lws.authn.did.DidKey;
 
 /**
  * Unit tests for the self-signed {@code did:key} verifier. The verifier needs no session, network or

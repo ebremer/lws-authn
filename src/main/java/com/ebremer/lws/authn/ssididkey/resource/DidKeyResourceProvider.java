@@ -7,6 +7,14 @@
  *
  *   POST {…}/lws-ssi-did-key/verify   verify a self-issued did:key JWT as an LWS credential
  *
+ * DEPRECATED. The LWS Working Group discontinued this suite on 18 September 2026 in favour of the
+ * self-signed CID suite, whose verifier (POST {…}/lws-ssi-cid/verify) now resolves did:key subjects.
+ * This endpoint keeps its old behaviour for existing callers and says so on every response:
+ *
+ *   Deprecation: @1789689600                                   (RFC 9745)
+ *   Link: <../lws-ssi-cid/verify>; rel="successor-version",
+ *         <https://w3c.github.io/lws-protocol/lws10-authn-ssi-did-key/>; rel="deprecation"
+ *
  * There is no controlled identifier document to serve — the public key is carried in the did:key
  * subject itself.
  */
@@ -75,6 +83,10 @@ public class DidKeyResourceProvider implements RealmResourceProvider {
     public Response verify(@FormParam("credential") String credential,
                            @FormParam("audience") String expectedAudience,
                            @HeaderParam("Authorization") String authorization) {
+        return deprecated(answer(credential, expectedAudience, authorization));
+    }
+
+    private Response answer(String credential, String expectedAudience, String authorization) {
         if (!settings.isEnabled(session.getContext().getRealm())) {
             return JsonResponses.notEnabled();
         }
@@ -94,5 +106,19 @@ public class DidKeyResourceProvider implements RealmResourceProvider {
         DidKeyVerificationResult result =
                 new SelfSignedDidKeyVerifier().verify(token, settings.audienceFor(expectedAudience));
         return JsonResponses.of(Response.Status.OK, result);
+    }
+
+    /**
+     * Marks a response from this endpoint as deprecated (RFC 9745) and names its successor, on every
+     * status — a caller learning the endpoint is going away from a {@code 401} is as useful as from a
+     * {@code 200}. No {@code Sunset}: when to remove the endpoint is the operator's decision, and
+     * {@code enabled=false} on this provider does it today.
+     */
+    static Response deprecated(Response response) {
+        return Response.fromResponse(response)
+                .header("Deprecation", DidKeyConstants.DEPRECATION)
+                .header("Link", "<" + DidKeyConstants.SUCCESSOR_RELATIVE + ">; rel=\"successor-version\"")
+                .header("Link", "<" + DidKeyConstants.SPECIFICATION + ">; rel=\"deprecation\"")
+                .build();
     }
 }

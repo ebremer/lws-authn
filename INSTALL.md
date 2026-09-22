@@ -4,10 +4,11 @@ Step-by-step instructions to install [Keycloak](https://www.keycloak.org/) and t
 provider — the LWS OpenID Connect ("lws-oidc") authentication suite — on an Ubuntu server that
 **already has a recent JDK installed**.
 
-The single provider JAR actually ships **all four** LWS 1.0 authentication suites (OpenID Connect,
-self-signed CID, SAML 2.0, self-signed `did:key`). This guide focuses on standing up the **OpenID
-Connect** suite, which mounts at `…/realms/{realm}/lws`; the other endpoints (`lws-ssi-cid`,
-`lws-saml`, `lws-ssi-did-key`) come along in the same JAR at no extra effort.
+The single provider JAR actually ships every LWS 1.0 authentication suite — OpenID Connect,
+self-signed CID (for HTTPS, `did:key` and `did:web` subjects) and SAML 2.0 — plus the endpoint of the
+discontinued self-signed `did:key` suite, kept for existing callers and marked deprecated. This guide
+focuses on standing up the **OpenID Connect** suite, which mounts at `…/realms/{realm}/lws`; the other
+endpoints (`lws-ssi-cid`, `lws-saml`, `lws-ssi-did-key`) come along in the same JAR at no extra effort.
 
 The result is a Keycloak server running as a hardened `systemd` service behind an HTTPS reverse
 proxy, with the LWS provider registered and verified end-to-end.
@@ -41,14 +42,14 @@ Throughout, replace **`id.example.com`** with your server's public hostname and 
 | Component | Version | Notes |
 |-----------|---------|-------|
 | Keycloak server | **26.7.3** | **Must match** `keycloak.version` in the provider's `pom.xml`. |
-| `lws-authn` provider | **0.2.0** | Produces `lws-authn-0.2.0.jar`. |
+| `lws-authn` provider | **0.3.0-SNAPSHOT** | Unreleased work after 0.2.0, the latest release. Produces `lws-authn-0.3.0-SNAPSHOT.jar`. |
 | JDK (Keycloak runtime) | **21** | Keycloak 26.x is built and tested on OpenJDK 21. |
 | JDK (build) | **21+** | Any JDK ≥ 21 builds it; it compiles to Java 21 bytecode. |
 
 ```bash
 # Handy shell variables used in the commands below
 export KC_VERSION=26.7.3
-export PROVIDER_VERSION=0.2.0
+export PROVIDER_VERSION=0.3.0-SNAPSHOT
 export KC_HOSTNAME=id.example.com     # your public hostname
 ```
 
@@ -152,7 +153,7 @@ sudo -u keycloak /opt/keycloak/bin/kc.sh --version
 
 ## 6. Build the `lws-authn` provider
 
-You need the file **`lws-authn-0.2.0.jar`**. Pick one option.
+You need the file **`lws-authn-0.3.0-SNAPSHOT.jar`**. Pick one option.
 
 ### Option A — build on the server (recommended, self-contained)
 
@@ -166,7 +167,7 @@ mvn clean package
 This produces a single, self-contained provider JAR:
 
 ```
-/tmp/lws-authn/target/lws-authn-0.2.0.jar
+/tmp/lws-authn/target/lws-authn-0.3.0-SNAPSHOT.jar
 ```
 
 Apache Jena and its dependencies are shaded in and `commons-codec` is relocated, so the JAR drops
@@ -179,7 +180,7 @@ Docker-based integration test (that's bound to `mvn verify`). To skip tests for 
 If you already ran `mvn clean package` on another machine, copy the artifact over:
 
 ```bash
-scp target/lws-authn-0.2.0.jar you@id.example.com:/tmp/
+scp target/lws-authn-0.3.0-SNAPSHOT.jar you@id.example.com:/tmp/
 ```
 
 ---
@@ -193,7 +194,7 @@ sudo cp /tmp/lws-authn/target/lws-authn-${PROVIDER_VERSION}.jar /opt/keycloak/pr
 sudo chown keycloak:keycloak /opt/keycloak/providers/lws-authn-${PROVIDER_VERSION}.jar
 ```
 
-> Adjust the source path if you used Option B (e.g. `/tmp/lws-authn-0.2.0.jar`).
+> Adjust the source path if you used Option B (e.g. `/tmp/lws-authn-0.3.0-SNAPSHOT.jar`).
 
 You'll register it with the server via `kc.sh build` in [step 10](#10-build-the-optimized-image)
 (or immediately, in the dev-mode smoke test below).
@@ -224,6 +225,10 @@ lws-saml (org.keycloak.services.resource.RealmResourceProviderFactory)
 lws-ssi-did-key (org.keycloak.services.resource.RealmResourceProviderFactory)
 lws-webid-sub-mapper (org.keycloak.protocol.ProtocolMapper)
 ```
+
+followed at startup by a warning that the `did:key` suite was discontinued and `lws-ssi-did-key` is
+deprecated. That is expected; `--spi-realm-restapi-extension--lws-ssi-did-key--enabled=false` switches
+the endpoint off if nothing calls it.
 
 From another shell on the server, confirm the OpenID endpoint is mounted (the master realm has no
 users, so a `400`/`404`-style JSON error here is expected and still proves the route is live):
@@ -441,7 +446,8 @@ each attribute in the realm's user profile with `permissions.edit` set to `["adm
 equivalent for this purpose and narrower in general.
 
 > **You do not need this at all if you use neither suite's hosted identifiers** — that is, if you run
-> only the SAML and `did:key` verifiers, which host nothing. Everyone else needs it.
+> only the SAML verifier, or verify only DID subjects (`did:key`, `did:web`), none of which host
+> anything here. Everyone else needs it.
 
 ---
 

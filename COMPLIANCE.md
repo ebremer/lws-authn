@@ -4,7 +4,8 @@
 each suite enforces, which are deferred to the relying party, and what is supported. It is written for
 someone integrating against this provider, who needs to know what a `"valid": true` actually asserts.
 
-**Last reviewed:** 3 September 2026, against the drafts below and the code at that commit.
+**Last reviewed:** 22 September 2026, against the editor's drafts of 21 September 2026
+(`w3c/lws-protocol` at `3ddc642`) and the code in this tree. Previous review: 3 September 2026.
 
 Item ids like **P0-3** refer to [`TODO.md`](TODO.md), which carries the reasoning and the history.
 Where this document says a check exists, it names the field that appears in the `checks` object of the
@@ -17,15 +18,18 @@ verify response, so a claim here can be tested against a real response.
 These are **W3C Working Drafts**, not Recommendations. Conformance here means "matches the published
 normative requirements", not a Rec-level conformance certificate — the text can still change.
 
-| Document | Latest published version |
-|---|---|
-| Linked Web Storage Protocol 1.0 (core) | W3C Working Draft **21 August 2026** |
-| LWS 1.0 Authn Suite: Self-signed Identity (Controlled Identifiers) | W3C Working Draft **21 August 2026** |
-| LWS 1.0 Authn Suite: OpenID Connect | W3C Working Draft 3 August 2026 |
-| LWS 1.0 Authn Suite: SAML 2.0 | W3C Working Draft 3 August 2026 |
-| LWS 1.0 Authn Suite: Self-signed Identity using `did:key` | W3C Working Draft 3 August 2026 |
-| Linked Web Storage Vocabulary | Group Note draft, 21 August 2026 |
-| Controlled Identifiers (CID) 1.0 | **W3C Recommendation, 15 May 2025** |
+| Document | Latest published version | Editor's draft, as reviewed |
+|---|---|---|
+| Linked Web Storage Protocol 1.0 (core) | W3C Working Draft **21 August 2026** | 21 September 2026 — adds authorization server metadata `subject_identifier_types_supported`, which does not apply here (see *Known divergences*) |
+| LWS 1.0 Authn Suite: Self-signed Identity (Controlled Identifiers) | W3C Working Draft **21 August 2026** | **21 September 2026 — "designed to work with subject identifiers that use HTTPS URIs as well as DID URIs"** |
+| LWS 1.0 Authn Suite: OpenID Connect | W3C Working Draft 3 August 2026 | unchanged |
+| LWS 1.0 Authn Suite: SAML 2.0 | W3C Working Draft 3 August 2026 | unchanged |
+| LWS 1.0 Authn Suite: Self-signed Identity using `did:key` | W3C Working Draft 3 August 2026 | **Discontinued 18 September 2026**, "in favor of lws10-authn-ssi-cid, which subsumes this specification" |
+| Linked Web Storage Vocabulary | Group Note draft, 21 August 2026 | 21 September 2026 (adds `lws:StorageResource`; nothing here uses it) |
+| Controlled Identifiers (CID) 1.0 | **W3C Recommendation, 15 May 2025** | — |
+| Decentralized Identifiers (DIDs) 1.1 | W3C Candidate Recommendation Snapshot, 5 March 2026 | cited by the self-signed CID suite for DID documents |
+| The did:key Method | W3C CCG Draft Community Group Report, v0.9 | how a `did:key` expands to its DID document |
+| did:web Method Specification | W3C CCG Draft Community Group Report | how a `did:web` maps to the URL of its DID document |
 
 Also incorporated by reference and enforced here: OpenID Connect Core 1.0 §3.1.3.7, RFC 7515 (JWS),
 RFC 7517 (JWK), RFC 8725 (JWT BCP), RFC 9110 (HTTP semantics), SAML 2.0 Core.
@@ -39,9 +43,9 @@ notifications, search and access grants live in `lws-server`.
 | Suite | Keycloak's role | Credential | How the verifier gets the key | Endpoint prefix | Token type |
 |---|---|---|---|---|---|
 | OpenID Connect | OP + CID host + verifier | ID Token (JWT), `sub` = WebID | OIDC Discovery on `iss`, found via the CID service | `/realms/{realm}/lws` | `…token-type:id_token` |
-| Self-signed CID | CID host + verifier | self-issued JWT, `sub`==`iss`==`client_id` | `publicKeyJwk` in the subject's CID, by `kid` | `/realms/{realm}/lws-ssi-cid` | `…token-type:jwt` |
+| Self-signed CID | CID host + verifier | self-issued JWT, `sub`==`iss`==`client_id`: an HTTPS URI, `did:key` or `did:web` | the `authentication` method `kid` names in the subject's CID or DID document (`JsonWebKey` or `Multikey`) | `/realms/{realm}/lws-ssi-cid` | `…token-type:jwt` |
 | SAML 2.0 | verifier | signed SAML 2.0 Response | out-of-band IdP certificate supplied by the caller | `/realms/{realm}/lws-saml` | `…token-type:saml2` |
-| Self-signed `did:key` | verifier | self-issued JWT, `sub` = `did:key` | decoded from the identifier itself | `/realms/{realm}/lws-ssi-did-key` | `…token-type:jwt` |
+| Self-signed `did:key` — **discontinued; endpoint deprecated** | verifier | self-issued JWT, `sub` = `did:key` | decoded from the identifier itself | `/realms/{realm}/lws-ssi-did-key` | `…token-type:jwt` |
 
 SPI surface: four `RealmResourceProviderFactory` ids (`lws`, `lws-ssi-cid`, `lws-saml`,
 `lws-ssi-did-key`) plus the OIDC `ProtocolMapper` `lws-webid-sub-mapper`.
@@ -101,13 +105,48 @@ issuance too (Resource Indicators, RFC 8707).
 
 **Enforced.** `alg` never `none`; no unsupported `crit`; `typ` names a JWT if present;
 `sub == iss == client_id` (`selfIssued`); a `kid` is present (`keyIdPresent`) — no fallback to "the
-only key", because the credential says which key signed it. `sub` is dereferenced and the document's
-`id` must equal it. A verification method is selected by `kid` and is usable only if it is a
-`JsonWebKey` the subject **controls** (`verificationMethodFound`), published for signing and consistent
-with the token's algorithm (`verificationMethodUsableForSigning`, `algorithmMatchesKey`). Signature
-(`signatureValid`), explicit `exp` (`notExpired`), required `iat` (`issuedAtPresent`), and an audience
-that is present and — when one is configured or supplied — matched (`audiencePresent`,
-`audienceMatched`).
+only key", because the credential says which key signed it. `sub` is dereferenced — or, for a DID,
+resolved (below) — and the document's `id` must equal it (`subjectDereferenced`, `subjectIdMatches`).
+
+The `kid` then selects a verification method (`verificationMethodFound`), following CID 1.0 §3.3, which
+the suite cites for this step. The method must be:
+
+- **named by the `authentication` relationship**, embedded there or referenced by URL (CID 1.0 §2.3.1)
+  and resolved within the document (§3.4). A method defined under `verificationMethod` but named only
+  by another relationship — `assertionMethod`, `keyAgreement` — is not usable to authenticate:
+  "Verification methods that are not associated with a particular verification relationship cannot be
+  used for that verification relationship" (§2.3). A reference to a method in another document is not
+  followed;
+- **of the subject's document** — its `id`, when it has one, is a fragment of the subject — and
+  **controlled by the subject** (`controller` equals `sub`);
+- a **`JsonWebKey`** with a `publicKeyJwk` carrying no private members (§2.2.3), or a **`Multikey`**
+  with a `publicKeyMultibase` that is a canonically encoded public key of a supported type — a
+  secret-key header is refused by name (§2.2.2);
+- **neither revoked nor expired** (`verificationMethodActive`, §2.2); an unreadable `revoked` or
+  `expires` makes the method unusable rather than current.
+
+The `kid` may be the method's full identifier (the verification method identifier §3.3 retrieves by,
+and the usual form for a DID), its fragment with or without `#`, or its JWK's `kid`. The key must be
+published for signing and consistent with the token's algorithm (`verificationMethodUsableForSigning`,
+`algorithmMatchesKey` — `ES*` pinned to its curve). Signature (`signatureValid`), explicit `exp`
+(`notExpired`), required `iat` (`issuedAtPresent`), and an audience that is present and — when one is
+configured or supplied — matched (`audiencePresent`, `audienceMatched`).
+
+**DID subjects.** The suite "is designed to work with subject identifiers that use HTTPS URIs as well
+as DID URIs", because a DID document extends a controlled identifier document (DID 1.1 §5). No DID
+method is mandated; two are resolved and any other is refused by name (`subjectDereferenced`):
+
+- `did:key` — expanded locally, per the did:key Method's Document Creation Algorithm, into a document
+  with one `Multikey` method referenced from `authentication`. No network access. The identifier must
+  be canonically encoded and of a supported key type (Ed25519, P-256, P-384, P-521).
+- `did:web` — the method's Read operation: `did:web:<domain>[%3A<port>][:<path>…]` →
+  `https://<domain>[:<port>]/<path…>/did.json`, or `/.well-known/did.json` with no path. The domain must
+  be a DNS name, never an IP address, and this is checked before anything is fetched. The fetch uses
+  the same SSRF-guarded, redirect-refusing, bounded client as an HTTPS subject. The document must be
+  served as a DID or JSON media type, and its `id` must be the DID (`subjectIdMatches`).
+
+A DID document is read with the JSON rules of its representation rather than by a JSON-LD processor
+(see *Known divergences*).
 
 **Optional.** `notReplayed`: a bounded `jti` cache, off by default. No suite mandates replay
 protection, and refusing a second look at a live credential is only correct for a caller that treats
@@ -142,7 +181,16 @@ they signed themselves with a certificate they also supplied. That is the API be
 
 ## Self-signed `did:key` suite
 
-**Enforced.** `alg` never `none`; no unsupported `crit`; `typ` names a JWT if present;
+**Discontinued by the Working Group on 18 September 2026; the endpoint is deprecated.** The draft was
+withdrawn "in favor of lws10-authn-ssi-cid, which subsumes this specification by specifying a
+generalization of the mechanism described here"; the self-signed CID suite above now verifies `did:key`
+subjects. `/lws-ssi-did-key/verify` keeps implementing the discontinued draft exactly as it stood, for
+existing callers, and marks every response — including refusals — per RFC 9745:
+`Deprecation: @1789689600` (2026-09-18) with `Link: <../lws-ssi-cid/verify>; rel="successor-version"` and
+a `rel="deprecation"` link to the draft. It is enabled by default and can be switched off per provider.
+The one difference a migrating caller meets: the self-signed CID suite requires a `kid`.
+
+**Enforced (as the discontinued draft specified).** `alg` never `none`; no unsupported `crit`; `typ` names a JWT if present;
 `sub == iss == client_id` (`selfIssued`) and `sub` is a `did:key` (`subjectIsDidKey`). The public key
 is decoded from the identifier with **no network access** (`keyDecodedFromDid`), and the identifier
 must be **canonically encoded** — the decoded key is re-encoded and must reproduce it, so one key
@@ -173,9 +221,14 @@ unverifiable rather than guessed at, with a key-reading fallback for the standar
 A document declaring a content type that is not an RDF syntax is **refused by name**, not handed to the
 Turtle parser.
 
+**DID documents** are accepted as `application/did+json`, `application/did+ld+json`, `application/did`,
+`application/ld+json` or `application/json` (or undeclared), and read by the JSON rules of the DID
+representation. **Verification method types:** `JsonWebKey` and `Multikey`, the two CID 1.0 defines.
+
 **Signature algorithms:** whatever Keycloak's `SignatureProvider` offers for the JWT suites (RS*, PS*,
-ES256/384/512, EdDSA), constrained by the published key; `SHA256withRSA` and the JDK's EdDSA/ECDSA for
-`did:key`. `alg: none` is refused everywhere.
+ES256/384/512, EdDSA), constrained by the published key — each `ES*` pinned to its curve (RFC 7518
+§3.4); the JDK's EdDSA/ECDSA for the discontinued `did:key` endpoint. `alg: none` is refused
+everywhere.
 
 ---
 
@@ -190,7 +243,11 @@ Each is a decision, not an oversight; each names where the reasoning lives.
 | 3 | **Replay protection is off by default** | No suite mandates it, and a verify endpoint is legitimately asked about the same live credential repeatedly. Opt in per caller (**P2-8**). |
 | 4 | **`cid/{userId}` is unauthenticated** | A controlled identifier is a URL others dereference; an identity document requiring a credential would not be dereferenceable. Enumeration is bounded — random-UUID ids, a uniform response shape, and a rate limit — not closed (**P3-7**). |
 | 5 | **The SAML verifier trusts the caller's certificate** | The suite's own model: SAML trust is out of band. See the suite section above. |
-| 6 | **Fetch happens before the signature is known good** | Required by the specification's cold-trust algorithm and unavoidable. The exposure is addressed instead: authenticated endpoints, rate limiting, SSRF vetting at resolution time, bounded timeouts and response size, and a per-host circuit breaker (**P0-3**, **P0-5**). |
+| 6 | **Fetch happens before the signature is known good** | Required by the specification's cold-trust algorithm and unavoidable. The exposure is addressed instead: authenticated endpoints, rate limiting, SSRF vetting at resolution time, bounded timeouts and response size, and a per-host circuit breaker (**P0-3**, **P0-5**). The same applies to a `did:web` subject. |
+| 7 | **Only `did:key` and `did:web` are resolved** | The self-signed CID suite mandates no DID method. These two need no ledger and no third-party resolver; any other is refused by name rather than resolved through a service this provider would have to trust (**S-2**). |
+| 8 | **DID documents are read as JSON, not processed as JSON-LD** | DID 1.1 is a Candidate Recommendation and its JSON-LD context is not published at a stable URL, so there is no definition to bundle, and contexts are never fetched (see *Supported formats*). The structure the verifier reads — `id`, `authentication`, `verificationMethod`, `type`, `controller`, key material — is fixed by DID 1.1 and CID 1.0 rather than by the context (**S-3**). |
+| 9 | **The discontinued `did:key` endpoint stays enabled, deprecated** | Removing it would break existing callers without warning. It says it is deprecated on every response, and names its successor; turning it off is one setting (**S-4**). |
+| 10 | **No `subject_identifier_types_supported`** | Core defines it as LWS *authorization server* metadata. `lws-authn` is not an authorization server and publishes no such metadata; it belongs to `lws-server`, which would list `https`, `did:key` and `did:web` for subjects this provider verifies (**S-5**). |
 
 ## Security posture
 
@@ -206,7 +263,7 @@ can mint credentials for an identity they should not control. `INSTALL.md` step 
 
 ## Verification
 
-`mvn clean verify` — 144 unit tests plus 23 in `LwsAuthIT` against a real Keycloak 26.7.3 container.
+`mvn clean verify` — 190 unit tests plus 25 in `LwsAuthIT` against a real Keycloak 26.7.3 container.
 Roughly half the integration tests assert a *rejection*, including a full third-party OpenID Provider
 fixture broken one document at a time, because a verifier that wrongly rejects gets reported by its
 users and one that wrongly accepts does not.
@@ -220,11 +277,13 @@ OpenID              issues ID Token (sub = WebID)        accepts / validates ID 
                     POST /lws/verify
 
 SSI CID             hosts CID + keys                     accepts self-issued JWT
-                    POST /lws-ssi-cid/verify             dereferences CID by kid
+                    POST /lws-ssi-cid/verify             dereferences CID / resolves DID, by kid
+                    (HTTPS, did:key, did:web subjects)
 
 SAML                verify utility                       accepts if IdP certs configured
 
-did:key             POST /lws-ssi-did-key/verify         accepts self-issued did:key JWT
+did:key             POST /lws-ssi-did-key/verify         (suite discontinued; deprecated endpoint —
+                                                         use /lws-ssi-cid/verify)
 ```
 
 Neither alone is the full LWS product. For credential fidelity specifically, `lws-authn` is the

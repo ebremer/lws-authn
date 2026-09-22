@@ -4,7 +4,12 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Validates a self-issued did:key JWT as an LWS authentication credential, per
- * https://w3c.github.io/lws-protocol/lws10-authn-ssi-did-key/
+ * https://w3c.github.io/lws-protocol/lws10-authn-ssi-did-key/ — a draft the LWS Working Group
+ * DISCONTINUED on 18 September 2026 "in favor of lws10-authn-ssi-cid, which subsumes this specification
+ * by specifying a generalization of the mechanism described here". SelfSignedCidVerifier now verifies
+ * did:key subjects under that suite's rules. This class implements the discontinued draft exactly as
+ * it stood, so the deprecated /lws-ssi-did-key endpoint keeps answering the way it always has; new
+ * callers should use /lws-ssi-cid.
  *
  * Algorithm:
  *   1. Reject alg == "none", and any critical header this provider does not implement.
@@ -18,9 +23,6 @@
  */
 package com.ebremer.lws.authn.ssididkey.verify;
 
-import java.nio.charset.StandardCharsets;
-import java.security.PublicKey;
-import java.security.Signature;
 import java.util.List;
 
 import org.jboss.logging.Logger;
@@ -29,8 +31,9 @@ import org.keycloak.jose.jws.JWSInput;
 import org.keycloak.representations.JsonWebToken;
 import org.keycloak.util.JsonSerialization;
 
+import com.ebremer.lws.authn.did.DidKey;
 import com.ebremer.lws.authn.jose.JwsChecks;
-import com.ebremer.lws.authn.ssididkey.DidKey;
+import com.ebremer.lws.authn.jose.JwsSignatures;
 import com.ebremer.lws.authn.ssididkey.DidKeyConstants;
 import com.ebremer.lws.authn.verify.ReplayCache;
 import com.ebremer.lws.authn.verify.Trace;
@@ -140,7 +143,7 @@ public class SelfSignedDidKeyVerifier {
             }
 
             // 4. signature
-            boolean signatureValid = verifySignature(alg, decoded.publicKey(), jws);
+            boolean signatureValid = JwsSignatures.verify(alg, decoded.publicKey(), jws);
             result.check("signatureValid", signatureValid);
             if (!signatureValid) {
                 result.error("Credential signature is invalid");
@@ -199,23 +202,6 @@ public class SelfSignedDidKeyVerifier {
             return result.fail();
         }
         return result;
-    }
-
-    /** Verifies the JWS signature with the JDK, in the JOSE signature format. */
-    public static boolean verifySignature(String alg, PublicKey publicKey, JWSInput jws) throws Exception {
-        Signature signature;
-        switch (alg) {
-            case "EdDSA" -> signature = Signature.getInstance("Ed25519");
-            case "ES256" -> signature = Signature.getInstance("SHA256withECDSAinP1363Format");
-            case "ES384" -> signature = Signature.getInstance("SHA384withECDSAinP1363Format");
-            case "ES512" -> signature = Signature.getInstance("SHA512withECDSAinP1363Format");
-            default -> {
-                return false;
-            }
-        }
-        signature.initVerify(publicKey);
-        signature.update(jws.getEncodedSignatureInput().getBytes(StandardCharsets.UTF_8));
-        return signature.verify(jws.getSignature());
     }
 
     private static String asString(Object value) {

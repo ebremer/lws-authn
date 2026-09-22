@@ -3,12 +3,16 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Decoding (and encoding) of did:key identifiers per "The did:key Method" — multibase base58btc plus
- * a multicodec key-type prefix. Supports Ed25519 (0xed01) and the NIST curves P-256 (0x1200),
- * P-384 (0x1201) and P-521 (0x1202). Pure JDK: no BouncyCastle, so it works under both the default
- * and FIPS Keycloak crypto providers.
+ * Decoding (and encoding) of multibase/multicodec public keys: the value of a did:key identifier
+ * ("The did:key Method" v0.9) and of a Multikey verification method's publicKeyMultibase (W3C
+ * Controlled Identifiers 1.0 §2.2.2) are the same encoding. Supports Ed25519 (0xed01) and the NIST
+ * curves P-256 (0x1200), P-384 (0x1201) and P-521 (0x1202). Pure JDK: no BouncyCastle, so it works
+ * under both the default and FIPS Keycloak crypto providers.
+ *
+ * Lived in the ssididkey package until the did:key authentication suite was discontinued in favour of
+ * the self-signed CID suite (18 September 2026); it is shared by both now, so it lives here.
  */
-package com.ebremer.lws.authn.ssididkey;
+package com.ebremer.lws.authn.did;
 
 import java.math.BigInteger;
 import java.security.AlgorithmParameters;
@@ -24,6 +28,9 @@ import java.security.spec.ECPublicKeySpec;
 import java.security.spec.EllipticCurve;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Arrays;
+import java.util.Base64;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * @author Erich Bremer
@@ -90,7 +97,12 @@ public final class DidKey {
     public record DecodedKey(PublicKey publicKey, String keyType, String jwsAlgorithm) {
     }
 
-    /** Decodes the public key embedded in a {@code did:key} identifier (Ed25519 or P-256). */
+    /**
+     * Decodes the public key embedded in a {@code did:key} identifier. A fragment ({@code #…}), as in a
+     * verification method id, is ignored.
+     *
+     * @throws IllegalArgumentException if it is not a canonically encoded did:key of a supported type
+     */
     public static DecodedKey decode(String did) {
         if (did == null || !did.startsWith(DID_KEY_PREFIX)) {
             throw new IllegalArgumentException("Not a did:key identifier: " + did);
@@ -100,11 +112,45 @@ public final class DidKey {
         if (fragment >= 0) {
             multibase = multibase.substring(0, fragment);
         }
-        if (multibase.isEmpty() || multibase.charAt(0) != 'z') {
-            throw new IllegalArgumentException("did:key must use base58btc multibase (leading 'z')");
+        return decodeMultibase(multibase);
+    }
+
+    /**
+     * The multibase value of a {@code did:key} — its method-specific identifier, which is also the
+     * {@code publicKeyMultibase} and the fragment of the verification method the did:key Method
+     * expands it to.
+     */
+    public static String multibaseValue(String did) {
+        if (did == null || !did.startsWith(DID_KEY_PREFIX)) {
+            throw new IllegalArgumentException("Not a did:key identifier: " + did);
+        }
+        String multibase = did.substring(DID_KEY_PREFIX.length());
+        int fragment = multibase.indexOf('#');
+        return fragment >= 0 ? multibase.substring(0, fragment) : multibase;
+    }
+
+    /**
+     * Decodes a multibase (base58btc, leading {@code z}) multicodec public key: a did:key's
+     * method-specific identifier, or a Multikey's {@code publicKeyMultibase}.
+     *
+     * <p>CID 1.0 §2.2.2 requires an implementation to "raise errors in the event of a Multikey header
+     * value that is not in the public key header table … or when reading a Multikey value that is
+     * expected to be a public key … that does not start with a known public key header". A value
+     * carrying a <em>secret</em>-key header is called out by name, because it means someone has
+     * published a private key.</p>
+     *
+     * @throws IllegalArgumentException if it is not a canonically encoded public key of a supported type
+     */
+    public static DecodedKey decodeMultibase(String multibase) {
+        if (multibase == null || multibase.isEmpty() || multibase.charAt(0) != 'z') {
+            throw new IllegalArgumentException("key must use base58btc multibase (leading 'z')");
         }
         byte[] bytes = base58Decode(multibase.substring(1));
 
+        if (isSecretKeyHeader(bytes)) {
+            throw new IllegalArgumentException(
+                    "multibase value carries a secret-key multicodec header; a public key was expected");
+        }
         DecodedKey decoded = null;
         if (startsWith(bytes, MC_ED25519)) {
             decoded = new DecodedKey(ed25519PublicKey(Arrays.copyOfRange(bytes, 2, bytes.length)), "Ed25519", "EdDSA");
@@ -119,30 +165,77 @@ public final class DidKey {
         }
         if (decoded == null) {
             throw new IllegalArgumentException(
-                    "Unsupported did:key key type (supported: Ed25519, P-256, P-384, P-521)");
+                    "Unsupported multicodec key type (supported: Ed25519, P-256, P-384, P-521)");
         }
 
         // A did:key IS its key, so the mapping must be one-to-one. Re-encoding the decoded key and
         // requiring the exact input back rejects any non-canonical spelling — a base58 string with
         // extra leading '1's, or an uncompressed point — that would otherwise give one key two
-        // identifiers, and so let one agent present itself as two subjects.
-        String canonical = encode(decoded);
-        if (!canonical.equals(DID_KEY_PREFIX + multibase)) {
-            throw new IllegalArgumentException("did:key is not canonically encoded");
+        // identifiers, and so let one agent present itself as two subjects. For a Multikey the same
+        // rule is what CID 1.0 states outright: the encoding "MUST start with" the header followed by the
+        // compressed point, so any other spelling is not a conforming value.
+        String canonical = multibaseOf(decoded);
+        if (!canonical.equals(multibase)) {
+            throw new IllegalArgumentException("multibase key is not canonically encoded");
         }
         return decoded;
     }
 
+    /**
+     * True iff {@code bytes} starts with a multicodec header in the private-key block 0x1300–0x1310
+     * (ed25519-priv, secp256k1-priv, p256-priv, p384-priv, p521-priv, bls12_381-*-priv, sm2-priv …).
+     * Each is a two-byte varint whose second byte is 0x26.
+     */
+    private static boolean isSecretKeyHeader(byte[] bytes) {
+        if (bytes.length < 2 || (bytes[1] & 0xff) != 0x26) {
+            return false;
+        }
+        int first = bytes[0] & 0xff;
+        return first >= 0x80 && first <= 0x90;
+    }
+
     /** Re-encodes a decoded key as its canonical {@code did:key} identifier. */
     public static String encode(DecodedKey decoded) {
+        return DID_KEY_PREFIX + multibaseOf(decoded);
+    }
+
+    /** Re-encodes a decoded key as its canonical multibase value ({@code z…}). */
+    public static String multibaseOf(DecodedKey decoded) {
         if ("Ed25519".equals(decoded.keyType())) {
-            return encodeEd25519(decoded.publicKey());
+            return "z" + base58Encode(concat(MC_ED25519, rawEd25519(decoded.publicKey())));
         }
         Curve curve = Curve.byKeyType(decoded.keyType());
         if (curve == null) {
             throw new IllegalArgumentException("Cannot encode key type " + decoded.keyType());
         }
-        return encodeEc(curve, (ECPublicKey) decoded.publicKey());
+        return "z" + base58Encode(concat(curve.multicodec, compressed(curve, (ECPublicKey) decoded.publicKey())));
+    }
+
+    /**
+     * The public JWK (RFC 7517; RFC 8037 for Ed25519) of a decoded key, as the did:key Method's "Encode
+     * JWK Algorithm" produces it, with {@code alg} added so that the key is pinned to the one JWS
+     * algorithm it may sign with. Private members are never present: there are none to copy.
+     */
+    public static Map<String, String> toJwk(DecodedKey decoded) {
+        Map<String, String> jwk = new LinkedHashMap<>();
+        Base64.Encoder b64 = Base64.getUrlEncoder().withoutPadding();
+        if ("Ed25519".equals(decoded.keyType())) {
+            jwk.put("kty", "OKP");
+            jwk.put("crv", "Ed25519");
+            jwk.put("x", b64.encodeToString(rawEd25519(decoded.publicKey())));
+        } else {
+            Curve curve = Curve.byKeyType(decoded.keyType());
+            if (curve == null) {
+                throw new IllegalArgumentException("Cannot express key type " + decoded.keyType() + " as a JWK");
+            }
+            ECPoint w = ((ECPublicKey) decoded.publicKey()).getW();
+            jwk.put("kty", "EC");
+            jwk.put("crv", curve.keyType);
+            jwk.put("x", b64.encodeToString(toFixed(w.getAffineX(), curve.coordinateBytes)));
+            jwk.put("y", b64.encodeToString(toFixed(w.getAffineY(), curve.coordinateBytes)));
+        }
+        jwk.put("alg", decoded.jwsAlgorithm());
+        return jwk;
     }
 
     public static PublicKey toPublicKey(String did) {
@@ -164,17 +257,26 @@ public final class DidKey {
     }
 
     private static String encodeEc(Curve curve, ECPublicKey key) {
-        ECPoint w = key.getW();
-        byte[] compressed = new byte[curve.coordinateBytes + 1];
-        compressed[0] = w.getAffineY().testBit(0) ? (byte) 0x03 : (byte) 0x02;
-        System.arraycopy(toFixed(w.getAffineX(), curve.coordinateBytes), 0, compressed, 1, curve.coordinateBytes);
-        return DID_KEY_PREFIX + "z" + base58Encode(concat(curve.multicodec, compressed));
+        return DID_KEY_PREFIX + "z" + base58Encode(concat(curve.multicodec, compressed(curve, key)));
     }
 
     public static String encodeEd25519(PublicKey key) {
+        return DID_KEY_PREFIX + "z" + base58Encode(concat(MC_ED25519, rawEd25519(key)));
+    }
+
+    /** The SEC1 compressed form of an EC point: 0x02/0x03 by the parity of y, then x. */
+    private static byte[] compressed(Curve curve, ECPublicKey key) {
+        ECPoint w = key.getW();
+        byte[] out = new byte[curve.coordinateBytes + 1];
+        out[0] = w.getAffineY().testBit(0) ? (byte) 0x03 : (byte) 0x02;
+        System.arraycopy(toFixed(w.getAffineX(), curve.coordinateBytes), 0, out, 1, curve.coordinateBytes);
+        return out;
+    }
+
+    /** The 32 raw bytes of an Ed25519 public key: the tail of its SubjectPublicKeyInfo encoding. */
+    private static byte[] rawEd25519(PublicKey key) {
         byte[] spki = key.getEncoded();
-        byte[] raw = Arrays.copyOfRange(spki, spki.length - 32, spki.length);
-        return DID_KEY_PREFIX + "z" + base58Encode(concat(MC_ED25519, raw));
+        return Arrays.copyOfRange(spki, spki.length - 32, spki.length);
     }
 
     // ---- key building ----

@@ -3,7 +3,8 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>com.ebremer</groupId>
     <artifactId>lws-authn</artifactId>
-    <version>0.2.0</version>
+    <!-- Unreleased work towards 0.3.0; 0.2.0 is the latest release (commit e539362). -->
+    <version>0.3.0-SNAPSHOT</version>
     <packaging>jar</packaging>
 
     <name>lws-authn</name>
@@ -261,7 +262,7 @@
                 <version>3.13.0</version>
             </plugin>
 
-            <!-- forceCreation matters here. The shade plugin replaces target/lws-authn-0.2.0.jar with
+            <!-- forceCreation matters here. The shade plugin replaces target/lws-authn-<version>.jar with
                  the shaded artifact, so on a second `package` without `clean` the jar plugin sees a
                  file newer than target/classes, skips rebuilding, and shade takes its own previous
                  output as input — re-shading an already-shaded JAR. Rebuilding unconditionally keeps
@@ -351,6 +352,12 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
                 <version>3.5.2</version>
+                <configuration>
+                    <systemPropertyVariables>
+                        <!-- The shaded JAR LwsAuthIT deploys, so the test never hard-codes a version. -->
+                        <lws.authn.providerJar>${project.build.directory}/${project.build.finalName}.jar</lws.authn.providerJar>
+                    </systemPropertyVariables>
+                </configuration>
                 <executions>
                     <execution>
                         <goals>

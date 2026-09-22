@@ -82,6 +82,11 @@ public final class JwsChecks {
      * <p>Pinning the token's declared algorithm to the key actually in hand blocks algorithm
      * confusion: symmetric ({@code HS*}), {@code none} and unknown algorithms never match, so an
      * RSA or EC public key can never be pressed into service as an HMAC secret.</p>
+     *
+     * <p>For ECDSA the curve is pinned too. RFC 7518 §3.4 defines each {@code ES*} algorithm as one
+     * curve and one hash — {@code ES256} is P-256 with SHA-256, {@code ES384} P-384, {@code ES512}
+     * P-521 — and a JCA verifier will happily check a SHA-256 signature made with a P-384 key, which
+     * is a valid ECDSA signature but not a valid {@code ES256} one.</p>
      */
     public static boolean algMatchesKey(String alg, PublicKey key) {
         if (alg == null || key == null) {
@@ -92,7 +97,20 @@ public final class JwsChecks {
             return "RSA".equals(keyType);
         }
         if (alg.startsWith("ES")) {                           // ECDSA
-            return "EC".equals(keyType) || "ECDSA".equals(keyType);
+            if (!("EC".equals(keyType) || "ECDSA".equals(keyType))) {
+                return false;
+            }
+            int expectedFieldSize = switch (alg) {
+                case "ES256" -> 256;
+                case "ES384" -> 384;
+                case "ES512" -> 521;
+                default -> -1;                                // ES256K and the like: not a curve this provider supports
+            };
+            if (expectedFieldSize < 0) {
+                return false;
+            }
+            return !(key instanceof java.security.interfaces.ECKey ecKey)
+                    || ecKey.getParams().getCurve().getField().getFieldSize() == expectedFieldSize;
         }
         if ("EdDSA".equals(alg) || alg.startsWith("Ed")) {    // Edwards-curve EdDSA
             return "EdDSA".equals(keyType) || "Ed25519".equals(keyType) || "Ed448".equals(keyType);
