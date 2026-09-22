@@ -271,9 +271,18 @@ and the deprecation headers
   the docs, and `LwsAuthIT`, whose image now comes from the POM through Failsafe. Checked, as the POM
   asks on every Keycloak upgrade: the libraries the provider marks `provided` (slf4j, jspecify) or
   relocates (titanium-json-ld, caffeine, commons-collections4, commons-codec) are the same versions in
-  both distributions. Aside: the POM's comment says Keycloak ships commons-codec 1.11 and
-  commons-collections4 4.4, but both distributions actually bundle 1.21.0 and 4.5.0. Relocating is
-  still harmless, but the stated reason is out of date.
+  both distributions. The check also showed the POM's account of those libraries was wrong: S-18.
+
+- [x] **S-18 · The POM misdescribed what Keycloak ships, and pinned commons-codec below Jena.** Its
+  comments said Keycloak ships commons-codec 1.11 and commons-collections4 4.4. Those are what
+  Keycloak's POMs declare, and so what Maven's mediation sees. The server bundles 1.21.0 and 4.5.0.
+  Checking that turned up a real problem: Jena 6.2.0's `jena-base` declares commons-codec **1.22.0**,
+  but the POM pinned 1.20.0. The pin that exists to stop Maven downgrading Jena's dependencies was
+  downgrading this one. **Done:** `commons-codec.version` 1.22.0, as a property beside the other
+  pins, and the shade plugin's comment now tabulates Jena's version, Keycloak's POM version and the
+  26.7.4 server's version for all four relocated libraries. The rationale for relocating is restated:
+  titanium-json-ld and caffeine really are older on the server; for the other two, relocation keeps
+  the provider independent of what a Keycloak release ships. `README.md` § *Build* matches.
 
 - [ ] **S-13 · Tag the 0.2.0 release.** *Versioning* in `CHANGELOG.md` says to tag each release commit
   `lws-authn-<version>`; `e539362` (the 0.2.0 bump, the build deployed to both hellion servers) has no

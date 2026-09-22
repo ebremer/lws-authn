@@ -103,6 +103,11 @@ each may reject a document that used to verify. Check your issuers' documents be
   not use. The libraries the provider shares with Keycloak or relocates are unchanged from 26.7.3 — the
   distribution differs only in Quarkus (3.33.3.1 → 3.33.3.2) and Keycloak's own JARs — so the shading
   and `provided` decisions stand. `LwsAuthIT` now takes its container image from `keycloak.version`.
+- **commons-codec is bundled at 1.22.0**, the version Jena 6.2.0 declares. The POM pinned 1.20.0, so
+  the pin that exists to stop Maven downgrading Jena's dependencies was downgrading this one. Relocated,
+  as before. The POM and README also now say accurately what Keycloak's POMs declare versus what the
+  server ships: 26.7.4 bundles commons-codec 1.21.0 and commons-collections4 4.5.0, not the 1.11 and 4.4
+  its POMs declare. The bundling decisions are unchanged.
 - **Version `0.3.0-SNAPSHOT`.** The JAR is `lws-authn-0.3.0-SNAPSHOT.jar`, so a build of this tree cannot
   be mistaken for the 0.2.0 release (commit `e539362`, which is untagged — see *Versioning*).
   `LwsAuthIT` now takes the JAR's path from Failsafe and CI uploads `target/lws-authn-*.jar`, so neither

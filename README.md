@@ -106,13 +106,15 @@ build picks one of two strategies deliberately, because the wrong one is a runti
 
 | Situation | Treatment | Examples |
 |---|---|---|
-| Keycloak's copy satisfies Jena | `provided` — use the server's, bundle nothing | `slf4j-api`, `jcl-over-slf4j`, `jakarta.json`, `jspecify` |
-| Jena needs a **newer** version than Keycloak ships | bundle Jena's version and **relocate** it | `commons-codec` 1.20 (vs 1.11), `titanium-json-ld` 1.7.0 (vs 1.3.3), `commons-collections4` 4.5.0 (vs 4.4), `caffeine` 3.2.4 (vs 3.2.3) |
+| An interface or facade whose Keycloak copy satisfies Jena | `provided` — use the server's, bundle nothing | `slf4j-api`, `jcl-over-slf4j`, `jakarta.json`, `jspecify` |
+| A library carrying behaviour Jena depends on | bundle the version Jena declares and **relocate** it | `commons-codec` 1.22.0, `titanium-json-ld` 1.7.0, `commons-collections4` 4.5.0, `caffeine` 3.2.4 |
 
 Bundling an unrelocated second copy of a library the server already has puts two implementations of one
-package on the classpath; marking one `provided` when Jena needs a newer version silently downgrades it.
-The relocated versions are pinned explicitly, because Maven resolves the tie between Jena's and
-Keycloak's copies by declaration order and would otherwise pick Keycloak's older one.
+package on the classpath; marking one `provided` when the server's copy is older silently downgrades
+it — Keycloak 26.7.4 runs Titanium 1.3.3 and Caffeine 3.2.3 against Jena's 1.7.0 and 3.2.4. The bundled
+versions are pinned explicitly, because Maven would otherwise resolve the older versions Keycloak's own
+POMs declare (commons-codec 1.11, commons-collections4 4.4, Titanium 1.3.3, Caffeine 3.2.3). The shade
+plugin's comment in `pom.xml` tabulates all three columns.
 
 `mvn package` enforces this: `maven-enforcer-plugin` fails the build on duplicate classes among the
 bundled artifacts, and the shade plugin's `artifactSet` excludes hold regardless of what Maven's scope
