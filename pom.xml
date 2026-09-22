@@ -21,8 +21,8 @@
         <jena.version>6.2.0</jena.version>
         <!-- Versions of libraries Keycloak also ships, where its copy is good enough for Jena and the
              dependency can simply be `provided`. Re-check on a Keycloak upgrade. -->
-        <jspecify.version>1.0.0</jspecify.version>
-        <slf4j.version>2.0.18</slf4j.version>
+        <jspecify.version>1.0.1</jspecify.version>
+        <slf4j.version>2.0.19</slf4j.version>
         <jakarta-json.version>2.0.1</jakarta-json.version>
         <!-- Base package for relocated third-party code (see the shade plugin below). -->
         <shade.base>com.ebremer.lws.authn.shaded</shade.base>
@@ -32,8 +32,8 @@
              otherwise pick the OLDER versions Keycloak's own POMs declare. -->
         <titanium.version>1.7.0</titanium.version>
         <caffeine.version>3.2.4</caffeine.version>
-        <commons-collections4.version>4.5.0</commons-collections4.version>
-        <commons-codec.version>1.22.0</commons-codec.version>
+        <commons-collections4.version>4.6.0</commons-collections4.version>
+        <commons-codec.version>1.22.1</commons-codec.version>
     </properties>
 
     <!-- ==================================================================================== -->
@@ -126,7 +126,7 @@
         <dependency>
             <groupId>org.jboss.logging</groupId>
             <artifactId>jboss-logging</artifactId>
-            <version>3.6.2.Final</version>
+            <version>3.6.3.Final</version>
             <scope>provided</scope>
         </dependency>
 
@@ -240,7 +240,7 @@
         <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcpkix-jdk18on</artifactId>
-            <version>1.85</version>
+            <version>1.86</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -263,7 +263,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.13.0</version>
+                <version>3.16.0</version>
             </plugin>
 
             <!-- forceCreation matters here. The shade plugin replaces target/lws-authn-<version>.jar with
@@ -274,7 +274,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
-                <version>3.4.2</version>
+                <version>3.5.1</version>
                 <configuration>
                     <forceCreation>true</forceCreation>
                 </configuration>
@@ -299,7 +299,7 @@
                     <dependency>
                         <groupId>org.codehaus.mojo</groupId>
                         <artifactId>extra-enforcer-rules</artifactId>
-                        <version>1.12.0</version>
+                        <version>1.12.1</version>
                     </dependency>
                 </dependencies>
                 <executions>
@@ -355,7 +355,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
-                <version>3.5.2</version>
+                <version>3.6.0</version>
                 <configuration>
                     <systemPropertyVariables>
                         <!-- The shaded JAR LwsAuthIT deploys, so the test never hard-codes a version. -->
@@ -384,7 +384,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
-                <version>3.6.0</version>
+                <version>3.6.2</version>
                 <executions>
                     <execution>
                         <phase>package</phase>
