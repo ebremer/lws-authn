@@ -1,9 +1,16 @@
 # Walkthrough: a self-signed `did:key` LWS identity
 
-The [`did:key` suite](https://w3c.github.io/lws-protocol/lws10-authn-ssi-did-key/) is the most
-self-contained of the four: the subject is a `did:key` identifier that **embeds the public key**, so a
-verifier decodes the key straight from the identifier — there is nothing to host and nothing to
-dereference. Keycloak's only role is to verify.
+> **The separate `did:key` suite was discontinued** by the LWS Working Group on 18 September 2026, "in
+> favor of lws10-authn-ssi-cid, which subsumes this specification by specifying a generalization of the
+> mechanism described here". A `did:key` identity still works exactly as this walkthrough describes — it
+> is now verified by the **self-signed CID** suite, at `…/lws-ssi-cid/verify`, which resolves the
+> `did:key` to its DID document and checks the credential against it. The one addition: that suite
+> **requires a `kid`**, naming the verification method (`<did>#<multibase>`). The old
+> `…/lws-ssi-did-key/verify` endpoint still answers, and marks every response `Deprecation`.
+
+A `did:key` is the most self-contained identity there is: the subject is a `did:key` identifier that
+**embeds the public key**, so a verifier derives the key straight from the identifier — there is nothing
+to host and nothing to fetch. Keycloak's only role is to verify.
 
 ## The cast
 
@@ -21,7 +28,7 @@ client_id ==` the `did:key`, and the verifier reconstructs the public key from i
 
 ## Prerequisites
 
-- Keycloak **26.7.3** with the `lws-authn` provider deployed — see the [README](../README.md).
+- Keycloak **26.7.4** with the `lws-authn` provider deployed — see the [README](../README.md).
 - `curl`, `jq`, and `node` (Node is used to mint the key/JWT; base58btc is impractical in pure shell).
 
 ---
@@ -33,9 +40,10 @@ bash scripts/ssi-did-key-demo.sh            # P-256 (zDn…, ES256)
 KEYTYPE=ed25519 bash scripts/ssi-did-key-demo.sh   # Ed25519 (z6Mk…, EdDSA)
 ```
 
-It mints a keypair, derives the `did:key`, self-signs a JWT, and posts it to
-`/realms/master/lws-ssi-did-key/verify`, ending in `valid: true`. No realm, user, or hosting is
-involved — the key travels inside the identifier.
+It mints a keypair, derives the `did:key`, self-signs a JWT with `kid` set to the verification method
+id, and posts it to `/realms/master/lws-ssi-cid/verify`, ending in `valid: true`. No realm, user, or
+hosting is involved — the key travels inside the identifier. `ENDPOINT=lws-ssi-did-key` posts to the
+deprecated endpoint instead, to compare.
 
 ---
 
@@ -50,18 +58,30 @@ Supported key types: **Ed25519** (`did:key:z6Mk…`, alg `EdDSA`) and **P-256** 
 3. base58btc-encode the result and prepend the multibase prefix `z`.
 4. `did:key:` + that string.
 
-The agent self-signs a JWT with all of `sub`, `iss`, `client_id` set to this `did:key`:
+The agent self-signs a JWT with all of `sub`, `iss`, `client_id` set to this `did:key`, and `kid` set
+to the verification method the did:key's DID document lists — the DID, `#`, and the same multibase
+string:
 
 ```
-header  = {"alg":"ES256","typ":"JWT"}            # or {"alg":"EdDSA",...} for Ed25519
+header  = {"alg":"ES256","typ":"JWT","kid":"<did:key>#z<…>"}   # or "alg":"EdDSA" for Ed25519
 payload = {"sub":"<did:key>","iss":"<did:key>","client_id":"<did:key>",
            "aud":["https://as.example"],"iat":<now>,"exp":<now+300>}
+```
+
+That document is what the did:key Method expands the identifier into, and what the self-signed CID
+suite validates against — one `Multikey` method, referenced from `authentication`:
+
+```json
+{ "id": "did:key:zDnae…",
+  "verificationMethod": [{ "id": "did:key:zDnae…#zDnae…", "type": "Multikey",
+                           "controller": "did:key:zDnae…", "publicKeyMultibase": "zDnae…" }],
+  "authentication": ["did:key:zDnae…#zDnae…"] }
 ```
 
 ## Verify
 
 ```bash
-curl -s -X POST "$KC/realms/$REALM/lws-ssi-did-key/verify" \
+curl -s -X POST "$KC/realms/$REALM/lws-ssi-cid/verify" \
   -H "Authorization: Bearer $CALLER_ACCESS_TOKEN" \
   --data-urlencode "credential=$JWT" | jq
 ```
@@ -69,6 +89,10 @@ curl -s -X POST "$KC/realms/$REALM/lws-ssi-did-key/verify" \
 > `Authorization` identifies **you**, the caller: the `…/verify` endpoints are authenticated by
 > default. The credential being checked always travels in the request body. See
 > [Securing the verify endpoints](../README.md#securing-the-verify-endpoints).
+
+The deprecated `…/lws-ssi-did-key/verify` takes the same request and returns the same verdict for a
+credential with a `kid`, and also accepts one without; `curl -i` shows its `Deprecation` and
+`Link: <../lws-ssi-cid/verify>; rel="successor-version"` headers.
 
 
 ```json

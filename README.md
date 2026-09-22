@@ -1,24 +1,29 @@
 # lws-authn — Keycloak providers for LWS authentication suites
 
-A [Keycloak](https://www.keycloak.org/) **26.7.3** extension implementing **all four** authentication
-suites of the W3C [Linked Web Storage (LWS)](https://www.w3.org/TR/lws10-core/) 1.0 protocol, in which
-a **signed token bound to an identity** is used as an authentication credential:
+A [Keycloak](https://www.keycloak.org/) **26.7.4** extension implementing the authentication suites of
+the W3C [Linked Web Storage (LWS)](https://www.w3.org/TR/lws10-core/) 1.0 protocol, in which a **signed
+token bound to an identity** is used as an authentication credential — the three current suites, plus
+the discontinued fourth for callers that still use it:
 
 - [**OpenID Connect**](https://w3c.github.io/lws-protocol/lws10-authn-openid/) — Keycloak is the
   OpenID Provider; the ID Token's `sub` is a WebID whose controlled identifier document (CID) names
   this Keycloak as its `OpenIdProvider` service.
 - [**Self-signed Identity (Controlled Identifiers)**](https://w3c.github.io/lws-protocol/lws10-authn-ssi-cid/) —
-  an agent self-signs a JWT (`sub == iss == client_id`) with a key published as a `JsonWebKey` in its
-  own CID.
+  an agent self-signs a JWT (`sub == iss == client_id`) with a key its identifier's controlled
+  identifier document lists for `authentication`, as a `JsonWebKey` or `Multikey`. The identifier is an
+  HTTPS URI, or a **DID** — `did:key` or `did:web` — whose DID document is that controlled identifier
+  document.
 - [**SAML 2.0**](https://w3c.github.io/lws-protocol/lws10-authn-saml/) — the credential is a signed
   SAML 2.0 `<Response>` whose `<NameID>` is the subject; trust in the IdP is established **out of band**.
-- [**Self-signed `did:key`**](https://w3c.github.io/lws-protocol/lws10-authn-ssi-did-key/) — an agent
-  self-signs a JWT whose `sub` is a `did:key` that **embeds the public key** in the identifier itself;
-  the verifier decodes the key directly, with nothing to dereference.
+- ~~[**Self-signed `did:key`**](https://w3c.github.io/lws-protocol/lws10-authn-ssi-did-key/)~~ —
+  **discontinued** by the Working Group on 18 September 2026, "in favor of lws10-authn-ssi-cid, which
+  subsumes this specification". The self-signed CID suite now verifies `did:key` subjects itself; this
+  suite's endpoint still answers, and marks every response deprecated.
 
 The OpenID and self-signed-CID suites dereference the subject's
 [Controlled Identifier Document](https://www.w3.org/TR/cid-1.0/) and use **Apache Jena 6.2.0** for RDF;
-SAML uses Keycloak's SAML library for XML signature validation; `did:key` is pure JDK crypto.
+a `did:key` resolves locally with pure JDK crypto and a `did:web` is fetched over HTTPS; SAML uses
+Keycloak's SAML library for XML signature validation.
 
 ### The other documents
 
@@ -39,9 +44,9 @@ SAML uses Keycloak's SAML library for XML signature validation; `did:key` is pur
 | Suite | Keycloak's role | Credential | How the verifier gets the key | Endpoint | Token type URI |
 |-------|-----------------|------------|-------------------------------|----------|----------------|
 | OpenID Connect | OP + CID host + verifier | ID Token (JWT); `sub` = WebID | OIDC Discovery on `iss` (found via the CID service) | `/realms/{realm}/lws` | `…token-type:id_token` |
-| Self-signed CID | CID host + verifier | self-issued JWT; `sub`==`iss`==`client_id` | `publicKeyJwk` in the subject's CID, by `kid` | `/realms/{realm}/lws-ssi-cid` | `…token-type:jwt` |
+| Self-signed CID | CID host + verifier | self-issued JWT; `sub`==`iss`==`client_id`, an HTTPS URI, `did:key` or `did:web` | the `authentication` method the `kid` names, in the subject's CID or DID document (`publicKeyJwk` or `publicKeyMultibase`) | `/realms/{realm}/lws-ssi-cid` | `…token-type:jwt` |
 | SAML 2.0 | SAML IdP + verifier | signed SAML `<Response>`; subject = `<NameID>` | **out-of-band** IdP certificate | `/realms/{realm}/lws-saml` | `…token-type:saml2` |
-| Self-signed `did:key` | verifier only | self-issued JWT; `sub` = `did:key` | **decoded from the `did:key`** identifier itself | `/realms/{realm}/lws-ssi-did-key` | `…token-type:jwt` |
+| *Self-signed `did:key` — discontinued, deprecated* | verifier only | self-issued JWT; `sub` = `did:key` | **decoded from the `did:key`** identifier itself | `/realms/{realm}/lws-ssi-did-key` | `…token-type:jwt` |
 
 The suites are independent; deploy the single JAR and use any of them.
 
@@ -60,8 +65,10 @@ The suites are independent; deploy the single JAR and use any of them.
 | Component | Keycloak SPI | Purpose |
 |-----------|--------------|---------|
 | `ssicid.resource.SsiCidResourceProvider` | `RealmResourceProvider` (`lws-ssi-cid`) | Serves the CID publishing the user's public key(s) as `authentication` methods, and a verifier. |
-| `ssicid.verify.SelfSignedCidVerifier` | — | Check `sub==iss==client_id` → dereference `sub` → select key by `kid` → validate signature. |
+| `ssicid.verify.SelfSignedCidVerifier` | — | Check `sub==iss==client_id` → dereference `sub` (HTTPS) or resolve it (DID) → select the `authentication` method by `kid` → validate signature. |
 | `ssicid.cid.SelfSignedControlledIdentifierDocument` | — | Builds the CID with `publicKeyJwk` verification methods. |
+| `did.Dids` | — | DID syntax; expands a `did:key` into its DID document; maps a `did:web` to its HTTPS URL. |
+| `did.DidKey` | — | Multibase/multicodec codec for `did:key` identifiers and `Multikey` values; Ed25519, P-256, P-384, P-521, pure JDK. |
 
 **SAML 2.0 suite**
 
@@ -70,13 +77,12 @@ The suites are independent; deploy the single JAR and use any of them.
 | `saml.resource.SamlResourceProvider` | `RealmResourceProvider` (`lws-saml`) | Verifies a signed SAML 2.0 Response against a supplied (out-of-band) IdP certificate. |
 | `saml.verify.SamlCredentialVerifier` | — | Validate the XML signature → read `<NameID>`/`<Issuer>` → enforce the validity window and audience. |
 
-**Self-signed `did:key` suite**
+**Self-signed `did:key` suite** (discontinued; the endpoint is deprecated)
 
 | Component | Keycloak SPI | Purpose |
 |-----------|--------------|---------|
-| `ssididkey.resource.DidKeyResourceProvider` | `RealmResourceProvider` (`lws-ssi-did-key`) | Verifies a self-issued `did:key` JWT. |
-| `ssididkey.verify.SelfSignedDidKeyVerifier` | — | Check `sub==iss==client_id` is a `did:key` → decode the key from it → validate signature. |
-| `ssididkey.DidKey` | — | did:key codec (multibase base58btc + multicodec); decodes Ed25519, P-256, P-384 and P-521 keys, pure JDK. |
+| `ssididkey.resource.DidKeyResourceProvider` | `RealmResourceProvider` (`lws-ssi-did-key`) | Verifies a self-issued `did:key` JWT, and marks every response deprecated (RFC 9745). |
+| `ssididkey.verify.SelfSignedDidKeyVerifier` | — | The discontinued draft's algorithm, unchanged: check `sub==iss==client_id` is a `did:key` → decode the key from it → validate signature. |
 
 The OpenID and self-signed-CID suites serialize CIDs with Jena as JSON-LD / Turtle / N-Triples / RDF/XML.
 
@@ -91,7 +97,8 @@ Keycloak's runtime; a newer build JDK such as 25 is fine.)
 mvn clean package
 ```
 
-This produces a single, self-contained provider JAR: **`target/lws-authn-0.2.0.jar`**, plus a CycloneDX
+This produces a single, self-contained provider JAR: **`target/lws-authn-<version>.jar`** — this tree is
+`0.3.0-SNAPSHOT`, unreleased work after 0.2.0 — plus a CycloneDX
 SBOM (`target/bom.json`, `target/bom.xml`) listing exactly what is inside it and under what licence.
 
 Apache Jena and its dependencies are shaded in. Where Jena and Keycloak want the same library, the
@@ -99,13 +106,15 @@ build picks one of two strategies deliberately, because the wrong one is a runti
 
 | Situation | Treatment | Examples |
 |---|---|---|
-| Keycloak's copy satisfies Jena | `provided` — use the server's, bundle nothing | `slf4j-api`, `jcl-over-slf4j`, `jakarta.json`, `jspecify` |
-| Jena needs a **newer** version than Keycloak ships | bundle Jena's version and **relocate** it | `commons-codec` 1.20 (vs 1.11), `titanium-json-ld` 1.7.0 (vs 1.3.3), `commons-collections4` 4.5.0 (vs 4.4), `caffeine` 3.2.4 (vs 3.2.3) |
+| An interface or facade whose Keycloak copy satisfies Jena | `provided` — use the server's, bundle nothing | `slf4j-api`, `jcl-over-slf4j`, `jakarta.json`, `jspecify` |
+| A library carrying behaviour Jena depends on | bundle the version Jena declares and **relocate** it | `commons-codec` 1.22.0, `titanium-json-ld` 1.7.0, `commons-collections4` 4.5.0, `caffeine` 3.2.4 |
 
 Bundling an unrelocated second copy of a library the server already has puts two implementations of one
-package on the classpath; marking one `provided` when Jena needs a newer version silently downgrades it.
-The relocated versions are pinned explicitly, because Maven resolves the tie between Jena's and
-Keycloak's copies by declaration order and would otherwise pick Keycloak's older one.
+package on the classpath; marking one `provided` when the server's copy is older silently downgrades
+it — Keycloak 26.7.4 runs Titanium 1.3.3 and Caffeine 3.2.3 against Jena's 1.7.0 and 3.2.4. The bundled
+versions are pinned explicitly, because Maven would otherwise resolve the older versions Keycloak's own
+POMs declare (commons-codec 1.11, commons-collections4 4.4, Titanium 1.3.3, Caffeine 3.2.3). The shade
+plugin's comment in `pom.xml` tabulates all three columns.
 
 `mvn package` enforces this: `maven-enforcer-plugin` fails the build on duplicate classes among the
 bundled artifacts, and the shade plugin's `artifactSet` excludes hold regardless of what Maven's scope
@@ -118,7 +127,7 @@ serving, parsing and SPARQL — run it after touching dependencies.
 
 ### Tests
 
-`mvn test` runs 144 unit tests. `mvn verify` additionally runs 23 in `LwsAuthIT`, which needs Docker
+`mvn test` runs 190 unit tests. `mvn verify` additionally runs 25 in `LwsAuthIT`, which needs Docker
 and is skipped without it.
 
 **`LwsAuthIT` binds host port 8080 and cannot run in parallel with itself.** The OpenID verifier
@@ -142,8 +151,8 @@ are still Java 21, and runs CodeQL. Actions are pinned by commit SHA; Dependabot
 Keycloak loads provider JARs from its `providers/` directory.
 
 ```bash
-# from the project root, with $KC_HOME pointing at your Keycloak 26.7.3 install
-cp target/lws-authn-0.2.0.jar "$KC_HOME/providers/"
+# from the project root, with $KC_HOME pointing at your Keycloak 26.7.4 install
+cp target/lws-authn-*.jar "$KC_HOME/providers/"   # the one shaded JAR `mvn package` produced
 
 "$KC_HOME/bin/kc.sh" build      # re-augment with the new provider
 "$KC_HOME/bin/kc.sh" start      # or start-dev
@@ -151,7 +160,7 @@ cp target/lws-authn-0.2.0.jar "$KC_HOME/providers/"
 
 On Windows use `kc.bat`. After `kc.sh build`, the startup log lists the registered providers; you
 should see the `lws`, `lws-ssi-cid`, `lws-saml` and `lws-ssi-did-key` realm resources and the
-`lws-webid-sub-mapper` protocol mapper.
+`lws-webid-sub-mapper` protocol mapper, and a warning that `lws-ssi-did-key` is deprecated.
 
 ---
 
@@ -221,15 +230,35 @@ verifiers can find it, and offers a verifier.
 `GET …/lws-ssi-cid/cid/{userId}` serves the CID publishing the registered key(s) as `authentication`
 methods; `POST …/lws-ssi-cid/verify` validates a self-issued JWT: reject `none` and any unsupported
 `crit` header; enforce `sub == iss == client_id`; require a `kid`; dereference `sub` to a document
-whose `id` **is** `sub`; select a `JsonWebKey` method that document's subject **controls**; pin the
-`alg` to that key; validate the signature; require `iat` and `exp`; and check the audience.
+whose `id` **is** `sub`; select, by `kid`, a `JsonWebKey` or `Multikey` method the document's
+`authentication` relationship names — embedded or by reference — that the subject **controls** and
+that is neither revoked nor expired; pin the `alg` to that key; validate the signature; require `iat`
+and `exp`; and check the audience.
 
 Pass `audience=<authorization server>` to enforce the suite's "the `aud` claim MUST include the target
 authorization server" — without it only the presence of an audience restriction can be checked.
 
 The document a verifier dereferences must therefore be CID-conformant: an `id` equal to the subject,
-and verification methods carrying `id`, `type: JsonWebKey` and a `controller` equal to the subject.
-The documents this provider serves already are.
+and the key listed under `authentication` (CID 1.0 §2.3 — a key defined under `verificationMethod`
+but named only by, say, `assertionMethod` cannot authenticate), with an `id` in that document, a
+`type` of `JsonWebKey` or `Multikey`, and a `controller` equal to the subject. The documents this
+provider serves already are.
+
+### DID subjects
+
+The suite "is designed to work with subject identifiers that use HTTPS URIs as well as DID URIs": a
+DID document extends a controlled identifier document, so the same validation applies once the DID is
+resolved. Two methods are resolved; any other is refused by name.
+
+| Method | Resolution | Example `kid` |
+|---|---|---|
+| `did:key` | expanded locally into the did:key Method's document — one `Multikey` method, referenced from `authentication`. No network. Must be canonically encoded; Ed25519, P-256, P-384 or P-521. | `did:key:zDnae…#zDnae…` |
+| `did:web` | `did:web:example.com` → `https://example.com/.well-known/did.json`; `did:web:example.com:u:bob` → `https://example.com/u/bob/did.json`; a port as `%3A`. Fetched through the same SSRF-guarded client as an HTTPS subject; a domain name only, never an IP address; the document's `id` must be the DID. | `did:web:example.com#key-1` |
+
+A `kid` may name the method by its full identifier, as above, or by its fragment (`key-1` or
+`#key-1`), or by its JWK's own `kid`. This suite requires one: a `did:key` credential from the
+discontinued suite, which read the key from the identifier and ignored `kid`, needs
+`"kid": "<did>#<multibase>"` added to verify here.
 
 Walkthrough + runnable demo: **[`docs/walkthrough-ssi-cid.md`](docs/walkthrough-ssi-cid.md)** /
 **[`scripts/ssi-cid-demo.sh`](scripts/ssi-cid-demo.sh)**.
@@ -276,6 +305,13 @@ signed SAML Response requires a SAML login flow).
 
 ## Self-signed `did:key` suite
 
+> **Discontinued.** The LWS Working Group discontinued this suite on 18 September 2026 "in favor of
+> lws10-authn-ssi-cid, which subsumes this specification by specifying a generalization of the
+> mechanism described here". Verify `did:key` credentials at **`/lws-ssi-cid/verify`** instead (see
+> *DID subjects* above; add a `kid`). This endpoint keeps its behaviour for existing callers and adds
+> `Deprecation: @1789689600` and `Link: <../lws-ssi-cid/verify>; rel="successor-version"` to every
+> response. Switch it off with `--spi-realm-restapi-extension--lws-ssi-did-key--enabled=false`.
+
 The most self-contained suite: the subject is a `did:key` identifier that **embeds the public key**
 (multibase base58btc + multicodec), so there is no hosting, no dereferencing, and no realm setup — the
 verifier decodes the key from the identifier and validates the self-signed JWT. Supported key types:
@@ -301,7 +337,8 @@ credential names it:
               "issuedAtPresent": true, "audiencePresent": true } }
 ```
 
-Walkthrough + runnable demo (mints a `did:key` and verifies it):
+Walkthrough + runnable demo (mints a `did:key` and verifies it — at the successor endpoint by default,
+`ENDPOINT=lws-ssi-did-key` for this one):
 **[`docs/walkthrough-ssi-did-key.md`](docs/walkthrough-ssi-did-key.md)** /
 **[`scripts/ssi-did-key-demo.sh`](scripts/ssi-did-key-demo.sh)**.
 
@@ -462,14 +499,19 @@ alone. A disabled suite answers `404` on both its endpoints.
 
 - **Key/identity hosting.** The OpenID and self-signed-CID `cid/{userId}` endpoints serve
   Keycloak-hosted identifiers; private keys never reach Keycloak (only public JWKs are registered). The
-  SAML and `did:key` suites host nothing.
+  SAML and discontinued `did:key` suites host nothing, and neither do DID subjects.
 - **SAML trust is out-of-band.** The verifier requires the trusted IdP certificate as input; it
   validates the XML signature, the `<Conditions>` window (±60 s skew by default, `clock-skew-seconds`)
   and the audience, but does not fetch metadata or build a trust chain.
-- **`did:key` key types.** Ed25519, P-256, P-384 and P-521 are supported; secp256k1 (which the JDK
-  cannot do without BouncyCastle) and RSA are not. No BouncyCastle is used, so this works under both
-  default and FIPS Keycloak crypto. Curve parameters come from the JDK rather than being transcribed
-  here, so the set is one table row per curve.
+- **DID methods and key types.** `did:key` and `did:web` are resolved; other methods are refused.
+  Ed25519, P-256, P-384 and P-521 are supported for `did:key` and `Multikey`; secp256k1 (which the JDK
+  cannot do without BouncyCastle), BLS12-381, SM2 and RSA are not. No BouncyCastle is used, so this
+  works under both default and FIPS Keycloak crypto. Curve parameters come from the JDK rather than
+  being transcribed here, so the set is one table row per curve.
+- **DID documents are read as JSON, not JSON-LD.** DID 1.1 is a Candidate Recommendation and its
+  context is not yet published at a stable URL, so there is no definition to bundle; the structure the
+  verifier relies on is fixed by DID 1.1 and CID 1.0 either way. HTTPS subjects' documents are still
+  processed as JSON-LD with the bundled CID context.
 - **`frontendUrl`.** Derived identifiers and served documents are built from the realm front-end URL;
   set it (or run behind a stable hostname) so they stay consistent and publicly dereferenceable.
 - **Verifier networking & syntaxes.** OpenID/self-signed-CID verification dereferences `sub` (and, for
@@ -507,6 +549,9 @@ src/main/java/com/ebremer/lws/authn/
     Settings                                    scope -> system property -> environment -> default
     ServerSettings                              server-wide tunables (SSRF list, timeouts, skew)
     EndpointSettings                            per-provider settings, incl. the per-realm on/off flag
+  did/                                          DID subjects, shared by the self-signed suites
+    Dids                                        DID syntax, did:key expansion, did:web URL mapping
+    DidKey                                      multibase/multicodec codec (did:key, Multikey), pure JDK
   http/                                         shared endpoint plumbing
     JsonResponses                               every non-result body, serialized not concatenated
     CidEndpoint                                 the shared cid/{userId} endpoint
@@ -524,8 +569,8 @@ src/main/java/com/ebremer/lws/authn/
     SamlConstants
     resource/SamlResourceProvider(.Factory)     mount id "lws-saml"
     verify/SamlCredentialVerifier, SamlVerificationResult
-  ssididkey/                                    Self-signed did:key suite
-    DidKeyConstants, DidKey                     did:key codec (base58btc + multicodec, pure JDK)
+  ssididkey/                                    Self-signed did:key suite (discontinued; deprecated endpoint)
+    DidKeyConstants                             incl. the Deprecation/Link header values
     resource/DidKeyResourceProvider(.Factory)   mount id "lws-ssi-did-key"
     verify/SelfSignedDidKeyVerifier, DidKeyVerificationResult
 src/main/resources/META-INF/services/           SPI registrations (mapper + four resource factories)

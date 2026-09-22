@@ -81,11 +81,36 @@ class JwsChecksTest {
         assertTrue(JwsChecks.algMatchesKey("RS256", rsa));
         assertTrue(JwsChecks.algMatchesKey("PS512", rsa));
         assertTrue(JwsChecks.algMatchesKey("ES256", ec));
-        assertTrue(JwsChecks.algMatchesKey("ES512", ec));
         assertTrue(JwsChecks.algMatchesKey("EdDSA", ed.getPublic()));
 
         assertFalse(JwsChecks.algMatchesKey("ES256", rsa), "an RSA key cannot produce an ECDSA signature");
         assertFalse(JwsChecks.algMatchesKey("RS256", ec));
+    }
+
+    /**
+     * RFC 7518 §3.4: each ES* algorithm is one curve and one hash. A JCA verifier would accept a
+     * SHA-512 signature from a P-256 key, which is valid ECDSA and not valid ES512.
+     */
+    @Test
+    void pinsEcdsaAlgorithmsToTheirCurves() throws Exception {
+        PublicKey p256 = ec("secp256r1");
+        PublicKey p384 = ec("secp384r1");
+        PublicKey p521 = ec("secp521r1");
+
+        assertTrue(JwsChecks.algMatchesKey("ES256", p256));
+        assertTrue(JwsChecks.algMatchesKey("ES384", p384));
+        assertTrue(JwsChecks.algMatchesKey("ES512", p521));
+
+        assertFalse(JwsChecks.algMatchesKey("ES512", p256), "ES512 is P-521, not P-256");
+        assertFalse(JwsChecks.algMatchesKey("ES256", p384), "ES256 is P-256, not P-384");
+        assertFalse(JwsChecks.algMatchesKey("ES384", p521), "ES384 is P-384, not P-521");
+        assertFalse(JwsChecks.algMatchesKey("ES256K", p256), "secp256k1 is not a curve this provider supports");
+    }
+
+    private static PublicKey ec(String curve) throws Exception {
+        KeyPairGenerator generator = KeyPairGenerator.getInstance("EC");
+        generator.initialize(new ECGenParameterSpec(curve));
+        return generator.generateKeyPair().getPublic();
     }
 
     /** The attack this exists for: a public key must never be usable as an HMAC secret. */

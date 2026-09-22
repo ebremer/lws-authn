@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for looking. This is a small project with a specific job: implement the four W3C Linked Web
+Thanks for looking. This is a small project with a specific job: implement the W3C Linked Web
 Storage authentication suites as Keycloak providers, correctly enough that the answer to "is this
 credential genuine" can be relied on.
 
@@ -11,7 +11,7 @@ credential genuine" can be relied on.
 Requires **JDK 21+** and Maven; Docker for the integration test.
 
 ```bash
-mvn clean verify      # 144 unit tests + 23 in LwsAuthIT (a real Keycloak 26.7.3 container)
+mvn clean verify      # 190 unit tests + 25 in LwsAuthIT (a real Keycloak 26.7.4 container)
 mvn clean test        # unit tests only, no Docker needed
 ```
 

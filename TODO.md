@@ -20,7 +20,7 @@ hygiene gaps.
 > also the only one that cannot be closed from inside the repository. **P1-C6** was checked off in the
 > P1 pass without its fix being made; P3-3 finished it, and its entry now says so.
 >
-> `mvn clean verify` is green: **144 unit tests** (21 before this work started) and **23** in
+> `mvn clean verify` was green at 0.2.0: **144 unit tests** (21 before this work started) and **23** in
 > `LwsAuthIT` against a real Keycloak 26.7.3 container. The changes worth knowing about
 > before reading further:
 >
@@ -183,17 +183,137 @@ hygiene gaps.
 
 ---
 
+## S — Specification update: the editor's drafts of 21 September 2026
+
+Reviewed 22 September 2026 against `w3c/lws-protocol` at `3ddc642`. Seven commits have touched the
+drafts since the 0.2.0 baseline (`602ca19`, 21 August 2026); three bear on this provider, and the rest
+(ETag rules, the `lws10-index` rename, `lws:StorageResource`, straight quotes) are storage-side or
+editorial. The OpenID and SAML suites did not change. Implementing S-2 properly surfaced four places
+(S-6 to S-9) where the self-signed CID verifier did not follow CID 1.0 §3.3, which that suite cites
+normatively for key selection; they were gaps in 0.2.0, not changes in the drafts.
+
+**State after this band:** 190 unit tests green (from 144); `LwsAuthIT` 25 (from 23); and a local
+end-to-end run against Keycloak 26.7.3 in dev mode, repeated on 26.7.4 after S-17 — 21 checks covering `did:key` for every key type,
+`did:web` over HTTPS, CID 1.0 relationship, `Multikey` and revocation rules, a subject with a fragment,
+and the deprecation headers
+— plus the three demo scripts, all passing.
+
+- [x] **S-1 · The `did:key` suite was discontinued** (w3c/lws-protocol#229, 18 September 2026) "in favor
+  of lws10-authn-ssi-cid, which subsumes this specification by specifying a generalization of the
+  mechanism described here". **Done:** the self-signed CID verifier resolves `did:key` subjects (S-2);
+  the old endpoint is deprecated (S-4). Every document now says the suite is discontinued.
+
+- [x] **S-2 · The self-signed CID suite "is designed to work with ... DID URIs"** (w3c/lws-protocol#233).
+  `SelfSignedCidVerifier` fetched `sub` over HTTP, and `SsrfGuard` refuses any scheme but http(s), so a
+  DID subject could only ever fail at `subjectDereferenced`.
+  **Done:** `did/Dids.java` and `resolveDid()`. `did:key` expands locally into the did:key Method's
+  document (a `Multikey`, referenced from `authentication`); `did:web` maps to its HTTPS URL per the
+  method's Read operation and is fetched through `OutboundHttp`, with the method's own rules — a domain
+  name, never an IP address; a port only as `%3A` — checked first. The resolved document then goes
+  through exactly the validation an HTTPS subject's does. **Decision:** only these two methods; any
+  other is refused by name (COMPLIANCE divergence 7). The suite mandates none, and every other method
+  needs a ledger or a third-party resolver this provider would have to trust.
+
+- [x] **S-3 · How to read a DID document.** DID 1.1 is a Candidate Recommendation; its context URL
+  (`https://www.w3.org/ns/did/v1.1`) answers `300 Multiple Choices` pointing at a release candidate,
+  and the DID 1.0 context does not define `Multikey` or `JsonWebKey` at all. **Decision:** DID documents
+  are read with the JSON rules of the DID representation, not by the JSON-LD processor
+  (divergence 8). Nothing is fetched and nothing unstable is bundled; the fields read are fixed by DID
+  1.1 and CID 1.0. Revisit with S-14.
+
+- [x] **S-4 · What to do with `/lws-ssi-did-key`.** **Decision: keep it, deprecated.** It implements the
+  discontinued draft unchanged, so existing callers keep working — including credentials with no `kid`,
+  which the self-signed CID suite requires. Every response carries `Deprecation: @1789689600` (RFC
+  9745) and `Link: <../lws-ssi-cid/verify>; rel="successor-version"`; Keycloak logs a warning at
+  startup; `enabled=false` on the provider turns it off (divergence 9).
+
+- [x] **S-5 · Core added `subject_identifier_types_supported`** to LWS authorization server metadata
+  (w3c/lws-protocol#227). **Not applicable:** `lws-authn` is not an authorization server and publishes
+  no metadata (divergence 10). **Carried to `lws-server`**, which should advertise
+  `["https", "did:key", "did:web"]` once it accepts what this verifier does.
+
+- [x] **S-6 · Keys not named by `authentication` were usable to authenticate.** Both collectors accepted
+  any method defined under `verificationMethod` (the RDF query matched `sec:verificationMethod` as if it
+  were a relationship), and the compact reader skipped `authentication` *references*, which only worked
+  because of the first bug. CID 1.0 §2.3: "Verification methods that are not associated with a
+  particular verification relationship cannot be used for that verification relationship"; §3.3 requires
+  the association "either by reference (URL) or by value (object)". **Done:** only
+  `sec:authenticationMethod` counts in RDF; the compact reader resolves references within the document
+  (§3.4) and never follows one elsewhere. Stricter — see CHANGELOG.
+
+- [x] **S-7 · `Multikey` was not supported**, although CID 1.0 defines exactly two method types and it is
+  one of them — and the one a `did:key` document uses. **Done:** decoded by the did:key codec (moved to
+  `did/DidKey`, since two suites now use it), which refuses a secret-key header by name (§2.2.2); the
+  derived JWK is pinned to the key type's one JWS algorithm.
+
+- [x] **S-8 · `revoked` and `expires` were ignored.** CID 1.0 §2.2: a revoked method "MUST NOT be used".
+  **Done:** new check `verificationMethodActive`; an unreadable date makes the method unusable.
+
+- [x] **S-9 · Two smaller §3.3 / §2.2.3 gaps.** A method whose `id` names a different document was
+  accepted from this one; and a `publicKeyJwk` carrying private members — which P0-1 refused to
+  *publish* — was still used to *verify*. **Done:** both make the method unusable.
+
+- [x] **S-10 · A `kid` that is the method's full identifier did not match.** The usual `kid` for a DID is
+  `did:key:z…#z…`, the verification method identifier §3.3 retrieves by. **Done:** an exact match on
+  the (absolute) method id comes first; `#fragment` is accepted too. A `kid` naming another document
+  matches nothing, by construction.
+
+- [x] **S-11 · `ES*` was not pinned to its curve.** `JwsChecks.algMatchesKey` checked the key family
+  only, and a JCA verifier accepts, e.g., a SHA-512 signature from a P-256 key. RFC 7518 §3.4 makes
+  each `ES*` one curve. **Done**, for every JWT suite; `JwsChecksTest` had asserted the looser rule
+  (`ES512` with a P-256 key) and now asserts RFC 7518's.
+
+- [x] **S-12 · A build of this tree would have been named like the 0.2.0 release.** **Done:** the POM is
+  `0.3.0-SNAPSHOT`; `LwsAuthIT` takes the JAR path from Failsafe and CI uploads `target/lws-authn-*.jar`,
+  so the next release bump touches neither.
+
+- [x] **S-17 · Keycloak 26.7.3 → 26.7.4** (16 September 2026; six CVEs). **Done:** `keycloak.version`,
+  the docs, and `LwsAuthIT`, whose image now comes from the POM through Failsafe. Checked, as the POM
+  asks on every Keycloak upgrade: the libraries the provider marks `provided` (slf4j, jspecify) or
+  relocates (titanium-json-ld, caffeine, commons-collections4, commons-codec) are the same versions in
+  both distributions. The check also showed the POM's account of those libraries was wrong: S-18.
+
+- [x] **S-18 · The POM misdescribed what Keycloak ships, and pinned commons-codec below Jena.** Its
+  comments said Keycloak ships commons-codec 1.11 and commons-collections4 4.4. Those are what
+  Keycloak's POMs declare, and so what Maven's mediation sees. The server bundles 1.21.0 and 4.5.0.
+  Checking that turned up a real problem: Jena 6.2.0's `jena-base` declares commons-codec **1.22.0**,
+  but the POM pinned 1.20.0. The pin that exists to stop Maven downgrading Jena's dependencies was
+  downgrading this one. **Done:** `commons-codec.version` 1.22.0, as a property beside the other
+  pins, and the shade plugin's comment now tabulates Jena's version, Keycloak's POM version and the
+  26.7.4 server's version for all four relocated libraries. The rationale for relocating is restated:
+  titanium-json-ld and caffeine really are older on the server; for the other two, relocation keeps
+  the provider independent of what a Keycloak release ships. `README.md` § *Build* matches.
+
+- [ ] **S-13 · Tag the 0.2.0 release.** *Versioning* in `CHANGELOG.md` says to tag each release commit
+  `lws-authn-<version>`; `e539362` (the 0.2.0 bump, the build deployed to both hellion servers) has no
+  tag. Left for the maintainer.
+
+- [ ] **S-14 · Bundle the DID 1.1 context** once it is published at a stable URL, and consider reading DID
+  documents through the JSON-LD processor like HTTPS subjects' documents (S-3).
+
+- [ ] **S-15 · Run the two new `LwsAuthIT` tests.** They were written where there is no Docker, so they
+  compile and their behaviour was exercised by the local end-to-end run, but CI is the first place they
+  will run as written.
+
+- [ ] **S-16 · Decide when to remove `/lws-ssi-did-key`.** No `Sunset` is set. Removing it is a breaking
+  change for any caller still minting `kid`-less `did:key` credentials.
+
+---
+
 ## Specification baseline
 
 | Document | Latest published version | Editor's Draft |
 |---|---|---|
-| Linked Web Storage Protocol 1.0 (core) | **W3C Working Draft 21 August 2026** — `TR/2026/WD-lws10-core-20260821/` | `w3c.github.io/lws-protocol/lws10-core/` |
-| LWS 1.0 Authn Suite: Self-signed Identity (Controlled Identifiers) | **W3C Working Draft 21 August 2026** — `TR/2026/WD-lws10-authn-ssi-cid-20260821/` | `w3c.github.io/lws-protocol/lws10-authn-ssi-cid/` |
+| Linked Web Storage Protocol 1.0 (core) | **W3C Working Draft 21 August 2026** — `TR/2026/WD-lws10-core-20260821/` | `w3c.github.io/lws-protocol/lws10-core/` — reviewed at 21 September 2026 (band S) |
+| LWS 1.0 Authn Suite: Self-signed Identity (Controlled Identifiers) | **W3C Working Draft 21 August 2026** — `TR/2026/WD-lws10-authn-ssi-cid-20260821/` | `w3c.github.io/lws-protocol/lws10-authn-ssi-cid/` — reviewed at 21 September 2026: DID subjects (S-2) |
 | LWS 1.0 Authn Suite: OpenID Connect | W3C Working Draft 3 August 2026 — `TR/2026/WD-lws10-authn-openid-20260803/` | `w3c.github.io/lws-protocol/lws10-authn-openid/` |
 | LWS 1.0 Authn Suite: SAML 2.0 | W3C Working Draft 3 August 2026 — `TR/2026/WD-lws10-authn-saml-20260803/` | `w3c.github.io/lws-protocol/lws10-authn-saml/` |
-| LWS 1.0 Authn Suite: Self-signed Identity using `did:key` | W3C Working Draft 3 August 2026 — `TR/2026/WD-lws10-authn-ssi-did-key-20260803/` | `w3c.github.io/lws-protocol/lws10-authn-ssi-did-key/` |
+| LWS 1.0 Authn Suite: Self-signed Identity using `did:key` | W3C Working Draft 3 August 2026 — `TR/2026/WD-lws10-authn-ssi-did-key-20260803/` | **Discontinued 18 September 2026** (S-1) |
 | Linked Web Storage Vocabulary | Group Note draft, 2026-08-21 | `w3c.github.io/lws-protocol/lws10-vocab/` |
 | Controlled Identifiers (CID) 1.0 | **W3C Recommendation, 15 May 2025** | — |
+| Decentralized Identifiers (DIDs) 1.1 | W3C Candidate Recommendation Snapshot, 5 March 2026 | cited by the self-signed CID suite (S-2) |
+| The did:key Method | W3C CCG report, v0.9 | — |
+| did:web Method Specification | W3C CCG report | — |
 
 Facts from those documents that shape the items below:
 

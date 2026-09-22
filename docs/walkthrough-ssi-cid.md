@@ -18,16 +18,26 @@ the subject's own document, which publishes the signing key as an `authenticatio
 A verifier needs no prior relationship with anyone — it fetches the key from the identity itself.
 
 For that to mean anything the document has to be CID-conformant, and the verifier holds it to that: an
-`id` equal to the subject, and each verification method carrying `id`, `type: JsonWebKey` and a
-`controller` equal to the subject. A method the subject does not control is not a key it may
-authenticate with, however it got into the document. The JWT must also name its key with `kid` and
-carry both `iat` and `exp`.
+`id` equal to the subject, and the key listed under `authentication` — embedded there, or defined under
+`verificationMethod` and referenced — with an `id` in the document, a `type` of `JsonWebKey` or
+`Multikey`, and a `controller` equal to the subject. A method the subject does not control is not a key
+it may authenticate with, however it got into the document, and neither is one the document only lists
+for some other purpose, or has marked `revoked` or let `expire`. The JWT must also name its key with
+`kid` and carry both `iat` and `exp`.
+
+> **The identity does not have to live in Keycloak, or at an HTTPS URL.** This walkthrough uses a
+> Keycloak-hosted document, but the suite "is designed to work with subject identifiers that use HTTPS
+> URIs as well as DID URIs". The same `…/lws-ssi-cid/verify` endpoint accepts a `did:key` — resolved
+> locally from the key it embeds — and a `did:web`, whose document it fetches from
+> `https://<domain>/…/did.json`. Set `sub`, `iss` and `client_id` to the DID and `kid` to the
+> verification method id (`did:key:z…#z…`, `did:web:example.com#key-1`); see
+> [`walkthrough-ssi-did-key.md`](walkthrough-ssi-did-key.md) and the README's *DID subjects*.
 
 ---
 
 ## Prerequisites
 
-- Keycloak **26.7.3** with the `lws-authn` provider deployed — see the [README](../README.md).
+- Keycloak **26.7.4** with the `lws-authn` provider deployed — see the [README](../README.md).
 - `curl`, `jq`, and `openssl`.
 - For a quick local run: `bin/kc.sh start-dev` (admin/admin) at `http://localhost:8080`.
 

@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Integration test: deploys the built provider JAR into a real Keycloak 26.7.3 via Testcontainers and
+ * Integration test: deploys the built provider JAR into a real Keycloak — the version in the POM — via Testcontainers and
  * runs the same end-to-end smoke flow that was validated by hand — the mapper fires, all four suite
  * endpoints mount, shaded Jena serves/parses RDF, and the OpenID and did:key credentials verify.
  *
@@ -63,7 +63,7 @@ import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.operator.ContentSigner;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 
-import com.ebremer.lws.authn.ssididkey.DidKey;
+import com.ebremer.lws.authn.did.DidKey;
 
 /**
  * <h2>This suite needs host port 8080, and cannot run in parallel</h2>
@@ -94,8 +94,35 @@ class LwsAuthIT {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final HttpClient HTTP = HttpClient.newHttpClient();
     private static final String REALM = "lws-demo";
-    private static final String IMAGE = "quay.io/keycloak/keycloak:26.7.3";
-    private static final String PROVIDER_JAR = "target/lws-authn-0.2.0.jar";
+    /** The Keycloak image: Failsafe passes the POM's {@code keycloak.version}; the default is for IDE runs. */
+    private static final String IMAGE = System.getProperty("lws.authn.keycloakImage", "quay.io/keycloak/keycloak:26.7.4");
+    /**
+     * The shaded provider JAR under test. Failsafe passes its exact path (see the POM); run from an IDE,
+     * the newest shaded JAR in {@code target/} is used, so no version number is written down here.
+     */
+    private static final String PROVIDER_JAR = providerJar();
+
+    private static String providerJar() {
+        String configured = System.getProperty("lws.authn.providerJar");
+        if (configured != null && !configured.isBlank()) {
+            return configured;
+        }
+        try (var jars = java.nio.file.Files.newDirectoryStream(java.nio.file.Path.of("target"), "lws-authn-*.jar")) {
+            java.nio.file.Path newest = null;
+            for (java.nio.file.Path jar : jars) {
+                if (newest == null || java.nio.file.Files.getLastModifiedTime(jar)
+                        .compareTo(java.nio.file.Files.getLastModifiedTime(newest)) > 0) {
+                    newest = jar;
+                }
+            }
+            if (newest == null) {
+                throw new IllegalStateException("no target/lws-authn-*.jar; run `mvn package` first");
+            }
+            return newest.toString();
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
+    }
 
     private KeycloakContainer keycloak;
     private String base; // http://localhost:8080
@@ -690,6 +717,55 @@ class LwsAuthIT {
         return signingInput + "." + Base64.getUrlEncoder().withoutPadding().encodeToString(signer.sign());
     }
 
+    // ------------------------------------------------ did:key under the self-signed CID suite
+
+    /**
+     * The did:key suite was discontinued (18 September 2026) in favour of the self-signed CID suite,
+     * which "is designed to work with subject identifiers that use HTTPS URIs as well as DID URIs". A
+     * did:key credential verifies there, with its {@code kid} naming the method the DID document's
+     * {@code authentication} relationship lists. Ed25519 goes through Keycloak's own EdDSA signature
+     * provider here, which nothing else in this suite exercises.
+     */
+    @Test
+    void didKeyCredentialsVerifyUnderTheSelfSignedCidSuite() throws Exception {
+        KeyPairGenerator ec = KeyPairGenerator.getInstance("EC");
+        ec.initialize(new ECGenParameterSpec("secp256r1"));
+        KeyPair p256 = ec.generateKeyPair();
+        String p256Did = DidKey.encodeP256((ECPublicKey) p256.getPublic());
+        KeyPair ed = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+        String edDid = DidKey.encodeEd25519(ed.getPublic());
+
+        for (String jwt : List.of(
+                signJwt(p256Did, "ES256", p256Did + "#" + DidKey.multibaseValue(p256Did), p256.getPrivate(),
+                        "SHA256withECDSAinP1363Format"),
+                signJwt(edDid, "EdDSA", edDid + "#" + DidKey.multibaseValue(edDid), ed.getPrivate(), "Ed25519"))) {
+            JsonNode r = verifySsiCid(jwt);
+            assertTrue(r.get("valid").asBoolean(), () -> "expected valid, got: " + r);
+        }
+
+        // The one rule the discontinued suite did not have: the kid is required.
+        assertRejected(verifySsiCid(signJwt(edDid, "EdDSA", ed.getPrivate(), "Ed25519")), "keyIdPresent");
+    }
+
+    /** The old endpoint keeps answering, and says on every response that it is deprecated and why. */
+    @Test
+    void theDiscontinuedDidKeyEndpointSaysSo() throws Exception {
+        HttpResponse<String> r = postForm(base + "/realms/" + REALM + "/lws-ssi-did-key/verify",
+                Map.of("credential", mintDidKeyP256()), accessToken());
+        assertEquals(200, r.statusCode());
+        assertTrue(JSON.readTree(r.body()).get("valid").asBoolean(), "the deprecated endpoint still verifies");
+        assertEquals("@1789689600", r.headers().firstValue("Deprecation").orElse(null));
+        List<String> links = r.headers().allValues("Link");
+        assertTrue(links.stream().anyMatch(l -> l.contains("<../lws-ssi-cid/verify>")
+                && l.contains("rel=\"successor-version\"")), links::toString);
+
+        HttpResponse<String> refused = postForm(base + "/realms/" + REALM + "/lws-ssi-did-key/verify",
+                Map.of("credential", mintDidKeyP256()), null);
+        assertEquals(401, refused.statusCode());
+        assertEquals("@1789689600", refused.headers().firstValue("Deprecation").orElse(null),
+                "a refusal is deprecated too");
+    }
+
     private JsonNode verifyOpenId(Map<String, String> form) throws Exception {
         return JSON.readTree(
                 postForm(base + "/realms/" + REALM + "/lws/verify", form, accessToken()).body());
@@ -794,8 +870,14 @@ class LwsAuthIT {
     }
 
     private static String signJwt(String did, String alg, PrivateKey key, String jdkAlg) throws Exception {
+        return signJwt(did, alg, null, key, jdkAlg);
+    }
+
+    private static String signJwt(String did, String alg, String kid, PrivateKey key, String jdkAlg)
+            throws Exception {
         long now = System.currentTimeMillis() / 1000;
-        String signingInput = b64("{\"alg\":\"" + alg + "\",\"typ\":\"JWT\"}") + "."
+        String signingInput = b64("{\"alg\":\"" + alg + "\",\"typ\":\"JWT\""
+                        + (kid == null ? "" : ",\"kid\":\"" + kid + "\"") + "}") + "."
                 + b64("{\"sub\":\"" + did + "\",\"iss\":\"" + did + "\",\"client_id\":\"" + did
                         + "\",\"aud\":[\"https://as.example\"],\"iat\":" + now + ",\"exp\":" + (now + 300) + "}");
         Signature s = Signature.getInstance(jdkAlg);

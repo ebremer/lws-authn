@@ -12,10 +12,11 @@ package com.ebremer.lws.authn.ssicid;
  * Vocabulary, media types and routing constants for the self-signed CID authentication suite.
  *
  * <p>In this suite there is no OpenID Provider: an agent signs its own JSON Web Token whose
- * {@code sub == iss == client_id} is a controlled identifier, and a verifier dereferences that
- * identifier to a controlled identifier document, selects the {@code authentication} verification
- * method whose key matches the JWT {@code kid}, and validates the signature against its
- * {@code publicKeyJwk}.</p>
+ * {@code sub == iss == client_id} is a controlled identifier — an HTTPS URI, or a DID — and a verifier
+ * dereferences that identifier to a controlled identifier document (for a DID, its DID document),
+ * selects the {@code authentication} verification method the JWT {@code kid} names, and validates the
+ * signature against its key: a {@code JsonWebKey}'s {@code publicKeyJwk} or a {@code Multikey}'s
+ * {@code publicKeyMultibase}.</p>
  *
  * @author Erich Bremer
  */
@@ -30,7 +31,10 @@ public final class SsiCidConstants {
     /** {@code authentication} relationship (verification methods usable to authenticate). */
     public static final String SEC_AUTHENTICATION = SEC_NS + "authenticationMethod";
 
-    /** Generic {@code verificationMethod} relationship (accepted as a fallback when verifying). */
+    /**
+     * {@code verificationMethod}: where a document <em>defines</em> methods. Not a verification
+     * relationship, so never, by itself, grounds for authenticating with a method (CID 1.0 §2.3).
+     */
     public static final String SEC_VERIFICATION_METHOD = SEC_NS + "verificationMethod";
 
     /** {@code controller} of a verification method. */
@@ -39,8 +43,26 @@ public final class SsiCidConstants {
     /** {@code publicKeyJwk} — a JSON literal carrying the public JWK. */
     public static final String SEC_PUBLIC_KEY_JWK = SEC_NS + "publicKeyJwk";
 
-    /** {@code JsonWebKey} verification-method type. */
+    /** {@code JsonWebKey} verification-method type (CID 1.0 §2.2.3). */
     public static final String JSON_WEB_KEY_TYPE = SEC_NS + "JsonWebKey";
+
+    /** {@code Multikey} verification-method type (CID 1.0 §2.2.2). */
+    public static final String MULTIKEY_TYPE = SEC_NS + "Multikey";
+
+    /** {@code publicKeyMultibase} — a Multikey's multibase-encoded public key. */
+    public static final String SEC_PUBLIC_KEY_MULTIBASE = SEC_NS + "publicKeyMultibase";
+
+    /** {@code revoked} — when a verification method stops being usable (CID 1.0 §2.2). */
+    public static final String SEC_REVOKED = SEC_NS + "revoked";
+
+    /** {@code expires} — which the CID context maps to {@code sec:expiration} (CID 1.0 §2.2). */
+    public static final String SEC_EXPIRATION = SEC_NS + "expiration";
+
+    /** The {@code type} value of a JsonWebKey method in a compact document. */
+    public static final String TYPE_JSON_WEB_KEY = "JsonWebKey";
+
+    /** The {@code type} value of a Multikey method in a compact document. */
+    public static final String TYPE_MULTIKEY = "Multikey";
 
     /** JSON-LD context for W3C Controlled Identifier Documents (CID 1.0). */
     public static final String CID_CONTEXT = "https://www.w3.org/ns/cid/v1";

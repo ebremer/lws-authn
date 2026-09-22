@@ -7,6 +7,125 @@ Item ids like **P0-3** refer to [`TODO.md`](TODO.md), which carries the full rea
 
 ---
 
+## [Unreleased] — toward 0.3.0
+
+Brings the provider up to the LWS editor's drafts of **21 September 2026** (`w3c/lws-protocol` at
+`3ddc642`). Two changes to the drafts since 0.2.0's baseline touch this provider, and implementing the
+second properly exposed four places where the self-signed CID verifier did not follow Controlled
+Identifiers 1.0 §3.3, which that suite cites normatively for selecting a key.
+
+> ### If you are upgrading an existing deployment, read this section
+>
+> Nothing is removed. The `/lws-ssi-did-key` endpoint keeps answering exactly as before. But the
+> self-signed CID verifier is **stricter**, and a document that used to verify may now fail — see
+> *Behaviour that got stricter* below. And the JAR is now `lws-authn-0.3.0-SNAPSHOT.jar`: the tree is
+> unreleased work, and the filename says so.
+
+### What changed in the specifications
+
+- **The self-signed `did:key` suite was discontinued** on 18 September 2026 (w3c/lws-protocol#229),
+  "in favor of lws10-authn-ssi-cid, which subsumes this specification by specifying a generalization of
+  the mechanism described here".
+- **The self-signed CID suite now works with DIDs**: it "is designed to work with subject identifiers
+  that use HTTPS URIs as well as DID URIs", because a DID document extends a controlled identifier
+  document (w3c/lws-protocol#233, DID 1.1 §5).
+- **Core added `subject_identifier_types_supported`** to LWS authorization server metadata
+  (w3c/lws-protocol#227). **Not applicable here**: `lws-authn` is not an LWS authorization server and
+  publishes no such metadata; the field belongs in `lws-server`.
+- The rest — ETag rules, the `lws10-index` rename, `lws:StorageResource`, straight quotes — is storage
+  or editorial and touches nothing in this provider. The OpenID and SAML suites have not changed.
+
+### Added
+
+- **DID subjects in the self-signed CID suite** (`/lws-ssi-cid/verify`). The subject is resolved to its
+  DID document and then validated exactly as an HTTPS subject's controlled identifier document is:
+  - **`did:key`** — expanded locally into the document the did:key Method v0.9 defines (a `Multikey`
+    method, referenced from `authentication`). No network access. The identifier must be canonically
+    encoded and of a supported key type (Ed25519, P-256, P-384, P-521).
+  - **`did:web`** — fetched from `https://<domain>[:port][/path]/did.json` (or
+    `/.well-known/did.json`) through the same SSRF-guarded, redirect-refusing, size- and time-bounded
+    client an HTTPS subject uses. The method's rules are enforced before anything is fetched: a domain
+    name, never an IP address; a port only as `%3A`. The document must be served as a DID or JSON media
+    type and its `id` must be the DID (`subjectIdMatches`).
+  - Any other method is refused by name (`subjectDereferenced: false`, "supported: did:key, did:web").
+  - A DID document is read by the JSON rules of its representation, not through a JSON-LD processor:
+    DID 1.1 is a Candidate Recommendation and its context is not published at a stable URL, so there is
+    nothing trustworthy to bundle yet.
+- **`Multikey` verification methods** (CID 1.0 §2.2.2), in HTTPS documents as well as DID documents.
+  A `publicKeyMultibase` is decoded by the same codec as a did:key; a value carrying a *secret*-key
+  header is refused by name. The derived key is pinned to the one JWS algorithm its type signs with.
+- **A `kid` may name the method by its full identifier** — `did:key:z…#z…`, `https://id.example/a#k1` —
+  which is the verification method identifier CID 1.0 §3.3 retrieves by and the usual `kid` for a DID;
+  or by its fragment with a leading `#`. Only a method of the subject's own document can match.
+- **`verificationMethodActive`**, a new check: the selected method is neither `revoked` ("MUST NOT be
+  used") nor `expires`d (CID 1.0 §2.2).
+
+### Deprecated
+
+- **The self-signed `did:key` suite and its endpoint, `/lws-ssi-did-key/verify`.** It still verifies
+  exactly as before — including a `did:key` credential with no `kid`, which that suite never required —
+  and now marks every response, success or refusal, per RFC 9745:
+  ```
+  Deprecation: @1789689600
+  Link: <../lws-ssi-cid/verify>; rel="successor-version"
+  Link: <https://w3c.github.io/lws-protocol/lws10-authn-ssi-did-key/>; rel="deprecation"
+  ```
+  Keycloak logs a warning at startup. **Move callers to `/lws-ssi-cid/verify`**, adding a `kid`
+  (`<did>#<multibase>`), then switch the old endpoint off with
+  `--spi-realm-restapi-extension--lws-ssi-did-key--enabled=false`. No removal date is set.
+
+### Behaviour that got stricter
+
+Each is a requirement of CID 1.0, which the self-signed CID suite cites for selecting the key, and
+each may reject a document that used to verify. Check your issuers' documents before rolling this out.
+
+- **Only methods the `authentication` relationship names can authenticate.** CID 1.0 §2.3: "Verification
+  methods that are not associated with a particular verification relationship cannot be used for that
+  verification relationship." The verifier used to accept any method *defined* under
+  `verificationMethod`, even one only `assertionMethod` or `keyAgreement` referred to. Referencing a
+  method from `authentication` by URL — the way did:key documents do it — now works as CID 1.0 §3.3
+  says it should, on both the JSON-LD and the compact-JSON path.
+- **A method's `id` must be in the subject's own document** (CID 1.0 §3.3 takes the document from the
+  identifier). Methods written with no `id` are still tolerated and selectable by their JWK's `kid`.
+- **`revoked` and `expires` are honoured** (`verificationMethodActive`), and a value that is not an
+  `xsd:dateTimeStamp` makes the method unusable rather than silently current.
+- **A `publicKeyJwk` carrying private members is not a usable verification method** (CID 1.0 §2.2.3).
+  This provider already refused to *publish* one (P0-1); it now refuses to *verify* against one too.
+- **`ES256`/`ES384`/`ES512` are pinned to P-256/P-384/P-521** (RFC 7518 §3.4), for every JWT suite. A
+  JCA verifier accepts, say, a SHA-512 signature from a P-256 key; that is valid ECDSA and not ES512.
+
+### Changed
+
+- **Built and tested against Keycloak 26.7.4** (was 26.7.3), released 16 September 2026 with six security
+  fixes, among them an unauthenticated denial of service through locale caching (CVE-2026-79651) and
+  the `impersonation` role reaching a realm administrator (CVE-2026-17526). Run the provider on 26.7.4;
+  its only breaking change concerns Authorization Services resource matching, which this provider does
+  not use. The libraries the provider shares with Keycloak or relocates are unchanged from 26.7.3 — the
+  distribution differs only in Quarkus (3.33.3.1 → 3.33.3.2) and Keycloak's own JARs — so the shading
+  and `provided` decisions stand. `LwsAuthIT` now takes its container image from `keycloak.version`.
+- **commons-codec is bundled at 1.22.0**, the version Jena 6.2.0 declares. The POM pinned 1.20.0, so
+  the pin that exists to stop Maven downgrading Jena's dependencies was downgrading this one. Relocated,
+  as before. The POM and README also now say accurately what Keycloak's POMs declare versus what the
+  server ships: 26.7.4 bundles commons-codec 1.21.0 and commons-collections4 4.5.0, not the 1.11 and 4.4
+  its POMs declare. The bundling decisions are unchanged.
+- **Version `0.3.0-SNAPSHOT`.** The JAR is `lws-authn-0.3.0-SNAPSHOT.jar`, so a build of this tree cannot
+  be mistaken for the 0.2.0 release (commit `e539362`, which is untagged — see *Versioning*).
+  `LwsAuthIT` now takes the JAR's path from Failsafe and CI uploads `target/lws-authn-*.jar`, so neither
+  needs editing at the next release.
+- The multibase/did:key codec moved from `ssididkey` to a new `did` package, since the self-signed CID
+  suite now depends on it; JDK signature verification moved to `jose.JwsSignatures`.
+
+### Tests
+
+190 unit tests (was 144), 25 in `LwsAuthIT` (was 23). New: DID syntax, the did:web URL mapping against
+the method's own examples, did:key expansion against the did:key Method's worked example, the multibase
+codec against the did:key and CID 1.0 test vectors, every CID 1.0 method rule above on both parsing
+paths, and did:key credentials verified end to end through the self-signed CID suite for every supported
+key type. `LwsAuthIT` gains a did:key credential through `/lws-ssi-cid` (Ed25519 exercising Keycloak's
+EdDSA provider) and the deprecation headers.
+
+---
+
 ## [0.2.0] — 2026-09-03
 
 Everything below has landed since the `lws-authn-0.1.0` tag (14 June 2026). It is a large change: the
