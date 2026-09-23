@@ -1,0 +1,16 @@
+# For previewing the documentation site locally; GitHub Pages does not read this file. It builds the
+# published site with its own copy of the `github-pages` gem, and depending on that same gem is what
+# makes a preview render the way the published site will.
+#
+#   cd docs
+#   bundle install                # Ruby 3; github-pages does not install on Ruby 4
+#   bundle exec jekyll serve      # then open http://localhost:4000/
+
+source "https://rubygems.org"
+
+# At least the release GitHub Pages builds with — 232, which is Jekyll 3.10.0. Without that floor
+# Bundler may satisfy some other constraint by resolving an older github-pages, and the preview then
+# runs a different Jekyll and Markdown parser from the published site without saying so: adding an
+# unpinned jekyll-include-cache next to it resolved github-pages 222 and Jekyll 3.9.0. Nothing else is
+# needed — this gem pins everything the theme uses, jekyll-include-cache included.
+gem "github-pages", ">= 232", group: :jekyll_plugins

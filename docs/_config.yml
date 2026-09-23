@@ -1,0 +1,78 @@
+# The lws-authn documentation site.
+#
+# GitHub Pages builds this folder itself — Settings → Pages → Deploy from a branch → `master`, `/docs` —
+# with the `github-pages` gem, so there is no workflow to maintain. `Gemfile` exists only to preview the
+# site locally; see CONTRIBUTING.md.
+#
+# The site is this folder and nothing else: the build cannot see README.md, INSTALL.md or scripts/. A
+# link from a page here to anything outside docs/ must therefore be an absolute
+# https://github.com/ebremer/lws-authn/... URL — a relative `../README.md` works when browsing the
+# repository and is a 404 on the site.
+
+title: lws-authn
+description: >-
+  Keycloak providers for the W3C Linked Web Storage (LWS) 1.0 authentication suites: OpenID Connect,
+  self-signed controlled identifiers, and SAML 2.0.
+lang: en
+
+# `url` and `baseurl` are deliberately unset. On GitHub Pages, jekyll-github-metadata derives them from
+# the repository (https://ebremer.github.io and /lws-authn), and keeps them right if a custom domain is
+# ever added; a local preview serves from the root.
+
+# Just the Docs, fetched by jekyll-remote-theme when the site is built. Pinned by commit, not by tag, for
+# the reason .github/workflows/ci.yml pins its actions: a tag is a mutable pointer, and this theme's
+# templates and JavaScript are served to every reader of the site. Dependabot does not see this pin, so
+# bump it by hand from https://github.com/just-the-docs/just-the-docs/releases.
+remote_theme: just-the-docs/just-the-docs@2ed4c0af735e95af5c0dcf7a605b07d903005b4e # v0.12.0
+
+plugins:
+  - jekyll-remote-theme
+  - jekyll-include-cache   # the theme's {% include_cached %}; the build fails without it
+  - jekyll-seo-tag         # the theme's {% seo %}; likewise
+  - jekyll-sitemap
+
+# Every page gets the theme's layout without having to name it.
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
+
+# Header: the repository, for everything the site does not carry.
+aux_links:
+  "lws-authn on GitHub":
+    - "https://github.com/ebremer/lws-authn"
+
+# The rest of the documentation lives at the repository root, next to the code, and is read there.
+# Listed after the site's own pages in the sidebar, each marked as leaving the site.
+nav_external_links:
+  - title: README
+    url: https://github.com/ebremer/lws-authn/blob/master/README.md
+  - title: Install guide
+    url: https://github.com/ebremer/lws-authn/blob/master/INSTALL.md
+  - title: Compliance
+    url: https://github.com/ebremer/lws-authn/blob/master/COMPLIANCE.md
+  - title: Changelog
+    url: https://github.com/ebremer/lws-authn/blob/master/CHANGELOG.md
+  - title: Security policy
+    url: https://github.com/ebremer/lws-authn/blob/master/SECURITY.md
+  - title: Contributing
+    url: https://github.com/ebremer/lws-authn/blob/master/CONTRIBUTING.md
+
+search_enabled: true
+heading_anchors: true
+enable_copy_code_button: true
+
+back_to_top: true
+back_to_top_text: Back to top
+
+gh_edit_link: true
+gh_edit_link_text: Edit this page on GitHub
+gh_edit_repository: https://github.com/ebremer/lws-authn
+gh_edit_branch: master
+gh_edit_source: docs
+gh_edit_view_mode: edit
+
+footer_content: >-
+  Copyright Erich Bremer. lws-authn is licensed under the
+  <a href="https://github.com/ebremer/lws-authn/blob/master/LICENSE">Apache License 2.0</a>.

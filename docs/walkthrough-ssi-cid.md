@@ -1,6 +1,12 @@
+---
+title: Self-signed CID
+parent: Walkthroughs
+nav_order: 2
+---
+
 # Walkthrough: a self-signed LWS identity with Keycloak
 
-This is the companion to [`walkthrough-openid.md`](walkthrough-openid.md) for the
+This is the companion to the [OpenID Connect walkthrough](walkthrough-openid.md) for the
 [**Self-signed Identity (Controlled Identifiers) Authentication Suite**](https://w3c.github.io/lws-protocol/lws10-authn-ssi-cid/).
 Here the agent signs its own credential — Keycloak never issues a token. Keycloak's job is only to
 **publish the agent's public key** in a controlled identifier document and to **verify** credentials.
@@ -31,19 +37,24 @@ for some other purpose, or has marked `revoked` or let `expire`. The JWT must al
 > locally from the key it embeds — and a `did:web`, whose document it fetches from
 > `https://<domain>/…/did.json`. Set `sub`, `iss` and `client_id` to the DID and `kid` to the
 > verification method id (`did:key:z…#z…`, `did:web:example.com#key-1`); see
-> [`walkthrough-ssi-did-key.md`](walkthrough-ssi-did-key.md) and the README's *DID subjects*.
+> the [`did:key` walkthrough](walkthrough-ssi-did-key.md) and the README's
+> [*DID subjects*](https://github.com/ebremer/lws-authn/blob/master/README.md#did-subjects).
 
 ---
 
 ## Prerequisites
 
-- Keycloak **26.7.4** with the `lws-authn` provider deployed — see the [README](../README.md).
+- Keycloak **26.7.4** with the `lws-authn` provider deployed — see the
+  [README](https://github.com/ebremer/lws-authn/blob/master/README.md).
 - `curl`, `jq`, and `openssl`.
 - For a quick local run: `bin/kc.sh start-dev` (admin/admin) at `http://localhost:8080`.
 
 ---
 
 ## Fast path — one script
+
+Run [`scripts/ssi-cid-demo.sh`](https://github.com/ebremer/lws-authn/blob/master/scripts/ssi-cid-demo.sh)
+from a checkout of the repository:
 
 ```bash
 bash scripts/ssi-cid-demo.sh
@@ -138,7 +149,7 @@ curl -s -X POST "$KC/realms/$REALM/lws-ssi-cid/verify" \
 
 > `Authorization` identifies **you**, the caller: the `…/verify` endpoints are authenticated by
 > default. The credential being checked always travels in the request body. See
-> [Securing the verify endpoints](../README.md#securing-the-verify-endpoints).
+> [Securing the verify endpoints](https://github.com/ebremer/lws-authn/blob/master/README.md#securing-the-verify-endpoints).
 
 ```json
 {
