@@ -34,8 +34,7 @@ client_id ==` the `did:key`, and the verifier reconstructs the public key from i
 
 ## Prerequisites
 
-- Keycloak **26.7.4** with the `lws-authn` provider deployed — see the
-  [README](https://github.com/ebremer/lws-authn/blob/master/README.md).
+- Keycloak **26.7.4** with the `lws-authn` provider deployed — see [Build and deploy](build.md).
 - `curl`, `jq`, and `node` (Node is used to mint the key/JWT; base58btc is impractical in pure shell).
 
 ---
@@ -98,7 +97,7 @@ curl -s -X POST "$KC/realms/$REALM/lws-ssi-cid/verify" \
 
 > `Authorization` identifies **you**, the caller: the `…/verify` endpoints are authenticated by
 > default. The credential being checked always travels in the request body. See
-> [Securing the verify endpoints](https://github.com/ebremer/lws-authn/blob/master/README.md#securing-the-verify-endpoints).
+> [Securing the verify endpoints](configuration.md#securing-the-verify-endpoints).
 
 The deprecated `…/lws-ssi-did-key/verify` takes the same request and returns the same verdict for a
 credential with a `kid`, and also accepts one without; `curl -i` shows its `Deprecation` and

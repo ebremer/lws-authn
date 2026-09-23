@@ -1,9 +1,14 @@
+---
+title: Changelog
+nav_order: 6
+---
+
 # Changelog
 
 Notable changes to `lws-authn`. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project does not yet publish semantic versions (see *Versioning* at the end).
 
-Item ids like **P0-3** refer to [`TODO.md`](TODO.md), which carries the full reasoning for each change.
+Item ids like **P0-3** refer to [`TODO.md`](https://github.com/ebremer/lws-authn/blob/master/TODO.md), which carries the full reasoning for each change.
 
 ---
 
@@ -123,6 +128,14 @@ codec against the did:key and CID 1.0 test vectors, every CID 1.0 method rule ab
 paths, and did:key credentials verified end to end through the self-signed CID suite for every supported
 key type. `LwsAuthIT` gains a did:key credential through `/lws-ssi-cid` (Ed25519 exercising Keycloak's
 EdDSA provider) and the deprecation headers.
+
+### Documentation
+
+The documentation is now a website, <https://ebremer.github.io/lws-authn/>, built from `docs/`.
+`INSTALL.md`, `COMPLIANCE.md`, `CHANGELOG.md`, `SECURITY.md` and `CONTRIBUTING.md` moved into `docs/`
+and are pages of it, as are the README's reference sections — build and deploy, each suite's
+endpoints, configuration, hardening, limitations. The README is now a summary. Each document exists in
+one place, so there is one copy of each to keep current.
 
 ---
 

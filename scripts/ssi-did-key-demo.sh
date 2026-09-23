@@ -28,7 +28,7 @@ KC_URL="${KC_URL:-http://localhost:8080}"
 REALM="${REALM:-master}"
 KEYTYPE="${KEYTYPE:-p256}"   # p256 (zDn…, ES256) or ed25519 (z6Mk…, EdDSA)
 ENDPOINT="${ENDPOINT:-lws-ssi-cid}"   # lws-ssi-cid, or the deprecated lws-ssi-did-key
-# The verify endpoints are authenticated by default (README, "Securing the verify endpoints").
+# The verify endpoints are authenticated by default (docs/configuration.md, "Securing the verify endpoints").
 # Supply a caller token directly, or let the script fetch one with these realm credentials.
 VERIFY_TOKEN="${VERIFY_TOKEN:-}"
 VERIFY_USER="${VERIFY_USER:-admin}"

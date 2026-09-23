@@ -33,8 +33,7 @@ identity is self-describing.
 
 ## Prerequisites
 
-- Keycloak **26.7.4** with the `lws-authn` provider deployed — see the
-  [README](https://github.com/ebremer/lws-authn/blob/master/README.md) (build
+- Keycloak **26.7.4** with the `lws-authn` provider deployed — see [Build and deploy](build.md) (build
   → copy `target/lws-authn-<version>.jar` to `providers/` → `kc.sh build` → `kc.sh start`).
 - `curl` and `jq`.
 - For a quick local run: `bin/kc.sh start-dev` (bootstrap admin `admin` / `admin`), reachable at

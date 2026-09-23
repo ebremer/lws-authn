@@ -1,3 +1,9 @@
+---
+title: Conformance
+parent: Reference
+nav_order: 5
+---
+
 # Conformance: `lws-authn`
 
 **What this document is:** the conformance statement for `lws-authn` — which normative requirements
@@ -7,7 +13,7 @@ someone integrating against this provider, who needs to know what a `"valid": tr
 **Last reviewed:** 22 September 2026, against the editor's drafts of 21 September 2026
 (`w3c/lws-protocol` at `3ddc642`) and the code in this tree. Previous review: 3 September 2026.
 
-Item ids like **P0-3** refer to [`TODO.md`](TODO.md), which carries the reasoning and the history.
+Item ids like **P0-3** refer to [`TODO.md`](https://github.com/ebremer/lws-authn/blob/master/TODO.md), which carries the reasoning and the history.
 Where this document says a check exists, it names the field that appears in the `checks` object of the
 verify response, so a claim here can be tested against a real response.
 
@@ -254,7 +260,7 @@ Each is a decision, not an oversight; each names where the reasoning lives.
 The residual issues that appeared in this document's July 2026 revision — DNS-rebinding SSRF,
 internal-address leakage in client-facing errors, unauthenticated verify as an amplification vector,
 user-writable WebID attributes, no `jti` cache — have been closed or given an explicit control; see
-`CHANGELOG.md` and the P0–P3 bands of `TODO.md`. `README.md` § *Security* describes each mechanism, and
+`CHANGELOG.md` and the P0–P3 bands of `TODO.md`. [Security hardening](hardening.md) describes each mechanism, and
 `SECURITY.md` says what is in scope for a vulnerability report and what is deliberate.
 
 The one that is a **deployment** responsibility rather than a code one: the realm's unmanaged attribute

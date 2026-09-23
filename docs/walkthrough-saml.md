@@ -27,8 +27,7 @@ IdP's signing certificate; LWS adds no discovery mechanism on top of SAML.
 
 ## Prerequisites
 
-- Keycloak **26.7.4** with the `lws-authn` provider deployed — see the
-  [README](https://github.com/ebremer/lws-authn/blob/master/README.md).
+- Keycloak **26.7.4** with the `lws-authn` provider deployed — see [Build and deploy](build.md).
 - `curl`, `jq`, `openssl`.
 
 > Unlike the JWT suites, there is **no shell demo** for SAML — producing a signed SAML Response means
@@ -78,7 +77,7 @@ curl -s -X POST "$KC/realms/$REALM/lws-saml/verify" \
 
 > `Authorization` identifies **you**, the caller: the `…/verify` endpoints are authenticated by
 > default. The credential being checked always travels in the request body. See
-> [Securing the verify endpoints](https://github.com/ebremer/lws-authn/blob/master/README.md#securing-the-verify-endpoints).
+> [Securing the verify endpoints](configuration.md#securing-the-verify-endpoints).
 
 The assertion must also satisfy the parts of SAML 2.0 that make a bearer assertion an authentication
 credential, none of which `<Conditions>` implies on its own:

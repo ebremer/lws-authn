@@ -40,6 +40,41 @@ check, add it as `result.check("someName", ok)` so the caller can see which one 
 **Never reflect internal detail to a caller.** No upstream status codes, resolved addresses or
 exception text in a response. Log it at `DEBUG` under the result's `traceId`.
 
+## Layout
+
+```
+src/main/java/com/ebremer/lws/authn/
+  config/                                       configuration surface
+    Settings                                    scope -> system property -> environment -> default
+    ServerSettings                              server-wide tunables (SSRF list, timeouts, skew)
+    EndpointSettings                            per-provider settings, incl. the per-realm on/off flag
+  did/                                          DID subjects, shared by the self-signed suites
+    Dids                                        DID syntax, did:key expansion, did:web URL mapping
+    DidKey                                      multibase/multicodec codec (did:key, Multikey), pure JDK
+  http/                                         shared endpoint plumbing
+    JsonResponses                               every non-result body, serialized not concatenated
+    CidEndpoint                                 the shared cid/{userId} endpoint
+  openid/                                       OpenID Connect suite
+    LWSConstants, LWSSubMapper                  vocabulary + sub→WebID protocol mapper
+    cid/ControlledIdentifierDocument            CID builder (OpenIdProvider service)
+    resource/LWSResourceProvider(.Factory)      JAX-RS endpoints, mount id "lws"
+    verify/LWSCredentialVerifier, VerificationResult
+  ssicid/                                       Self-signed CID suite
+    SsiCidConstants
+    cid/SelfSignedControlledIdentifierDocument  CID builder (publicKeyJwk methods)
+    resource/SsiCidResourceProvider(.Factory)   mount id "lws-ssi-cid"
+    verify/SelfSignedCidVerifier, SsiCidVerificationResult
+  saml/                                         SAML 2.0 suite
+    SamlConstants
+    resource/SamlResourceProvider(.Factory)     mount id "lws-saml"
+    verify/SamlCredentialVerifier, SamlVerificationResult
+  ssididkey/                                    Self-signed did:key suite (discontinued; deprecated endpoint)
+    DidKeyConstants                             incl. the Deprecation/Link header values
+    resource/DidKeyResourceProvider(.Factory)   mount id "lws-ssi-did-key"
+    verify/SelfSignedDidKeyVerifier, DidKeyVerificationResult
+src/main/resources/META-INF/services/           SPI registrations (mapper + four resource factories)
+```
+
 ## Tests
 
 **A new rule needs a negative test.** That is the whole point: a verifier that wrongly rejects gets
@@ -63,28 +98,32 @@ packaging.**
 
 ## Dependencies
 
-The shaded JAR is a minefield and the build enforces the rules; read the "Build" section of
-[`README.md`](README.md) before adding anything. In short: a library Keycloak already ships is either
-`provided` (use the server's) or bundled **and relocated** (when Jena needs a newer one). Bundling an
-unrelocated second copy puts two implementations of one package on the classpath. `maven-enforcer-plugin`
-fails the build on duplicate classes, and `dependency:tree` shows only one path per artifact — use
+The shaded JAR is a minefield and the build enforces the rules; read [Build](build.md#build) before
+adding anything. In short: a library Keycloak already ships is either `provided` (use the server's) or
+bundled **and relocated** (when Jena needs a newer one). Bundling an unrelocated second copy puts two
+implementations of one package on the classpath. `maven-enforcer-plugin` fails the build on duplicate
+classes, and `dependency:tree` shows only one path per artifact — use
 `-Dincludes=<groupId>:<artifactId>` before concluding anything about why something is on the classpath.
 
 ## Documentation
 
-[`docs/`](docs/) is the project site, <https://ebremer.github.io/lws-authn/>: Jekyll with the Just the
-Docs theme, configured in [`docs/_config.yml`](docs/_config.yml). GitHub Pages builds it from `master`
-itself, so there is no workflow to maintain. The site is that folder and nothing else, which has two
-consequences:
+The documentation is the website <https://ebremer.github.io/lws-authn/>, and its source is
+[`docs/`](https://github.com/ebremer/lws-authn/tree/master/docs): Jekyll with the Just the Docs
+theme, configured in `docs/_config.yml`. GitHub Pages builds it from `master` itself, so there is no
+workflow to maintain. Each document exists once, as a page of the site; the README at the root is a
+summary that links to it, and `TODO.md` stays beside it. The site is `docs/` and nothing else, which
+has two consequences:
 
-- **Link to anything outside `docs/` by its absolute `https://github.com/ebremer/lws-authn/blob/master/…`
-  URL.** A relative `../README.md` works when browsing the repository and is a 404 on the site. Links
-  between pages inside `docs/` stay relative, to the `.md` file; the build rewrites them.
-- **A new page needs front matter** — a `title`, and a `nav_order` (plus `parent: Walkthroughs` for a
-  walkthrough) to place it in the navigation.
+- **Link from one page to another with an ordinary relative link to its `.md` file**; the build rewrites
+  it to the page. **Link to anything outside `docs/`** — source, scripts, `TODO.md`, `LICENSE` — by its
+  absolute `https://github.com/ebremer/lws-authn/blob/master/…` URL: a relative `../` link works when
+  browsing the repository and is a 404 on the site.
+- **A new page needs front matter** — a `title` and a `nav_order`, plus a `parent` (`Walkthroughs` or
+  `Reference`) to nest it. `SECURITY.md` and this file are the exceptions: GitHub also shows them on
+  its own pages, so they carry no front matter, and their titles are in `docs/_config.yml`.
 
 To preview a change, run `bundle install` and then `bundle exec jekyll serve` in `docs/`, and open
-<http://localhost:4000/>. This needs Ruby 3 — GitHub builds with 3.3 — because the `github-pages` gem
+`http://localhost:4000/`. This needs Ruby 3 — GitHub builds with 3.3 — because the `github-pages` gem
 does not install on Ruby 4.
 
 ## Commits and pull requests
@@ -96,6 +135,7 @@ does not install on Ruby 4.
 - `mvn clean verify` must be green. CI additionally builds on JDK 25 and asserts the class files are
   still Java 21, runs CodeQL, and reviews dependency changes.
 - New files need the SPDX header:
+
   ```java
   /*
    * Copyright Erich Bremer.
@@ -106,10 +146,10 @@ does not install on Ruby 4.
 
 ## The backlog
 
-[`TODO.md`](TODO.md) is the real backlog, written as a review against the specifications: each item
+[`TODO.md`](https://github.com/ebremer/lws-authn/blob/master/TODO.md) is the real backlog, written as a review against the specifications: each item
 names the file, states what the spec requires versus what the code does, and — once done — what was
 actually changed and why. Completed items are kept rather than deleted, because the reasoning is the
 useful part. If you are looking for something to do, the open items are marked `[ ]`.
 
 By contributing you agree your contributions are licensed under Apache-2.0, matching
-[`LICENSE`](LICENSE).
+[`LICENSE`](https://github.com/ebremer/lws-authn/blob/master/LICENSE).

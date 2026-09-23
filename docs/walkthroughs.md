@@ -1,6 +1,6 @@
 ---
 title: Walkthroughs
-nav_order: 2
+nav_order: 4
 has_children: true
 has_toc: false
 ---
@@ -9,9 +9,7 @@ has_toc: false
 
 One per suite. Each starts from a freshly deployed provider, ends with a credential that verifies, and
 explains what an LWS server does with it. Each has its own prerequisites; all of them assume Keycloak
-is running with `lws-authn` deployed — see the README's
-[Build](https://github.com/ebremer/lws-authn/blob/master/README.md#build) and
-[Deploy](https://github.com/ebremer/lws-authn/blob/master/README.md#deploy).
+is running with `lws-authn` deployed — see [Build and deploy](build.md).
 
 | Walkthrough | What you end up with | Demo script |
 |-------------|----------------------|-------------|

@@ -37,8 +37,8 @@ for tool in curl jq openssl xxd; do command -v "$tool" >/dev/null || { echo "$to
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# The /verify endpoints are authenticated by default (see the README, "Securing the verify
-# endpoints"). VERIFY_TOKEN is the *caller's* credential; the credential being verified always
+# The /verify endpoints are authenticated by default (see "Securing the verify endpoints" in
+# docs/configuration.md). VERIFY_TOKEN is the *caller's* credential; the credential being verified always
 # travels in the form body. Leave VERIFY_TOKEN empty only if the deployment runs them in
 # `public` mode.
 verify_post() {

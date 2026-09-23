@@ -37,15 +37,13 @@ for some other purpose, or has marked `revoked` or let `expire`. The JWT must al
 > locally from the key it embeds — and a `did:web`, whose document it fetches from
 > `https://<domain>/…/did.json`. Set `sub`, `iss` and `client_id` to the DID and `kid` to the
 > verification method id (`did:key:z…#z…`, `did:web:example.com#key-1`); see
-> the [`did:key` walkthrough](walkthrough-ssi-did-key.md) and the README's
-> [*DID subjects*](https://github.com/ebremer/lws-authn/blob/master/README.md#did-subjects).
+> the [`did:key` walkthrough](walkthrough-ssi-did-key.md) and [*DID subjects*](suites.md#did-subjects).
 
 ---
 
 ## Prerequisites
 
-- Keycloak **26.7.4** with the `lws-authn` provider deployed — see the
-  [README](https://github.com/ebremer/lws-authn/blob/master/README.md).
+- Keycloak **26.7.4** with the `lws-authn` provider deployed — see [Build and deploy](build.md).
 - `curl`, `jq`, and `openssl`.
 - For a quick local run: `bin/kc.sh start-dev` (admin/admin) at `http://localhost:8080`.
 
@@ -149,7 +147,7 @@ curl -s -X POST "$KC/realms/$REALM/lws-ssi-cid/verify" \
 
 > `Authorization` identifies **you**, the caller: the `…/verify` endpoints are authenticated by
 > default. The credential being checked always travels in the request body. See
-> [Securing the verify endpoints](https://github.com/ebremer/lws-authn/blob/master/README.md#securing-the-verify-endpoints).
+> [Securing the verify endpoints](configuration.md#securing-the-verify-endpoints).
 
 ```json
 {

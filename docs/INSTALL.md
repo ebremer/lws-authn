@@ -1,3 +1,8 @@
+---
+title: Install guide
+nav_order: 3
+---
+
 # Installing Keycloak + the `lws-authn` OpenID Connect provider on Ubuntu
 
 Step-by-step instructions to install [Keycloak](https://www.keycloak.org/) and the **`lws-authn`**
@@ -755,7 +760,7 @@ sudo -u postgres psql -c "DROP DATABASE keycloak;" -c "DROP USER keycloak;"
 
 ### Reference
 
-- Provider README, per-suite walkthroughs, and demo scripts: [`README.md`](README.md),
-  [`docs/`](docs/), [`scripts/`](scripts/).
+- Provider documentation, per-suite walkthroughs, and demo scripts: [this site](index.md),
+  [the walkthroughs](walkthroughs.md), [`scripts/`](https://github.com/ebremer/lws-authn/tree/master/scripts).
 - LWS OpenID Connect authentication spec:
   <https://w3c.github.io/lws-protocol/lws10-authn-openid/>.
