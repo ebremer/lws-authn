@@ -6,13 +6,12 @@ nav_order: 4
 
 # Walkthrough: a self-signed `did:key` LWS identity
 
-> **The separate `did:key` suite was discontinued** by the LWS Working Group on 18 September 2026, "in
-> favor of lws10-authn-ssi-cid, which subsumes this specification by specifying a generalization of the
-> mechanism described here". A `did:key` identity still works exactly as this walkthrough describes — it
-> is now verified by the **self-signed CID** suite, at `…/lws-ssi-cid/verify`, which resolves the
-> `did:key` to its DID document and checks the credential against it. The one addition: that suite
-> **requires a `kid`**, naming the verification method (`<did>#<multibase>`). The old
-> `…/lws-ssi-did-key/verify` endpoint still answers, and marks every response `Deprecation`.
+> **There is no separate `did:key` suite any more.** The LWS Working Group discontinued it on 18
+> September 2026, "in favor of lws10-authn-ssi-cid, which subsumes this specification by specifying a
+> generalization of the mechanism described here", and this provider has removed its endpoint. A
+> `did:key` identity is verified by the **self-signed CID** suite, at `…/lws-ssi-cid/verify`, which
+> resolves the `did:key` to its DID document and checks the credential against it. That suite
+> **requires a `kid`**, naming the verification method (`<did>#<multibase>`).
 
 A `did:key` is the most self-contained identity there is: the subject is a `did:key` identifier that
 **embeds the public key**, so a verifier derives the key straight from the identifier — there is nothing
@@ -51,8 +50,7 @@ KEYTYPE=ed25519 bash scripts/ssi-did-key-demo.sh   # Ed25519 (z6Mk…, EdDSA)
 
 It mints a keypair, derives the `did:key`, self-signs a JWT with `kid` set to the verification method
 id, and posts it to `/realms/master/lws-ssi-cid/verify`, ending in `valid: true`. No realm, user, or
-hosting is involved — the key travels inside the identifier. `ENDPOINT=lws-ssi-did-key` posts to the
-deprecated endpoint instead, to compare.
+hosting is involved — the key travels inside the identifier.
 
 ---
 
@@ -99,21 +97,16 @@ curl -s -X POST "$KC/realms/$REALM/lws-ssi-cid/verify" \
 > default. The credential being checked always travels in the request body. See
 > [Securing the verify endpoints](configuration.md#securing-the-verify-endpoints).
 
-The deprecated `…/lws-ssi-did-key/verify` takes the same request and returns the same verdict for a
-credential with a `kid`, and also accepts one without; `curl -i` shows its `Deprecation` and
-`Link: <../lws-ssi-cid/verify>; rel="successor-version"` headers.
-
-
 ```json
 {
   "valid": true,
   "subject": "did:key:zDnaerx9CtbPJ1q36T5Ln5wYt3MQYeGRG5ehnPAmxcf5mDZpv",
-  "keyType": "P-256",
   "checks": {
     "signingAlgorithmNotNone": true,
     "selfIssued": true,
-    "subjectIsDidKey": true,
-    "keyDecodedFromDid": true,
+    "keyIdPresent": true,
+    "subjectDereferenced": true,
+    "verificationMethodFound": true,
     "algorithmMatchesKey": true,
     "signatureValid": true,
     "notExpired": true,
@@ -122,8 +115,8 @@ credential with a `kid`, and also accepts one without; `curl -i` shows its `Depr
 }
 ```
 
-The verifier decodes the key from `sub`, confirms the JWT `alg` matches the key type, validates the
-signature, and checks expiry and audience.
+The verifier expands the `did:key` into its DID document, selects the method the `kid` names, confirms
+the JWT `alg` matches the key type, validates the signature, and checks expiry and audience.
 
 ## Present it to an LWS server
 

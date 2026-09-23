@@ -11,7 +11,7 @@ credential genuine" can be relied on.
 Requires **JDK 21+** and Maven; Docker for the integration test.
 
 ```bash
-mvn clean verify      # 190 unit tests + 25 in LwsAuthIT (a real Keycloak 26.7.4 container)
+mvn clean verify      # 179 unit tests + 24 in LwsAuthIT (a real Keycloak 26.7.4 container)
 mvn clean test        # unit tests only, no Docker needed
 ```
 
@@ -68,11 +68,7 @@ src/main/java/com/ebremer/lws/authn/
     SamlConstants
     resource/SamlResourceProvider(.Factory)     mount id "lws-saml"
     verify/SamlCredentialVerifier, SamlVerificationResult
-  ssididkey/                                    Self-signed did:key suite (discontinued; deprecated endpoint)
-    DidKeyConstants                             incl. the Deprecation/Link header values
-    resource/DidKeyResourceProvider(.Factory)   mount id "lws-ssi-did-key"
-    verify/SelfSignedDidKeyVerifier, DidKeyVerificationResult
-src/main/resources/META-INF/services/           SPI registrations (mapper + four resource factories)
+src/main/resources/META-INF/services/           SPI registrations (mapper + three resource factories)
 ```
 
 ## Tests

@@ -39,7 +39,7 @@ Rate limiting applies in every mode, including `public`, and is enforced before 
 authenticated. Set `rate-limit` to `0` to turn it off.
 
 Set the mode with either `kc.sh build --spi-realm-restapi-extension--lws--access=public` (repeat per
-provider id: `lws`, `lws-ssi-cid`, `lws-saml`, `lws-ssi-did-key`) or, with no rebuild, the environment
+provider id: `lws`, `lws-ssi-cid`, `lws-saml`) or, with no rebuild, the environment
 variable `LWS_AUTHN_VERIFY_ACCESS=public`.
 
 ### What each status means
@@ -70,7 +70,7 @@ whichever endpoint and whichever status produced it.
 Every setting is read from the provider's `Config.Scope` first, then a system property, then an
 environment variable, then a compiled-in default. `Config.Scope` is the supported surface
 (`kc.sh build --spi-realm-restapi-extension--<provider>--<key>=<value>`, where `<provider>` is `lws`,
-`lws-ssi-cid`, `lws-saml` or `lws-ssi-did-key`) and the only one that can differ per provider; the
+`lws-ssi-cid` or `lws-saml`) and the only one that can differ per provider; the
 environment variable is what a container deployment can set without rebuilding the image.
 
 **Per provider:**

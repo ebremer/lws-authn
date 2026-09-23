@@ -21,10 +21,10 @@ Identifiers 1.0 §3.3, which that suite cites normatively for selecting a key.
 
 > ### If you are upgrading an existing deployment, read this section
 >
-> Nothing is removed. The `/lws-ssi-did-key` endpoint keeps answering exactly as before. But the
-> self-signed CID verifier is **stricter**, and a document that used to verify may now fail — see
-> *Behaviour that got stricter* below. And the JAR is now `lws-authn-0.3.0-SNAPSHOT.jar`: the tree is
-> unreleased work, and the filename says so.
+> **The `/lws-ssi-did-key` endpoint is gone** — see *Removed*. Move its callers to
+> `/lws-ssi-cid/verify` first. And the self-signed CID verifier is **stricter**, so a document that used
+> to verify may now fail — see *Behaviour that got stricter* below. And the JAR is now
+> `lws-authn-0.3.0-SNAPSHOT.jar`: the tree is unreleased work, and the filename says so.
 
 ### What changed in the specifications
 
@@ -65,19 +65,15 @@ Identifiers 1.0 §3.3, which that suite cites normatively for selecting a key.
 - **`verificationMethodActive`**, a new check: the selected method is neither `revoked` ("MUST NOT be
   used") nor `expires`d (CID 1.0 §2.2).
 
-### Deprecated
+### Removed
 
-- **The self-signed `did:key` suite and its endpoint, `/lws-ssi-did-key/verify`.** It still verifies
-  exactly as before — including a `did:key` credential with no `kid`, which that suite never required —
-  and now marks every response, success or refusal, per RFC 9745:
-  ```
-  Deprecation: @1789689600
-  Link: <../lws-ssi-cid/verify>; rel="successor-version"
-  Link: <https://w3c.github.io/lws-protocol/lws10-authn-ssi-did-key/>; rel="deprecation"
-  ```
-  Keycloak logs a warning at startup. **Move callers to `/lws-ssi-cid/verify`**, adding a `kid`
-  (`<did>#<multibase>`), then switch the old endpoint off with
-  `--spi-realm-restapi-extension--lws-ssi-did-key--enabled=false`. No removal date is set.
+- **The self-signed `did:key` suite and its endpoint, `/lws-ssi-did-key/verify`.** The Working Group
+  discontinued the suite on 18 September 2026, and the self-signed CID suite verifies `did:key`
+  subjects itself (see *Added*), so the separate endpoint is removed rather than kept deprecated. A
+  caller now gets `404` there. **Send the same credential to `/lws-ssi-cid/verify`**, with a `kid`
+  naming its verification method (`<did>#<multibase>`) — the one thing the removed suite did not
+  require. The `lws-ssi-did-key` provider id, and its `--spi-realm-restapi-extension--lws-ssi-did-key--*`
+  settings, no longer exist.
 
 ### Behaviour that got stricter
 
@@ -122,12 +118,13 @@ each may reject a document that used to verify. Check your issuers' documents be
 
 ### Tests
 
-190 unit tests (was 144), 25 in `LwsAuthIT` (was 23). New: DID syntax, the did:web URL mapping against
+179 unit tests (was 144), 24 in `LwsAuthIT` (was 23). New: DID syntax, the did:web URL mapping against
 the method's own examples, did:key expansion against the did:key Method's worked example, the multibase
 codec against the did:key and CID 1.0 test vectors, every CID 1.0 method rule above on both parsing
 paths, and did:key credentials verified end to end through the self-signed CID suite for every supported
 key type. `LwsAuthIT` gains a did:key credential through `/lws-ssi-cid` (Ed25519 exercising Keycloak's
-EdDSA provider) and the deprecation headers.
+EdDSA provider), and checks that `/lws-ssi-did-key` answers `404`; the removed suite's own tests went
+with it.
 
 ### Documentation
 

@@ -102,12 +102,14 @@ resolved. Two methods are resolved; any other is refused by name.
 | `did:web` | `did:web:example.com` → `https://example.com/.well-known/did.json`; `did:web:example.com:u:bob` → `https://example.com/u/bob/did.json`; a port as `%3A`. Fetched through the same SSRF-guarded client as an HTTPS subject; a domain name only, never an IP address; the document's `id` must be the DID. | `did:web:example.com#key-1` |
 
 A `kid` may name the method by its full identifier, as above, or by its fragment (`key-1` or
-`#key-1`), or by its JWK's own `kid`. This suite requires one: a `did:key` credential from the
-discontinued suite, which read the key from the identifier and ignored `kid`, needs
-`"kid": "<did>#<multibase>"` added to verify here.
+`#key-1`), or by its JWK's own `kid`. This suite requires one: a `did:key` credential made for the
+discontinued, and now removed, self-signed `did:key` suite — which read the key from the identifier and
+ignored `kid` — needs `"kid": "<did>#<multibase>"` added to verify here.
 
 Walkthrough + runnable demo: **[Self-signed CID walkthrough](walkthrough-ssi-cid.md)** /
-**[`scripts/ssi-cid-demo.sh`](https://github.com/ebremer/lws-authn/blob/master/scripts/ssi-cid-demo.sh)**.
+**[`scripts/ssi-cid-demo.sh`](https://github.com/ebremer/lws-authn/blob/master/scripts/ssi-cid-demo.sh)**;
+for a `did:key` subject, **[Self-signed did:key walkthrough](walkthrough-ssi-did-key.md)** /
+**[`scripts/ssi-did-key-demo.sh`](https://github.com/ebremer/lws-authn/blob/master/scripts/ssi-did-key-demo.sh)**.
 
 ---
 
@@ -146,44 +148,3 @@ certificate that is inside its own validity period.
 
 Guide: **[SAML 2.0 walkthrough](walkthrough-saml.md)** (there is no shell demo — producing a
 signed SAML Response requires a SAML login flow).
-
----
-
-## Self-signed `did:key` suite
-
-> **Discontinued.** The LWS Working Group discontinued this suite on 18 September 2026 "in favor of
-> lws10-authn-ssi-cid, which subsumes this specification by specifying a generalization of the
-> mechanism described here". Verify `did:key` credentials at **`/lws-ssi-cid/verify`** instead (see
-> *DID subjects* above; add a `kid`). This endpoint keeps its behaviour for existing callers and adds
-> `Deprecation: @1789689600` and `Link: <../lws-ssi-cid/verify>; rel="successor-version"` to every
-> response. Switch it off with `--spi-realm-restapi-extension--lws-ssi-did-key--enabled=false`.
-
-The most self-contained suite: the subject is a `did:key` identifier that **embeds the public key**
-(multibase base58btc + multicodec), so there is no hosting, no dereferencing, and no realm setup — the
-verifier decodes the key from the identifier and validates the self-signed JWT. Supported key types:
-**Ed25519** (`did:key:z6Mk…`, EdDSA), **P-256** (`did:key:zDn…`, ES256), **P-384** (ES384) and
-**P-521** (ES512).
-
-The encoding must be canonical: a decoded key is re-encoded and must reproduce the identifier exactly.
-A `did:key` *is* its key, so allowing two spellings of one key would let a single agent present itself
-as two subjects.
-
-`POST …/lws-ssi-did-key/verify` — validates a self-issued `did:key` JWT: reject `none` and any
-unsupported `crit` header; enforce `sub == iss == client_id` is a **canonically encoded** `did:key`;
-decode the key from the identifier; check the JWT `alg` matches the key type; validate the signature;
-require `iat` and `exp`; check the audience. Pass `audience=<authorization server>` to require that the
-credential names it:
-
-```json
-{ "valid": true, "subject": "did:key:zDnaerx9…", "client": "did:key:zDnaerx9…",
-  "keyType": "P-256", "tokenType": "urn:ietf:params:oauth:token-type:jwt",
-  "checks": { "signingAlgorithmNotNone": true, "noUnsupportedCriticalHeaders": true,
-              "selfIssued": true, "subjectIsDidKey": true, "keyDecodedFromDid": true,
-              "algorithmMatchesKey": true, "signatureValid": true, "notExpired": true,
-              "issuedAtPresent": true, "audiencePresent": true } }
-```
-
-Walkthrough + runnable demo (mints a `did:key` and verifies it — at the successor endpoint by default,
-`ENDPOINT=lws-ssi-did-key` for this one):
-**[Self-signed did:key walkthrough](walkthrough-ssi-did-key.md)** /
-**[`scripts/ssi-did-key-demo.sh`](https://github.com/ebremer/lws-authn/blob/master/scripts/ssi-did-key-demo.sh)**.

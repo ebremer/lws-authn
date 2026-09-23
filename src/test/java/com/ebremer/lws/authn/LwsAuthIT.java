@@ -301,16 +301,6 @@ class LwsAuthIT {
                 assertTrue(e.getValue().asBoolean(), "check failed: " + e.getKey()));
     }
 
-    /** did:key suite: self-signed credentials verify for both P-256 and Ed25519. */
-    @Test
-    void didKeyCredentialsVerify() throws Exception {
-        for (String jwt : List.of(mintDidKeyP256(), mintDidKeyEd25519())) {
-            JsonNode r = JSON.readTree(postForm(base + "/realms/" + REALM + "/lws-ssi-did-key/verify",
-                    Map.of("credential", jwt), accessToken()).body());
-            assertTrue(r.get("valid").asBoolean(), () -> "expected valid, got: " + r);
-        }
-    }
-
     /**
      * P2-1, and the packaging that carries it. The verifier dereferences a document served as JSON-LD
      * by a third party, written with an aliased term inside an {@code @graph} — a shape the old
@@ -386,7 +376,7 @@ class LwsAuthIT {
      */
     @Test
     void anonymousVerifyIsRefused() throws Exception {
-        for (String suite : List.of("lws", "lws-ssi-cid", "lws-ssi-did-key", "lws-saml")) {
+        for (String suite : List.of("lws", "lws-ssi-cid", "lws-saml")) {
             HttpResponse<String> r = postForm(base + "/realms/" + REALM + "/" + suite + "/verify",
                     Map.of("credential", "irrelevant"), null);
             assertEquals(401, r.statusCode(), suite + " must refuse an unauthenticated caller");
@@ -405,7 +395,7 @@ class LwsAuthIT {
     @Test
     void anInvalidCredentialIsTwoHundredWithValidFalse() throws Exception {
         Map<String, String> nonsense = Map.of("credential", "not.a.jwt");
-        for (String suite : List.of("lws", "lws-ssi-cid", "lws-ssi-did-key")) {
+        for (String suite : List.of("lws", "lws-ssi-cid")) {
             HttpResponse<String> r = postForm(base + "/realms/" + REALM + "/" + suite + "/verify",
                     nonsense, accessToken());
             assertEquals(200, r.statusCode(), suite + " answered a rejected credential with a status: " + r.body());
@@ -451,7 +441,7 @@ class LwsAuthIT {
     /** A token from another realm is not a caller credential for this one. */
     @Test
     void aBadCallerTokenIsRefused() throws Exception {
-        HttpResponse<String> r = postForm(base + "/realms/" + REALM + "/lws-ssi-did-key/verify",
+        HttpResponse<String> r = postForm(base + "/realms/" + REALM + "/lws-ssi-cid/verify",
                 Map.of("credential", mintDidKeyP256()), "not-a-token");
         assertEquals(401, r.statusCode(), "a bogus bearer token must not be accepted");
     }
@@ -594,10 +584,9 @@ class LwsAuthIT {
         String did = DidKey.encodeP256((ECPublicKey) g.generateKeyPair().getPublic());
         KeyPair impostor = g.generateKeyPair();
 
-        String jwt = signJwt(did, "ES256", impostor.getPrivate(), "SHA256withECDSAinP1363Format");
-        JsonNode r = JSON.readTree(postForm(base + "/realms/" + REALM + "/lws-ssi-did-key/verify",
-                Map.of("credential", jwt), accessToken()).body());
-        assertRejected(r, "signatureValid");
+        String jwt = signJwt(did, "ES256", did + "#" + DidKey.multibaseValue(did), impostor.getPrivate(),
+                "SHA256withECDSAinP1363Format");
+        assertRejected(verifySsiCid(jwt), "signatureValid");
     }
 
     // ------------------------------------------------------- fixtures for the failure branches
@@ -747,23 +736,15 @@ class LwsAuthIT {
         assertRejected(verifySsiCid(signJwt(edDid, "EdDSA", ed.getPrivate(), "Ed25519")), "keyIdPresent");
     }
 
-    /** The old endpoint keeps answering, and says on every response that it is deprecated and why. */
+    /**
+     * The discontinued did:key suite's endpoint was removed rather than kept deprecated. Its path must
+     * be unknown to Keycloak — a provider still registered under that id would answer here.
+     */
     @Test
-    void theDiscontinuedDidKeyEndpointSaysSo() throws Exception {
+    void theDiscontinuedDidKeyEndpointIsGone() throws Exception {
         HttpResponse<String> r = postForm(base + "/realms/" + REALM + "/lws-ssi-did-key/verify",
                 Map.of("credential", mintDidKeyP256()), accessToken());
-        assertEquals(200, r.statusCode());
-        assertTrue(JSON.readTree(r.body()).get("valid").asBoolean(), "the deprecated endpoint still verifies");
-        assertEquals("@1789689600", r.headers().firstValue("Deprecation").orElse(null));
-        List<String> links = r.headers().allValues("Link");
-        assertTrue(links.stream().anyMatch(l -> l.contains("<../lws-ssi-cid/verify>")
-                && l.contains("rel=\"successor-version\"")), links::toString);
-
-        HttpResponse<String> refused = postForm(base + "/realms/" + REALM + "/lws-ssi-did-key/verify",
-                Map.of("credential", mintDidKeyP256()), null);
-        assertEquals(401, refused.statusCode());
-        assertEquals("@1789689600", refused.headers().firstValue("Deprecation").orElse(null),
-                "a refusal is deprecated too");
+        assertEquals(404, r.statusCode(), r.body());
     }
 
     private JsonNode verifyOpenId(Map<String, String> form) throws Exception {
@@ -862,11 +843,6 @@ class LwsAuthIT {
         KeyPair kp = g.generateKeyPair();
         return signJwt(DidKey.encodeP256((ECPublicKey) kp.getPublic()), "ES256",
                 kp.getPrivate(), "SHA256withECDSAinP1363Format");
-    }
-
-    private static String mintDidKeyEd25519() throws Exception {
-        KeyPair kp = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
-        return signJwt(DidKey.encodeEd25519(kp.getPublic()), "EdDSA", kp.getPrivate(), "Ed25519");
     }
 
     private static String signJwt(String did, String alg, PrivateKey key, String jdkAlg) throws Exception {

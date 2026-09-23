@@ -8,7 +8,7 @@ nav_order: 4
 
 - **Key/identity hosting.** The OpenID and self-signed-CID `cid/{userId}` endpoints serve
   Keycloak-hosted identifiers; private keys never reach Keycloak (only public JWKs are registered). The
-  SAML and discontinued `did:key` suites host nothing, and neither do DID subjects.
+  SAML suite hosts nothing, and neither do DID subjects.
 - **SAML trust is out-of-band.** The verifier requires the trusted IdP certificate as input; it
   validates the XML signature, the `<Conditions>` window (±60 s skew by default, `clock-skew-seconds`)
   and the audience, but does not fetch metadata or build a trust chain.
