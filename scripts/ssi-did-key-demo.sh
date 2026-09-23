@@ -6,11 +6,10 @@
 # a key + JWT and calls a verify endpoint. It uses Node for the crypto (P-256/Ed25519 key generation,
 # point compression, base58btc, ES256/EdDSA signing) since base58 is impractical in pure shell.
 #
-# The LWS Working Group DISCONTINUED the separate did:key suite on 18 September 2026 in favour of the
-# self-signed CID suite, which now resolves did:key subjects itself. So by default this verifies at
-# /lws-ssi-cid/verify, with a 'kid' naming the verification method the did:key's DID document lists
-# (<did>#<multibase>) — that suite requires one. ENDPOINT=lws-ssi-did-key calls the deprecated
-# endpoint instead, which still answers and marks its responses with a Deprecation header.
+# The LWS Working Group discontinued the separate did:key suite on 18 September 2026 in favour of the
+# self-signed CID suite, which resolves did:key subjects itself, and this provider has removed its
+# endpoint. So this verifies at /lws-ssi-cid/verify, with a 'kid' naming the verification method the
+# did:key's DID document lists (<did>#<multibase>) — that suite requires one.
 #
 # Requirements: curl, jq, node, and a running Keycloak 26.7.4 with the lws-authn provider deployed.
 # Defaults target `kc.sh start-dev` on http://localhost:8080, realm `master` (any realm works —
@@ -19,7 +18,6 @@
 # Usage:
 #   bash scripts/ssi-did-key-demo.sh
 #   KEYTYPE=ed25519 KC_URL=https://kc.example REALM=myrealm bash scripts/ssi-did-key-demo.sh
-#   ENDPOINT=lws-ssi-did-key bash scripts/ssi-did-key-demo.sh      # the deprecated endpoint
 #   VERIFY_TOKEN=$ACCESS_TOKEN bash scripts/ssi-did-key-demo.sh
 
 set -euo pipefail
@@ -27,7 +25,6 @@ set -euo pipefail
 KC_URL="${KC_URL:-http://localhost:8080}"
 REALM="${REALM:-master}"
 KEYTYPE="${KEYTYPE:-p256}"   # p256 (zDn…, ES256) or ed25519 (z6Mk…, EdDSA)
-ENDPOINT="${ENDPOINT:-lws-ssi-cid}"   # lws-ssi-cid, or the deprecated lws-ssi-did-key
 # The verify endpoints are authenticated by default (docs/configuration.md, "Securing the verify endpoints").
 # Supply a caller token directly, or let the script fetch one with these realm credentials.
 VERIFY_TOKEN="${VERIFY_TOKEN:-}"
@@ -93,8 +90,8 @@ NODE
 JWT=$(KEYTYPE="$KEYTYPE" node "$WORK/mint.mjs")
 printf '\n\033[1;36m== minted a %s did:key self-signed JWT\033[0m\n%s\n' "$KEYTYPE" "$JWT"
 
-printf '\n\033[1;36m== verifying at %s\033[0m\n' "$KC_URL/realms/$REALM/$ENDPOINT/verify"
-RESULT=$(verify_post "$KC_URL/realms/$REALM/$ENDPOINT/verify" \
+printf '\n\033[1;36m== verifying at %s\033[0m\n' "$KC_URL/realms/$REALM/lws-ssi-cid/verify"
+RESULT=$(verify_post "$KC_URL/realms/$REALM/lws-ssi-cid/verify" \
   --data-urlencode "credential=$JWT" --data-urlencode "audience=https://as.example")
 echo "$RESULT" | jq .
 

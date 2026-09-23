@@ -44,7 +44,7 @@ serving, parsing and SPARQL — run it after touching dependencies.
 
 ### Tests
 
-`mvn test` runs 190 unit tests. `mvn verify` additionally runs 25 in `LwsAuthIT`, which needs Docker
+`mvn test` runs 179 unit tests. `mvn verify` additionally runs 24 in `LwsAuthIT`, which needs Docker
 and is skipped without it.
 
 **`LwsAuthIT` binds host port 8080 and cannot run in parallel with itself.** The OpenID verifier
@@ -76,8 +76,8 @@ cp target/lws-authn-*.jar "$KC_HOME/providers/"   # the one shaded JAR `mvn pack
 ```
 
 On Windows use `kc.bat`. After `kc.sh build`, the startup log lists the registered providers; you
-should see the `lws`, `lws-ssi-cid`, `lws-saml` and `lws-ssi-did-key` realm resources and the
-`lws-webid-sub-mapper` protocol mapper, and a warning that `lws-ssi-did-key` is deprecated.
+should see the `lws`, `lws-ssi-cid` and `lws-saml` realm resources and the `lws-webid-sub-mapper`
+protocol mapper.
 
 For a production server — service account, database, `systemd`, TLS and the rest — follow the
 [install guide](INSTALL.md).

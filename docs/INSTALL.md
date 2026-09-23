@@ -10,10 +10,9 @@ provider — the LWS OpenID Connect ("lws-oidc") authentication suite — on an 
 **already has a recent JDK installed**.
 
 The single provider JAR actually ships every LWS 1.0 authentication suite — OpenID Connect,
-self-signed CID (for HTTPS, `did:key` and `did:web` subjects) and SAML 2.0 — plus the endpoint of the
-discontinued self-signed `did:key` suite, kept for existing callers and marked deprecated. This guide
-focuses on standing up the **OpenID Connect** suite, which mounts at `…/realms/{realm}/lws`; the other
-endpoints (`lws-ssi-cid`, `lws-saml`, `lws-ssi-did-key`) come along in the same JAR at no extra effort.
+self-signed CID (for HTTPS, `did:key` and `did:web` subjects) and SAML 2.0. This guide focuses on
+standing up the **OpenID Connect** suite, which mounts at `…/realms/{realm}/lws`; the other endpoints
+(`lws-ssi-cid`, `lws-saml`) come along in the same JAR at no extra effort.
 
 The result is a Keycloak server running as a hardened `systemd` service behind an HTTPS reverse
 proxy, with the LWS provider registered and verified end-to-end.
@@ -221,19 +220,14 @@ sudo -u keycloak env \
 ```
 
 On startup Keycloak augments itself with the new JAR. Watch the log for the LWS providers being
-registered — you should see the four realm-resource providers and the protocol mapper:
+registered — you should see the three realm-resource providers and the protocol mapper:
 
 ```
 lws (org.keycloak.services.resource.RealmResourceProviderFactory)
 lws-ssi-cid (org.keycloak.services.resource.RealmResourceProviderFactory)
 lws-saml (org.keycloak.services.resource.RealmResourceProviderFactory)
-lws-ssi-did-key (org.keycloak.services.resource.RealmResourceProviderFactory)
 lws-webid-sub-mapper (org.keycloak.protocol.ProtocolMapper)
 ```
-
-followed at startup by a warning that the `did:key` suite was discontinued and `lws-ssi-did-key` is
-deprecated. That is expected; `--spi-realm-restapi-extension--lws-ssi-did-key--enabled=false` switches
-the endpoint off if nothing calls it.
 
 From another shell on the server, confirm the OpenID endpoint is mounted (the master realm has no
 users, so a `400`/`404`-style JSON error here is expected and still proves the route is live):
@@ -407,8 +401,8 @@ Whenever you add/remove a provider JAR or change a build-time option (`db`, `hea
 sudo -u keycloak /opt/keycloak/bin/kc.sh build
 ```
 
-The output re-lists the registered providers — confirm the `lws`, `lws-ssi-cid`, `lws-saml`,
-`lws-ssi-did-key` resources and the `lws-webid-sub-mapper` mapper appear, exactly as in
+The output re-lists the registered providers — confirm the `lws`, `lws-ssi-cid` and `lws-saml`
+resources and the `lws-webid-sub-mapper` mapper appear, exactly as in
 [step 8](#8-smoke-test-in-dev-mode).
 
 ### 9f. Make user attributes admin-only (do not skip this)

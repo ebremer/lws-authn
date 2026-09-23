@@ -2,7 +2,7 @@
 
 A [Keycloak](https://www.keycloak.org/) **26.7.4** extension implementing the authentication suites of
 the W3C [Linked Web Storage (LWS)](https://www.w3.org/TR/lws10-core/) 1.0 protocol, in which a **signed
-token bound to an identity** is used as an authentication credential:
+token bound to an identity** is used as an authentication credential — all three of its suites:
 
 - [**OpenID Connect**](https://w3c.github.io/lws-protocol/lws10-authn-openid/) — Keycloak is the
   OpenID Provider; the ID Token's `sub` is a WebID.
@@ -11,8 +11,6 @@ token bound to an identity** is used as an authentication credential:
   HTTPS URI, a `did:key` or a `did:web`.
 - [**SAML 2.0**](https://w3c.github.io/lws-protocol/lws10-authn-saml/) — a signed SAML 2.0
   `<Response>` whose `<NameID>` is the subject.
-- ~~[**Self-signed `did:key`**](https://w3c.github.io/lws-protocol/lws10-authn-ssi-did-key/)~~ —
-  discontinued by the Working Group; its endpoint still answers, and marks every response deprecated.
 
 ## Documentation
 

@@ -11,7 +11,7 @@ its users, and one that wrongly *accepts* does not. Please treat findings accord
 Include whatever you have — a description of the flaw and how you found it is useful even without a
 working exploit:
 
-- which suite and endpoint (`lws`, `lws-ssi-cid`, `lws-saml`, `lws-ssi-did-key`)
+- which suite and endpoint (`lws`, `lws-ssi-cid`, `lws-saml`)
 - the version or commit, and the Keycloak version it was running under
 - a credential or document that reproduces it, if you have one (a self-signed test key is fine;
   please do not send real credentials)

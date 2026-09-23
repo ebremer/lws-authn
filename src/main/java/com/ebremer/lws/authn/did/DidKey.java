@@ -9,8 +9,8 @@
  * curves P-256 (0x1200), P-384 (0x1201) and P-521 (0x1202). Pure JDK: no BouncyCastle, so it works
  * under both the default and FIPS Keycloak crypto providers.
  *
- * Lived in the ssididkey package until the did:key authentication suite was discontinued in favour of
- * the self-signed CID suite (18 September 2026); it is shared by both now, so it lives here.
+ * It came from the discontinued did:key authentication suite, removed after the self-signed CID suite
+ * subsumed it (18 September 2026); the CID suite resolves did:key subjects with it.
  */
 package com.ebremer.lws.authn.did;
 

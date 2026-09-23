@@ -23,7 +23,7 @@ import com.ebremer.lws.authn.verify.VerifyAccess;
  *
  * <table>
  *   <caption>Settings (scope keys are per provider id: {@code lws}, {@code lws-ssi-cid},
- *            {@code lws-saml}, {@code lws-ssi-did-key})</caption>
+ *            {@code lws-saml})</caption>
  *   <tr><th>Scope key</th><th>System property</th><th>Environment</th><th>Default</th></tr>
  *   <tr><td>{@code enabled}</td><td>{@code lws.authn.enabled}</td><td>{@code LWS_AUTHN_ENABLED}</td><td>{@code true}</td></tr>
  *   <tr><td>{@code audience}</td><td>{@code lws.authn.audience}</td><td>{@code LWS_AUTHN_AUDIENCE}</td><td>none</td></tr>

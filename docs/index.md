@@ -7,8 +7,7 @@ nav_order: 1
 
 A [Keycloak](https://www.keycloak.org/) **26.7.4** extension implementing the authentication suites of
 the W3C [Linked Web Storage (LWS)](https://www.w3.org/TR/lws10-core/) 1.0 protocol, in which a **signed
-token bound to an identity** is used as an authentication credential — the three current suites, plus
-the discontinued fourth for callers that still use it:
+token bound to an identity** is used as an authentication credential — all three of its suites:
 
 - [**OpenID Connect**](https://w3c.github.io/lws-protocol/lws10-authn-openid/) — Keycloak is the
   OpenID Provider; the ID Token's `sub` is a WebID whose controlled identifier document (CID) names
@@ -20,10 +19,10 @@ the discontinued fourth for callers that still use it:
   document.
 - [**SAML 2.0**](https://w3c.github.io/lws-protocol/lws10-authn-saml/) — the credential is a signed
   SAML 2.0 `<Response>` whose `<NameID>` is the subject; trust in the IdP is established **out of band**.
-- ~~[**Self-signed `did:key`**](https://w3c.github.io/lws-protocol/lws10-authn-ssi-did-key/)~~ —
-  **discontinued** by the Working Group on 18 September 2026, "in favor of lws10-authn-ssi-cid, which
-  subsumes this specification". The self-signed CID suite now verifies `did:key` subjects itself; this
-  suite's endpoint still answers, and marks every response deprecated.
+
+A fourth, the self-signed `did:key` suite, was discontinued by the Working Group on 18 September 2026 "in
+favor of lws10-authn-ssi-cid, which subsumes this specification". The self-signed CID suite verifies
+`did:key` subjects itself, so this provider no longer has a separate endpoint for it.
 
 The OpenID and self-signed-CID suites dereference the subject's
 [Controlled Identifier Document](https://www.w3.org/TR/cid-1.0/) and use **Apache Jena 6.2.0** for RDF;
@@ -39,7 +38,6 @@ Keycloak's SAML library for XML signature validation.
 | OpenID Connect | OP + CID host + verifier | ID Token (JWT); `sub` = WebID | OIDC Discovery on `iss` (found via the CID service) | `/realms/{realm}/lws` | `…token-type:id_token` |
 | Self-signed CID | CID host + verifier | self-issued JWT; `sub`==`iss`==`client_id`, an HTTPS URI, `did:key` or `did:web` | the `authentication` method the `kid` names, in the subject's CID or DID document (`publicKeyJwk` or `publicKeyMultibase`) | `/realms/{realm}/lws-ssi-cid` | `…token-type:jwt` |
 | SAML 2.0 | SAML IdP + verifier | signed SAML `<Response>`; subject = `<NameID>` | **out-of-band** IdP certificate | `/realms/{realm}/lws-saml` | `…token-type:saml2` |
-| *Self-signed `did:key` — discontinued, deprecated* | verifier only | self-issued JWT; `sub` = `did:key` | **decoded from the `did:key`** identifier itself | `/realms/{realm}/lws-ssi-did-key` | `…token-type:jwt` |
 
 The suites are independent; deploy the single JAR and use any of them.
 
@@ -69,13 +67,6 @@ The suites are independent; deploy the single JAR and use any of them.
 |-----------|--------------|---------|
 | `saml.resource.SamlResourceProvider` | `RealmResourceProvider` (`lws-saml`) | Verifies a signed SAML 2.0 Response against a supplied (out-of-band) IdP certificate. |
 | `saml.verify.SamlCredentialVerifier` | — | Validate the XML signature → read `<NameID>`/`<Issuer>` → enforce the validity window and audience. |
-
-**Self-signed `did:key` suite** (discontinued; the endpoint is deprecated)
-
-| Component | Keycloak SPI | Purpose |
-|-----------|--------------|---------|
-| `ssididkey.resource.DidKeyResourceProvider` | `RealmResourceProvider` (`lws-ssi-did-key`) | Verifies a self-issued `did:key` JWT, and marks every response deprecated (RFC 9745). |
-| `ssididkey.verify.SelfSignedDidKeyVerifier` | — | The discontinued draft's algorithm, unchanged: check `sub==iss==client_id` is a `did:key` → decode the key from it → validate signature. |
 
 The OpenID and self-signed-CID suites serialize CIDs with Jena as JSON-LD / Turtle / N-Triples / RDF/XML.
 
