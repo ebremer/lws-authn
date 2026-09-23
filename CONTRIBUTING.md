@@ -70,6 +70,23 @@ unrelocated second copy puts two implementations of one package on the classpath
 fails the build on duplicate classes, and `dependency:tree` shows only one path per artifact — use
 `-Dincludes=<groupId>:<artifactId>` before concluding anything about why something is on the classpath.
 
+## Documentation
+
+[`docs/`](docs/) is the project site, <https://ebremer.github.io/lws-authn/>: Jekyll with the Just the
+Docs theme, configured in [`docs/_config.yml`](docs/_config.yml). GitHub Pages builds it from `master`
+itself, so there is no workflow to maintain. The site is that folder and nothing else, which has two
+consequences:
+
+- **Link to anything outside `docs/` by its absolute `https://github.com/ebremer/lws-authn/blob/master/…`
+  URL.** A relative `../README.md` works when browsing the repository and is a 404 on the site. Links
+  between pages inside `docs/` stay relative, to the `.md` file; the build rewrites them.
+- **A new page needs front matter** — a `title`, and a `nav_order` (plus `parent: Walkthroughs` for a
+  walkthrough) to place it in the navigation.
+
+To preview a change, run `bundle install` and then `bundle exec jekyll serve` in `docs/`, and open
+<http://localhost:4000/>. This needs Ruby 3 — GitHub builds with 3.3 — because the `github-pages` gem
+does not install on Ruby 4.
+
 ## Commits and pull requests
 
 - Work on a branch and open a pull request; `master` is not committed to directly.

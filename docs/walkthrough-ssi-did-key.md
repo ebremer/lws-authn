@@ -1,3 +1,9 @@
+---
+title: "Self-signed did:key"
+parent: Walkthroughs
+nav_order: 4
+---
+
 # Walkthrough: a self-signed `did:key` LWS identity
 
 > **The separate `did:key` suite was discontinued** by the LWS Working Group on 18 September 2026, "in
@@ -28,12 +34,16 @@ client_id ==` the `did:key`, and the verifier reconstructs the public key from i
 
 ## Prerequisites
 
-- Keycloak **26.7.4** with the `lws-authn` provider deployed — see the [README](../README.md).
+- Keycloak **26.7.4** with the `lws-authn` provider deployed — see the
+  [README](https://github.com/ebremer/lws-authn/blob/master/README.md).
 - `curl`, `jq`, and `node` (Node is used to mint the key/JWT; base58btc is impractical in pure shell).
 
 ---
 
 ## Fast path — one script
+
+Run [`scripts/ssi-did-key-demo.sh`](https://github.com/ebremer/lws-authn/blob/master/scripts/ssi-did-key-demo.sh)
+from a checkout of the repository:
 
 ```bash
 bash scripts/ssi-did-key-demo.sh            # P-256 (zDn…, ES256)
@@ -88,7 +98,7 @@ curl -s -X POST "$KC/realms/$REALM/lws-ssi-cid/verify" \
 
 > `Authorization` identifies **you**, the caller: the `…/verify` endpoints are authenticated by
 > default. The credential being checked always travels in the request body. See
-> [Securing the verify endpoints](../README.md#securing-the-verify-endpoints).
+> [Securing the verify endpoints](https://github.com/ebremer/lws-authn/blob/master/README.md#securing-the-verify-endpoints).
 
 The deprecated `…/lws-ssi-did-key/verify` takes the same request and returns the same verdict for a
 credential with a `kid`, and also accepts one without; `curl -i` shows its `Deprecation` and

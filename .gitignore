@@ -17,6 +17,18 @@ buildNumber.properties
 .mvn/timing.properties
 .mvn/wrapper/maven-wrapper.jar
 
+# ── Documentation site ───────────────────────────────────────────────
+# What a local preview of docs/ leaves behind (`bundle exec jekyll serve`). GitHub Pages builds the
+# published site itself. The lockfile stays out too: Pages always builds with the current
+# `github-pages` gem, and a preview should follow it rather than pin an older one.
+docs/_site/
+docs/.jekyll-cache/
+docs/.jekyll-metadata
+docs/.sass-cache/
+docs/.bundle/
+docs/vendor/
+docs/Gemfile.lock
+
 # ── Java / JVM ───────────────────────────────────────────────────────
 *.class
 hs_err_pid*

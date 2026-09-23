@@ -1,3 +1,9 @@
+---
+title: OpenID Connect
+parent: Walkthroughs
+nav_order: 1
+---
+
 # Walkthrough: create an LWS identity with Keycloak and use it with an LWS server
 
 This guide takes you from a freshly deployed `lws-authn` provider to a working **LWS identity** — a
@@ -27,7 +33,8 @@ identity is self-describing.
 
 ## Prerequisites
 
-- Keycloak **26.7.4** with the `lws-authn` provider deployed — see the [README](../README.md) (build
+- Keycloak **26.7.4** with the `lws-authn` provider deployed — see the
+  [README](https://github.com/ebremer/lws-authn/blob/master/README.md) (build
   → copy `target/lws-authn-<version>.jar` to `providers/` → `kc.sh build` → `kc.sh start`).
 - `curl` and `jq`.
 - For a quick local run: `bin/kc.sh start-dev` (bootstrap admin `admin` / `admin`), reachable at
@@ -37,7 +44,9 @@ identity is self-describing.
 
 ## Fast path — one script
 
-With the provider deployed and Keycloak running locally:
+With the provider deployed and Keycloak running locally, run
+[`scripts/lws-demo.sh`](https://github.com/ebremer/lws-authn/blob/master/scripts/lws-demo.sh) from a
+checkout of the repository:
 
 ```bash
 bash scripts/lws-demo.sh
@@ -57,7 +66,8 @@ The rest of this document is the same thing done by hand.
 
 ### 1. Set up the realm, client, mapper and user
 
-**Either** import the bundled realm:
+**Either** import the bundled realm,
+[`examples/lws-demo-realm.json`](https://github.com/ebremer/lws-authn/blob/master/examples/lws-demo-realm.json):
 
 ```bash
 # offline import

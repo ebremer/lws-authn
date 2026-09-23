@@ -35,7 +35,7 @@ Keycloak's SAML library for XML signature validation.
 | [`SECURITY.md`](SECURITY.md) | Reporting a vulnerability, and what is deliberate rather than a bug. |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Building, testing, and the conventions this codebase expects. |
 | [`TODO.md`](TODO.md) | The backlog, as a review against the specifications — and the design history of everything already done. |
-| [`docs/`](docs/) | A walkthrough per suite, each with a runnable demo script. |
+| [`docs/`](docs/) | A walkthrough per suite, each with a runnable demo script — published as the [project site](https://ebremer.github.io/lws-authn/). |
 
 ---
 
