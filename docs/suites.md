@@ -102,9 +102,8 @@ resolved. Two methods are resolved; any other is refused by name.
 | `did:web` | `did:web:example.com` → `https://example.com/.well-known/did.json`; `did:web:example.com:u:bob` → `https://example.com/u/bob/did.json`; a port as `%3A`. Fetched through the same SSRF-guarded client as an HTTPS subject; a domain name only, never an IP address; the document's `id` must be the DID. | `did:web:example.com#key-1` |
 
 A `kid` may name the method by its full identifier, as above, or by its fragment (`key-1` or
-`#key-1`), or by its JWK's own `kid`. This suite requires one: a `did:key` credential made for the
-discontinued, and now removed, self-signed `did:key` suite — which read the key from the identifier and
-ignored `kid` — needs `"kid": "<did>#<multibase>"` added to verify here.
+`#key-1`), or by its JWK's own `kid`. This suite requires one; for a `did:key` it is
+`"kid": "<did>#<multibase>"`.
 
 Walkthrough + runnable demo: **[Self-signed CID walkthrough](walkthrough-ssi-cid.md)** /
 **[`scripts/ssi-cid-demo.sh`](https://github.com/ebremer/lws-authn/blob/master/scripts/ssi-cid-demo.sh)**;
