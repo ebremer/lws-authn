@@ -66,7 +66,7 @@ breaking changes before you do.
 
 Not a claim of completeness — context, so a report can say something new. Each is covered by tests
 (`mvn test` for unit, `mvn verify` for the container integration test), and the reasoning is in
-`README.md` under "Security" and in `TODO.md`:
+[Security hardening](hardening.md) and in `TODO.md`:
 
 - `verify` endpoints authenticated by default, rate limited, and answering `200` with `"valid": false`
   rather than a bare `401`

@@ -37,8 +37,8 @@ WEBID_ATTRIBUTE="${WEBID_ATTRIBUTE:-}"   # empty => Keycloak hosts the WebID at 
 command -v curl >/dev/null || { echo "curl is required"; exit 1; }
 command -v jq   >/dev/null || { echo "jq is required";   exit 1; }
 
-# The /verify endpoints are authenticated by default (see the README, "Securing the verify
-# endpoints"). VERIFY_TOKEN is the *caller's* credential; the credential being verified always
+# The /verify endpoints are authenticated by default (see "Securing the verify endpoints" in
+# docs/configuration.md). VERIFY_TOKEN is the *caller's* credential; the credential being verified always
 # travels in the form body. Leave VERIFY_TOKEN empty only if the deployment runs them in
 # `public` mode.
 verify_post() {

@@ -1,12 +1,13 @@
-# The lws-authn documentation site.
+# The lws-authn documentation site — the one copy of the documentation. The README at the repository
+# root is a summary that links here.
 #
 # GitHub Pages builds this folder itself — Settings → Pages → Deploy from a branch → `master`, `/docs` —
 # with the `github-pages` gem, so there is no workflow to maintain. `Gemfile` exists only to preview the
 # site locally; see CONTRIBUTING.md.
 #
-# The site is this folder and nothing else: the build cannot see README.md, INSTALL.md or scripts/. A
-# link from a page here to anything outside docs/ must therefore be an absolute
-# https://github.com/ebremer/lws-authn/... URL — a relative `../README.md` works when browsing the
+# The site is this folder and nothing else: the build cannot see README.md, TODO.md, the source or
+# scripts/. A link from a page here to anything outside docs/ must therefore be an absolute
+# https://github.com/ebremer/lws-authn/... URL — a relative `../TODO.md` works when browsing the
 # repository and is a 404 on the site.
 
 title: lws-authn
@@ -32,32 +33,30 @@ plugins:
   - jekyll-sitemap
 
 # Every page gets the theme's layout without having to name it.
+#
+# SECURITY.md and CONTRIBUTING.md are the two pages without front matter: GitHub also shows them on its
+# own pages — the Security tab, the link offered to anyone opening an issue — which would render front
+# matter as a table at the top. Their titles and places in the navigation are here instead, and
+# jekyll-optional-front-matter makes them pages.
 defaults:
-  - scope:
-      path: ""
-    values:
-      layout: default
+  - scope: { path: "" }
+    values: { layout: default }
+  - scope: { path: SECURITY.md }
+    values: { title: Security policy, nav_order: 7 }
+  - scope: { path: CONTRIBUTING.md }
+    values: { title: Contributing, nav_order: 8 }
 
-# Header: the repository, for everything the site does not carry.
+# jekyll-optional-front-matter skips a file named CONTRIBUTING unless it is listed here, and without
+# remove_originals it would also publish each such file's Markdown source beside its page.
+include:
+  - CONTRIBUTING.md
+optional_front_matter:
+  remove_originals: true
+
+# Header: the repository, for the source.
 aux_links:
   "lws-authn on GitHub":
     - "https://github.com/ebremer/lws-authn"
-
-# The rest of the documentation lives at the repository root, next to the code, and is read there.
-# Listed after the site's own pages in the sidebar, each marked as leaving the site.
-nav_external_links:
-  - title: README
-    url: https://github.com/ebremer/lws-authn/blob/master/README.md
-  - title: Install guide
-    url: https://github.com/ebremer/lws-authn/blob/master/INSTALL.md
-  - title: Compliance
-    url: https://github.com/ebremer/lws-authn/blob/master/COMPLIANCE.md
-  - title: Changelog
-    url: https://github.com/ebremer/lws-authn/blob/master/CHANGELOG.md
-  - title: Security policy
-    url: https://github.com/ebremer/lws-authn/blob/master/SECURITY.md
-  - title: Contributing
-    url: https://github.com/ebremer/lws-authn/blob/master/CONTRIBUTING.md
 
 search_enabled: true
 heading_anchors: true
