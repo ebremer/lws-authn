@@ -30,7 +30,6 @@ normative requirements", not a Rec-level conformance certificate — the text ca
 | LWS 1.0 Authn Suite: Self-signed Identity (Controlled Identifiers) | W3C Working Draft **21 August 2026** | **21 September 2026 — "designed to work with subject identifiers that use HTTPS URIs as well as DID URIs"** |
 | LWS 1.0 Authn Suite: OpenID Connect | W3C Working Draft 3 August 2026 | unchanged |
 | LWS 1.0 Authn Suite: SAML 2.0 | W3C Working Draft 3 August 2026 | unchanged |
-| LWS 1.0 Authn Suite: Self-signed Identity using `did:key` | W3C Working Draft 3 August 2026 | **Discontinued 18 September 2026**, "in favor of lws10-authn-ssi-cid, which subsumes this specification". Not implemented: its endpoint has been removed |
 | Linked Web Storage Vocabulary | Group Note draft, 21 August 2026 | 21 September 2026 (adds `lws:StorageResource`; nothing here uses it) |
 | Controlled Identifiers (CID) 1.0 | **W3C Recommendation, 15 May 2025** | — |
 | Decentralized Identifiers (DIDs) 1.1 | W3C Candidate Recommendation Snapshot, 5 March 2026 | cited by the self-signed CID suite for DID documents |
@@ -226,8 +225,7 @@ Each is a decision, not an oversight; each names where the reasoning lives.
 | 6 | **Fetch happens before the signature is known good** | Required by the specification's cold-trust algorithm and unavoidable. The exposure is addressed instead: authenticated endpoints, rate limiting, SSRF vetting at resolution time, bounded timeouts and response size, and a per-host circuit breaker (**P0-3**, **P0-5**). The same applies to a `did:web` subject. |
 | 7 | **Only `did:key` and `did:web` are resolved** | The self-signed CID suite mandates no DID method. These two need no ledger and no third-party resolver; any other is refused by name rather than resolved through a service this provider would have to trust (**S-2**). |
 | 8 | **DID documents are read as JSON, not processed as JSON-LD** | DID 1.1 is a Candidate Recommendation and its JSON-LD context is not published at a stable URL, so there is no definition to bundle, and contexts are never fetched (see *Supported formats*). The structure the verifier reads — `id`, `authentication`, `verificationMethod`, `type`, `controller`, key material — is fixed by DID 1.1 and CID 1.0 rather than by the context (**S-3**). |
-| 9 | **The discontinued `did:key` suite has no endpoint** | The Working Group withdrew it in favour of the self-signed CID suite, which verifies `did:key` subjects, so its separate endpoint was removed rather than kept. A credential made for it verifies at `/lws-ssi-cid/verify` once it names its key with a `kid`. |
-| 10 | **No `subject_identifier_types_supported`** | Core defines it as LWS *authorization server* metadata. `lws-authn` is not an authorization server and publishes no such metadata; it belongs to `lws-server`, which would list `https`, `did:key` and `did:web` for subjects this provider verifies (**S-5**). |
+| 9 | **No `subject_identifier_types_supported`** | Core defines it as LWS *authorization server* metadata. `lws-authn` is not an authorization server and publishes no such metadata; it belongs to `lws-server`, which would list `https`, `did:key` and `did:web` for subjects this provider verifies (**S-5**). |
 
 ## Security posture
 

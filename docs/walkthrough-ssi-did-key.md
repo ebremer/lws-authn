@@ -6,10 +6,7 @@ nav_order: 4
 
 # Walkthrough: a self-signed `did:key` LWS identity
 
-> **There is no separate `did:key` suite any more.** The LWS Working Group discontinued it on 18
-> September 2026, "in favor of lws10-authn-ssi-cid, which subsumes this specification by specifying a
-> generalization of the mechanism described here", and this provider has removed its endpoint. A
-> `did:key` identity is verified by the **self-signed CID** suite, at `…/lws-ssi-cid/verify`, which
+> A `did:key` identity is verified by the **self-signed CID** suite, at `…/lws-ssi-cid/verify`, which
 > resolves the `did:key` to its DID document and checks the credential against it. That suite
 > **requires a `kid`**, naming the verification method (`<did>#<multibase>`).
 

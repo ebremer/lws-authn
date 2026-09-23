@@ -20,10 +20,6 @@ token bound to an identity** is used as an authentication credential — all thr
 - [**SAML 2.0**](https://w3c.github.io/lws-protocol/lws10-authn-saml/) — the credential is a signed
   SAML 2.0 `<Response>` whose `<NameID>` is the subject; trust in the IdP is established **out of band**.
 
-A fourth, the self-signed `did:key` suite, was discontinued by the Working Group on 18 September 2026 "in
-favor of lws10-authn-ssi-cid, which subsumes this specification". The self-signed CID suite verifies
-`did:key` subjects itself, so this provider no longer has a separate endpoint for it.
-
 The OpenID and self-signed-CID suites dereference the subject's
 [Controlled Identifier Document](https://www.w3.org/TR/cid-1.0/) and use **Apache Jena 6.2.0** for RDF;
 a `did:key` resolves locally with pure JDK crypto and a `did:web` is fetched over HTTPS; SAML uses
