@@ -20,7 +20,17 @@ and the changelog. Its source is [`docs/`](docs/).
 
 ## Quick start
 
-With JDK 21+, Maven, and a Keycloak 26.7.4 install at `$KC_HOME`:
+With Docker, from a checkout:
+
+```bash
+docker compose up --build --wait     # Keycloak 26.7.4 + lws-authn + a demo realm, at http://localhost:8080
+bash scripts/lws-demo.sh             # issue an ID Token whose sub is a WebID, and verify it
+```
+
+This is a development setup (admin `admin` / `admin`, plain HTTP); see
+[Run with Docker](https://ebremer.github.io/lws-authn/build.html#run-with-docker).
+
+Or, with JDK 21+, Maven, and a Keycloak 26.7.4 install at `$KC_HOME`:
 
 ```bash
 mvn clean package                                  # builds target/lws-authn-<version>.jar

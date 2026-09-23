@@ -17,6 +17,10 @@ standing up the **OpenID Connect** suite, which mounts at `…/realms/{realm}/lw
 The result is a Keycloak server running as a hardened `systemd` service behind an HTTPS reverse
 proxy, with the LWS provider registered and verified end-to-end.
 
+> **Only want to try it?** `docker compose up --build --wait` in a checkout starts Keycloak with the
+> provider and a demo realm on `http://localhost:8080` — see [Run with Docker](build.md#run-with-docker).
+> That is a development setup; this guide is for a server.
+
 ---
 
 ## Contents

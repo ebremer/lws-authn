@@ -72,7 +72,7 @@ The OpenID and self-signed-CID suites serialize CIDs with Jena as JSON-LD / Turt
 
 | Page | What it covers |
 |---|---|
-| [Build and deploy](build.md) | Building the provider JAR, and deploying it into Keycloak. |
+| [Build and deploy](build.md) | Trying it in Docker with a ready-made realm; building the provider JAR, and deploying it into Keycloak. |
 | [Install guide](INSTALL.md) | Deploying this on a server, start to finish. |
 | [Walkthroughs](walkthroughs.md) | A walkthrough per suite, each with a runnable demo script. |
 | [Reference](reference.md) | Each suite's configuration and endpoints, every setting, the security hardening and the limitations — and **the conformance statement**: which normative requirements each suite enforces, which are deferred to the relying party, and what a `"valid": true` actually asserts. Read it before integrating. |

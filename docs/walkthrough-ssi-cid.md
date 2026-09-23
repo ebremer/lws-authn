@@ -45,7 +45,10 @@ for some other purpose, or has marked `revoked` or let `expire`. The JWT must al
 
 - Keycloak **26.7.4** with the `lws-authn` provider deployed — see [Build and deploy](build.md).
 - `curl`, `jq`, and `openssl`.
-- For a quick local run: `bin/kc.sh start-dev` (admin/admin) at `http://localhost:8080`.
+- For a quick local run: `docker compose up --build --wait` in a checkout — see
+  [Run with Docker](build.md#run-with-docker) — which serves `http://localhost:8080` with admin/admin
+  and the `lws-demo` realm already imported. Or `bin/kc.sh start-dev` (admin/admin) at
+  `http://localhost:8080`.
 
 ---
 
@@ -68,6 +71,9 @@ The rest is the same thing by hand.
 ## Manual path
 
 ### 1. Allow *admin-managed* unmanaged attributes
+
+> **Running the Docker setup?** Its `lws-demo` realm is already configured this way, and has the user
+> `alice`; go on to step 2.
 
 Keycloak 26 rejects undeclared user attributes by default, so the public key (`lws_jwk`) would be
 dropped. Allow them once per realm — as **`ADMIN_EDIT`**: *Realm settings → User profile → (kebab) →
