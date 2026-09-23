@@ -1,0 +1,36 @@
+# Copyright Erich Bremer.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Keycloak with lws-authn and the `lws-demo` realm, ready for the walkthroughs and demo scripts:
+#
+#   docker compose up --build --wait
+#   bash scripts/lws-demo.sh
+#
+# Development only: plain HTTP, a database inside the container that `docker compose down` discards,
+# and the bootstrap admin admin/admin. See docs/build.md, "Run with Docker".
+
+services:
+  keycloak:
+    build: .
+    image: lws-authn-keycloak:dev
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      # The port must be the same inside and outside the container. The OpenID verifier dereferences
+      # the credential's own issuer, http://localhost:<port>/realms/…, and inside the container
+      # localhost is Keycloak itself — so that URL reaches it only if Keycloak listens on the port the
+      # host sees.
+      KC_HTTP_PORT: ${KC_PORT:-8080}
+      # …and the SSRF guard blocks loopback addresses unless they are allow-listed, for exactly that
+      # self-dereference. Never copy this into a deployment reachable by others.
+      LWS_AUTHN_ALLOWED_INTERNAL_HOSTS: localhost,127.0.0.1
+    ports:
+      - "${KC_PORT:-8080}:${KC_PORT:-8080}"
+    healthcheck:
+      # The image has no curl; bash's /dev/tcp is enough to ask the management port for readiness.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s

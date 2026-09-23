@@ -5,6 +5,61 @@ nav_order: 2
 
 # Build and deploy
 
+## Run with Docker
+
+The quickest way to try the suites. [`compose.yaml`](https://github.com/ebremer/lws-authn/blob/master/compose.yaml)
+builds the provider from your checkout into a Keycloak 26.7.4 image and starts it with a demo realm
+already imported. It needs only Docker with Compose: no JDK, Maven or Keycloak install.
+
+```bash
+docker compose up --build --wait    # build and start; returns once Keycloak is ready
+bash scripts/lws-demo.sh            # or any walkthrough
+docker compose down                 # stop, and discard everything
+```
+
+Keycloak is at `http://localhost:8080`, and its admin console signs in as `admin` / `admin`. The
+image's build skips the tests, so run `mvn verify` for those.
+
+The realm is [`examples/lws-demo-realm.json`](https://github.com/ebremer/lws-authn/blob/master/examples/lws-demo-realm.json),
+which is also what the walkthroughs import by hand:
+
+| | |
+|---|---|
+| Realm | `lws-demo` |
+| Client | `lws-app`: public, *Direct access grants* on, with the **LWS WebID Subject** mapper |
+| User | `alice`, password `alice`, whose WebID is `http://localhost:8080/realms/lws-demo/lws/cid/fb147f85-59e9-4288-a907-38aa2d4a33b5` |
+| User profile | Unmanaged attributes `ADMIN_EDIT`: an admin can set `lws_jwk`, the user cannot |
+
+The demo scripts find all of this already in place and go straight to minting and verifying
+credentials. The walkthroughs' defaults, `KC_URL=http://localhost:8080` and `admin` / `admin`, are this
+container's.
+
+After changing the code, run `docker compose up --build --wait` again. It rebuilds the image and
+replaces the container, so the realm is imported afresh.
+
+**To use another port**, set `KC_PORT` for both commands:
+
+```bash
+KC_PORT=8081 docker compose up --build --wait
+KC_URL=http://localhost:8081 bash scripts/lws-demo.sh
+```
+
+Keycloak then listens on that port inside the container too, and it has to. The OpenID verifier
+dereferences the credential's own issuer, `http://localhost:<port>/realms/lws-demo`, and inside the
+container `localhost` is Keycloak itself. So the issuer URL works only if Keycloak listens on the
+port the host sees.
+
+**This is a development setup**, and differs from a deployment in ways that matter:
+
+- `start-dev` serves plain HTTP and takes its hostname from each request.
+- The database lives in the container. `docker compose stop` keeps it; `down` discards it.
+- `LWS_AUTHN_ALLOWED_INTERNAL_HOSTS=localhost,127.0.0.1` opens the SSRF guard to loopback, which the
+  self-dereference above needs. On a server anyone else can reach, that setting lets a credential
+  point the verifier at the server's own internal services.
+- The admin and `alice` have well-known passwords, and `lws-app` allows the password grant.
+
+For a real server, follow the [install guide](INSTALL.md).
+
 ## Build
 
 Requires JDK 21+ and Maven. (The build compiles to Java 21 bytecode so the provider loads in

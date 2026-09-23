@@ -1,0 +1,6 @@
+# The image builds from pom.xml, src/ and examples/lws-demo-realm.json only; keep everything else
+# out of the build context so it stays small and a local target/ never leaks into the image.
+*
+!pom.xml
+!src/
+!examples/lws-demo-realm.json

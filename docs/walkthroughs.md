@@ -9,7 +9,9 @@ has_toc: false
 
 One per suite. Each starts from a freshly deployed provider, ends with a credential that verifies, and
 explains what an LWS server does with it. Each has its own prerequisites; all of them assume Keycloak
-is running with `lws-authn` deployed — see [Build and deploy](build.md).
+is running with `lws-authn` deployed — see [Build and deploy](build.md). The quickest way to get that
+is `docker compose up --build --wait` in a checkout, which also imports the realm the scripts use; see
+[Run with Docker](build.md#run-with-docker).
 
 | Walkthrough | What you end up with | Demo script |
 |-------------|----------------------|-------------|
@@ -21,5 +23,6 @@ is running with `lws-authn` deployed — see [Build and deploy](build.md).
 The demo scripts are the *fast path* of each walkthrough: one command that does everything the
 walkthrough then does by hand. Run them from a checkout of the
 [repository](https://github.com/ebremer/lws-authn). Each reads its settings from the environment —
-`KC_URL`, `REALM` and the rest are listed at the top of the script — and defaults to `kc.sh start-dev`
-at `http://localhost:8080` with the bootstrap admin `admin` / `admin`.
+`KC_URL`, `REALM` and the rest are listed at the top of the script — and defaults to Keycloak at
+`http://localhost:8080` with the bootstrap admin `admin` / `admin`, which is what both the Docker
+setup and `kc.sh start-dev` give you.

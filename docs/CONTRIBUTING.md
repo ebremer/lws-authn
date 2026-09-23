@@ -15,6 +15,10 @@ mvn clean verify      # 179 unit tests + 24 in LwsAuthIT (a real Keycloak 26.7.4
 mvn clean test        # unit tests only, no Docker needed
 ```
 
+To try a change by hand, `docker compose up --build --wait` builds the checkout into a Keycloak
+container with the demo realm imported, and the scripts in `scripts/` run against it — see
+[Run with Docker](build.md#run-with-docker). Stop it before `mvn verify`: both want port 8080.
+
 `LwsAuthIT` **binds host port 8080 and cannot run in parallel with itself** — the OpenID verifier
 dereferences its own issuer, so that URL has to resolve to Keycloak from both the test JVM and inside
 the container. The suite checks the port first and tells you if something else holds it; the full

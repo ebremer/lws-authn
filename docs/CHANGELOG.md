@@ -38,6 +38,13 @@ Identifiers 1.0 §3.3, which that suite cites normatively for selecting a key.
 
 ### Added
 
+- **A Docker setup for trying the suites** (`Dockerfile`, `compose.yaml`). `docker compose up --build
+  --wait` builds the provider from the checkout into a Keycloak 26.7.4 image and starts it with the
+  `lws-demo` realm imported, so every demo script runs against it without setup. It is for
+  development only. See [Run with Docker](build.md#run-with-docker).
+- **`examples/lws-demo-realm.json` is ready for the self-signed CID suite.** Its user profile sets
+  unmanaged attributes to `ADMIN_EDIT`, so an admin can register `lws_jwk` and the user cannot. `alice`
+  has a fixed id, so her WebID is the same on every import.
 - **DID subjects in the self-signed CID suite** (`/lws-ssi-cid/verify`). The subject is resolved to its
   DID document and then validated exactly as an HTTPS subject's controlled identifier document is:
   - **`did:key`** — expanded locally into the document the did:key Method v0.9 defines (a `Multikey`

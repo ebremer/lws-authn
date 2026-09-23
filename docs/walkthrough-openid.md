@@ -36,8 +36,10 @@ identity is self-describing.
 - Keycloak **26.7.4** with the `lws-authn` provider deployed — see [Build and deploy](build.md) (build
   → copy `target/lws-authn-<version>.jar` to `providers/` → `kc.sh build` → `kc.sh start`).
 - `curl` and `jq`.
-- For a quick local run: `bin/kc.sh start-dev` (bootstrap admin `admin` / `admin`), reachable at
-  `http://localhost:8080`.
+- For a quick local run: `docker compose up --build --wait` in a checkout — see
+  [Run with Docker](build.md#run-with-docker) — which serves `http://localhost:8080` with admin/admin
+  and the `lws-demo` realm already imported. Or `bin/kc.sh start-dev` (bootstrap admin `admin` /
+  `admin`), reachable at `http://localhost:8080`.
 
 ---
 
@@ -64,6 +66,8 @@ The rest of this document is the same thing done by hand.
 ## Manual path
 
 ### 1. Set up the realm, client, mapper and user
+
+> **Running the Docker setup?** It has already imported this realm; go on to step 2.
 
 **Either** import the bundled realm,
 [`examples/lws-demo-realm.json`](https://github.com/ebremer/lws-authn/blob/master/examples/lws-demo-realm.json):
