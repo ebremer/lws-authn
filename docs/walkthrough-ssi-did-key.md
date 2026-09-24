@@ -1,5 +1,5 @@
 ---
-title: "Self-signed did:key"
+title: "did:key identity"
 parent: Walkthroughs
 nav_order: 4
 ---

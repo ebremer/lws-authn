@@ -7,10 +7,11 @@ has_toc: false
 
 # Walkthroughs
 
-One per suite. Each starts from a freshly deployed provider, ends with a credential that verifies, and
-explains what an LWS server does with it. Each has its own prerequisites; all of them assume Keycloak
-is running with `lws-authn` deployed — see [Build and deploy](build.md). The quickest way to get that
-is `docker compose up --build --wait` in a checkout, which also imports the realm the scripts use; see
+One per suite, plus one for a `did:key` identity, which the self-signed CID suite verifies. Each starts
+from a freshly deployed provider, ends with a credential that verifies, and explains what an LWS server
+does with it. Each has its own prerequisites; all of them assume Keycloak is running with `lws-authn`
+deployed — see [Build and deploy](build.md). The quickest way to get that is
+`docker compose up --build --wait` in a checkout, which also imports the realm the scripts use; see
 [Run with Docker](build.md#run-with-docker).
 
 | Walkthrough | What you end up with | Demo script |
@@ -18,7 +19,7 @@ is `docker compose up --build --wait` in a checkout, which also imports the real
 | [OpenID Connect](walkthrough-openid.md) | An ID Token whose `sub` is a WebID; Keycloak issues the token and hosts the document the WebID resolves to. | [`scripts/lws-demo.sh`](https://github.com/ebremer/lws-authn/blob/master/scripts/lws-demo.sh) |
 | [Self-signed CID](walkthrough-ssi-cid.md) | A JWT the agent signs itself, verified against the public key Keycloak publishes in the agent's controlled identifier document. | [`scripts/ssi-cid-demo.sh`](https://github.com/ebremer/lws-authn/blob/master/scripts/ssi-cid-demo.sh) |
 | [SAML 2.0](walkthrough-saml.md) | A signed SAML Response, verified against an IdP certificate obtained out of band. | None — producing a signed Response takes a SAML login flow. |
-| [Self-signed did:key](walkthrough-ssi-did-key.md) | A JWT signed with the key its `did:key` identifier embeds; nothing is hosted. Verified by the self-signed CID suite. | [`scripts/ssi-did-key-demo.sh`](https://github.com/ebremer/lws-authn/blob/master/scripts/ssi-did-key-demo.sh) |
+| [`did:key` identity](walkthrough-ssi-did-key.md) | A JWT signed with the key its `did:key` identifier embeds; nothing is hosted. Verified by the self-signed CID suite. | [`scripts/ssi-did-key-demo.sh`](https://github.com/ebremer/lws-authn/blob/master/scripts/ssi-did-key-demo.sh) |
 
 The demo scripts are the *fast path* of each walkthrough: one command that does everything the
 walkthrough then does by hand. Run them from a checkout of the
