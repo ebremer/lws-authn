@@ -25,10 +25,10 @@ import org.keycloak.Config;
  * instead, in a holder each factory <em>contributes</em> to from its own {@link Config.Scope} at
  * {@code init} time, before any request is served.</p>
  *
- * <p>Contribution rather than assignment: four factories are initialised, each with its own scope, and
+ * <p>Contribution rather than assignment: three factories are initialised, each with its own scope, and
  * a value that is server-wide belongs to whichever of them actually names it. A factory whose scope
  * says nothing about a setting leaves it as it was, so configuring {@code allowed-internal-hosts} on
- * the {@code lws} provider alone still configures it for all four. When two providers set the same
+ * the {@code lws} provider alone still configures it for all three. When two providers set the same
  * server-wide value to different things the last one initialised wins, and says so in the log — there
  * is only one outbound HTTP client to configure.</p>
  *

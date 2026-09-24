@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Access control for the four credential-verification endpoints.
+ * Access control for the three credential-verification endpoints.
  */
 package com.ebremer.lws.authn.verify;
 

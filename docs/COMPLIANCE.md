@@ -62,14 +62,14 @@ Core §4.1 requires *subject* (URI), *issuer* (URI) and *client* on every creden
 audience restriction naming the authorization server, §4.2 requires a signature, and §4.3 requires each
 suite to be associated with a token type URI.
 
-| Requirement | OpenID | SSI CID | SAML | did:key |
-|---|---|---|---|---|
-| subject REQUIRED | `subjectPresent` | `selfIssued` | `NameID` from the covered assertion | `subjectIsDidKey` |
-| issuer REQUIRED | `issuerPresent` | `selfIssued` | `issuerPresent` | `selfIssued` |
-| client REQUIRED | `clientPresent` (`azp`) | `selfIssued` (`client_id`) | `recipientPresent` | `selfIssued` (`client_id`) |
-| audience restriction | `audienceMatched` | `audiencePresent` + `audienceMatched` | `audiencePresent` + `audienceMatched` | `audiencePresent` + `audienceMatched` |
-| signed (§4.2) | `signatureValid` | `signatureValid` | `signatureValid` | `signatureValid` |
-| token type URI (§4.3) | reported as `tokenType` on every result | | | |
+| Requirement | OpenID | SSI CID | SAML |
+|---|---|---|---|
+| subject REQUIRED | `subjectPresent` | `selfIssued` | `NameID` from the covered assertion |
+| issuer REQUIRED | `issuerPresent` | `selfIssued` | `issuerPresent` |
+| client REQUIRED | `clientPresent` (`azp`) | `selfIssued` (`client_id`) | `recipientPresent` |
+| audience restriction | `audienceMatched` | `audiencePresent` + `audienceMatched` | `audiencePresent` + `audienceMatched` |
+| signed (§4.2) | `signatureValid` | `signatureValid` | `signatureValid` |
+| token type URI (§4.3) | reported as `tokenType` on every result | | |
 
 Every result also reports the LWS `client` and the suite's `tokenType`, ready for an RFC 8693 exchange,
 and fails closed when the client identifier is absent.

@@ -19,7 +19,7 @@ to host and nothing to fetch. Keycloak's only role is to verify.
 | Party | Role |
 |-------|------|
 | **The agent** | Holds a private key and a `did:key` identifier derived from its public key; signs its own JWTs. |
-| **Keycloak + `lws-authn`** | A verifier. It hosts nothing and needs no realm/user setup for this suite. |
+| **Keycloak + `lws-authn`** | A verifier. It hosts nothing and needs no realm/user setup for a `did:key`. |
 | **An LWS server** | The verifier — decodes the key from the credential's `sub` `did:key` and validates the signature. |
 
 **The idea:** a `did:key` is `did:key:z<multibase-base58btc(<multicodec><public-key>)>`. The key type
