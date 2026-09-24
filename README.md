@@ -47,11 +47,6 @@ has a demo script in [`scripts/`](scripts/).
 Report a vulnerability by email, not in an issue — see the
 [security policy](https://ebremer.github.io/lws-authn/SECURITY.html).
 
-## Contributing
-
-See the [contributing guide](https://ebremer.github.io/lws-authn/CONTRIBUTING.html). The backlog is
-[`TODO.md`](TODO.md), written as a review against the specifications.
-
 ## License
 
 Apache-2.0 — see [`LICENSE`](LICENSE). Every source file carries `SPDX-License-Identifier: Apache-2.0`.
