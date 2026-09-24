@@ -317,7 +317,7 @@ You opt specific hosts back in with a comma-separated list, via **any** of:
 - JVM system property `lws.authn.allowedInternalHosts`, or
 - the build-time provider option
   `kc.sh build --spi-realm-restapi-extension--lws--allowed-internal-hosts=…` (set it on any one of the
-  four providers; it is a server-wide setting).
+  three providers; it is a server-wide setting).
 
 We wire the environment variable into the systemd unit in the next steps. For a single-box install
 where the server can't reach its own public IP, set it to your hostname (and/or `127.0.0.1`); leave
@@ -333,7 +333,7 @@ server-wide setting cannot open a hole here.
 
 ### 9d. Decide who may call `/verify`
 
-The four `…/verify` endpoints are **authenticated by default**, because verification is expensive out
+The three `…/verify` endpoints are **authenticated by default**, because verification is expensive out
 of proportion to the request: a single POST makes this server dereference a URL the caller chose, run
 OpenID Connect Discovery against it and fetch its JWKS — before the credential's signature is known
 good, since that is the order the specification's cold-trust algorithm requires.
@@ -379,7 +379,7 @@ need no `kc.sh build`.
 | Outbound response cap (bytes) | `LWS_AUTHN_HTTP_MAX_RESPONSE_BYTES` | `lws.authn.http.maxResponseBytes` | `http-max-response-bytes` | `262144` |
 | Clock skew on `exp`/`nbf`/`<Conditions>` (s) | `LWS_AUTHN_CLOCK_SKEW_SECONDS` | `lws.authn.clockSkewSeconds` | `clock-skew-seconds` | `60` |
 
-The last three are server-wide: set them on any one provider and all four use them. Out-of-range
+The last three are server-wide: set them on any one provider and all three use them. Out-of-range
 values are clamped rather than honoured.
 
 **Turning a suite off.** `LWS_AUTHN_ENABLED=false` (or `--spi-realm-restapi-extension--lws-saml--enabled=false`

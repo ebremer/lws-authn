@@ -201,7 +201,8 @@ and the deprecation headers
 - [x] **S-1 · The `did:key` suite was discontinued** (w3c/lws-protocol#229, 18 September 2026) "in favor
   of lws10-authn-ssi-cid, which subsumes this specification by specifying a generalization of the
   mechanism described here". **Done:** the self-signed CID verifier resolves `did:key` subjects (S-2);
-  the old endpoint is deprecated (S-4). Every document now says the suite is discontinued.
+  the old endpoint is removed (S-16). The documentation describes three suites, and the CHANGELOG
+  records the removal.
 
 - [x] **S-2 · The self-signed CID suite "is designed to work with ... DID URIs"** (w3c/lws-protocol#233).
   `SelfSignedCidVerifier` fetched `sub` over HTTP, and `SsrfGuard` refuses any scheme but http(s), so a
@@ -225,11 +226,12 @@ and the deprecation headers
   discontinued draft unchanged, so existing callers keep working — including credentials with no `kid`,
   which the self-signed CID suite requires. Every response carries `Deprecation: @1789689600` (RFC
   9745) and `Link: <../lws-ssi-cid/verify>; rel="successor-version"`; Keycloak logs a warning at
-  startup; `enabled=false` on the provider turns it off (divergence 9).
+  startup; `enabled=false` on the provider turns it off. **Superseded by S-16:** the endpoint was
+  removed instead.
 
 - [x] **S-5 · Core added `subject_identifier_types_supported`** to LWS authorization server metadata
   (w3c/lws-protocol#227). **Not applicable:** `lws-authn` is not an authorization server and publishes
-  no metadata (divergence 10). **Carried to `lws-server`**, which should advertise
+  no metadata (divergence 9). **Carried to `lws-server`**, which should advertise
   `["https", "did:key", "did:web"]` once it accepts what this verifier does.
 
 - [x] **S-6 · Keys not named by `authentication` were usable to authenticate.** Both collectors accepted
@@ -284,6 +286,13 @@ and the deprecation headers
   titanium-json-ld and caffeine really are older on the server; for the other two, relocation keeps
   the provider independent of what a Keycloak release ships. `README.md` § *Build* matches.
 
+- [x] **S-16 · Decide when to remove `/lws-ssi-did-key`.** No `Sunset` is set. Removing it is a breaking
+  change for any caller still minting `kid`-less `did:key` credentials. **Done:** removed, with its
+  provider id and settings, before any release carried the deprecation (`799048f`). A caller gets `404`
+  there and sends the same credential, with a `kid`, to `/lws-ssi-cid/verify`; the CHANGELOG's
+  *Removed* entry and upgrade note say so. `LwsAuthIT.theDiscontinuedDidKeyEndpointIsGone` checks the
+  `404`; like S-15's tests, it was written where there is no Docker.
+
 - [ ] **S-13 · Tag the 0.2.0 release.** *Versioning* in `CHANGELOG.md` says to tag each release commit
   `lws-authn-<version>`; `e539362` (the 0.2.0 bump, the build deployed to both hellion servers) has no
   tag. Left for the maintainer.
@@ -294,9 +303,6 @@ and the deprecation headers
 - [ ] **S-15 · Run the two new `LwsAuthIT` tests.** They were written where there is no Docker, so they
   compile and their behaviour was exercised by the local end-to-end run, but CI is the first place they
   will run as written.
-
-- [ ] **S-16 · Decide when to remove `/lws-ssi-did-key`.** No `Sunset` is set. Removing it is a breaking
-  change for any caller still minting `kid`-less `did:key` credentials.
 
 ---
 

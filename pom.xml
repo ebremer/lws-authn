@@ -8,9 +8,9 @@
     <packaging>jar</packaging>
 
     <name>lws-authn</name>
-    <description>Keycloak provider implementing all four W3C Linked Web Storage 1.0 authentication
-        suites: OpenID Connect, Self-signed Identity (Controlled Identifiers), SAML 2.0, and
-        Self-signed Identity using did:key (https://w3c.github.io/lws-protocol/).</description>
+    <description>Keycloak provider implementing all three W3C Linked Web Storage 1.0 authentication
+        suites: OpenID Connect, Self-signed Identity (Controlled Identifiers), and SAML 2.0
+        (https://w3c.github.io/lws-protocol/).</description>
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>

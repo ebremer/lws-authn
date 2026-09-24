@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Integration test: deploys the built provider JAR into a real Keycloak — the version in the POM — via Testcontainers and
- * runs the same end-to-end smoke flow that was validated by hand — the mapper fires, all four suite
+ * runs the same end-to-end smoke flow that was validated by hand — the mapper fires, all three suite
  * endpoints mount, shaded Jena serves/parses RDF, and the OpenID and did:key credentials verify.
  *
  * Requires Docker. Runs in `mvn verify` (failsafe, after the JAR is packaged) and is skipped

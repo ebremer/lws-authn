@@ -8,7 +8,7 @@ nav_order: 2
 
 ## Securing the verify endpoints
 
-The four `…/verify` endpoints are **authenticated by default**. Verification is expensive out of
+The three `…/verify` endpoints are **authenticated by default**. Verification is expensive out of
 proportion to the request that triggers it: for the OpenID and self-signed-CID suites a single POST
 makes this server dereference a URL the caller chose, run OpenID Connect Discovery against it and
 fetch its JWKS — all *before* the credential's signature is known good, because that is the order the
