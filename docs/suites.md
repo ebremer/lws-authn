@@ -107,8 +107,8 @@ A `kid` may name the method by its full identifier, as above, or by its fragment
 
 Walkthrough + runnable demo: **[Self-signed CID walkthrough](walkthrough-ssi-cid.md)** /
 **[`scripts/ssi-cid-demo.sh`](https://github.com/ebremer/lws-authn/blob/master/scripts/ssi-cid-demo.sh)**;
-for a `did:key` subject, **[`did:key` identity walkthrough](walkthrough-ssi-did-key.md)** /
-**[`scripts/ssi-did-key-demo.sh`](https://github.com/ebremer/lws-authn/blob/master/scripts/ssi-did-key-demo.sh)**.
+for a `did:key` subject, **[`did:key` identity walkthrough](walkthrough-did-key.md)** /
+**[`scripts/did-key-demo.sh`](https://github.com/ebremer/lws-authn/blob/master/scripts/did-key-demo.sh)**.
 
 ---
 
