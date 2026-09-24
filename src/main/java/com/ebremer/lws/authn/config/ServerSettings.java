@@ -61,7 +61,7 @@ public final class ServerSettings {
     public static final long DEFAULT_MAX_RESPONSE_BYTES = 256L * 1024L;
 
     /**
-     * Leeway allowed on {@code exp}, {@code nbf} and the SAML {@code Conditions} window. All three JWT
+     * Leeway allowed on {@code exp}, {@code nbf} and the SAML {@code Conditions} window. Both JWT
      * suites say a verifier "MAY provide for some small leeway to account for clock skew".
      */
     public static final long DEFAULT_CLOCK_SKEW_SECONDS = 60;
