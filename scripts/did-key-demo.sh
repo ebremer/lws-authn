@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# ssi-did-key-demo.sh — mint a self-signed did:key credential and verify it end to end.
+# did-key-demo.sh — mint a self-signed did:key credential and verify it end to end.
 #
 # A did:key needs no realm/user/hosting — the public key lives in the identifier — so this only mints
 # a key + JWT and calls a verify endpoint. It uses Node for the crypto (P-256/Ed25519 key generation,
@@ -16,9 +16,9 @@
 # the verifier is realm-agnostic).
 #
 # Usage:
-#   bash scripts/ssi-did-key-demo.sh
-#   KEYTYPE=ed25519 KC_URL=https://kc.example REALM=myrealm bash scripts/ssi-did-key-demo.sh
-#   VERIFY_TOKEN=$ACCESS_TOKEN bash scripts/ssi-did-key-demo.sh
+#   bash scripts/did-key-demo.sh
+#   KEYTYPE=ed25519 KC_URL=https://kc.example REALM=myrealm bash scripts/did-key-demo.sh
+#   VERIFY_TOKEN=$ACCESS_TOKEN bash scripts/did-key-demo.sh
 
 set -euo pipefail
 

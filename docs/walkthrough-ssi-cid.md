@@ -37,7 +37,7 @@ for some other purpose, or has marked `revoked` or let `expire`. The JWT must al
 > locally from the key it embeds — and a `did:web`, whose document it fetches from
 > `https://<domain>/…/did.json`. Set `sub`, `iss` and `client_id` to the DID and `kid` to the
 > verification method id (`did:key:z…#z…`, `did:web:example.com#key-1`); see
-> the [`did:key` walkthrough](walkthrough-ssi-did-key.md) and [*DID subjects*](suites.md#did-subjects).
+> the [`did:key` walkthrough](walkthrough-did-key.md) and [*DID subjects*](suites.md#did-subjects).
 
 ---
 

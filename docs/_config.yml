@@ -31,6 +31,7 @@ plugins:
   - jekyll-include-cache   # the theme's {% include_cached %}; the build fails without it
   - jekyll-seo-tag         # the theme's {% seo %}; likewise
   - jekyll-sitemap
+  - jekyll-redirect-from   # a page's redirect_from keeps its old URL working after a rename
 
 # Every page gets the theme's layout without having to name it.
 #

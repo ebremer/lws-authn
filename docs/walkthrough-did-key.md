@@ -2,6 +2,8 @@
 title: "did:key identity"
 parent: Walkthroughs
 nav_order: 4
+redirect_from:
+  - /walkthrough-ssi-did-key.html
 ---
 
 # Walkthrough: a self-signed `did:key` LWS identity
@@ -40,12 +42,12 @@ client_id ==` the `did:key`, and the verifier reconstructs the public key from i
 
 ## Fast path — one script
 
-Run [`scripts/ssi-did-key-demo.sh`](https://github.com/ebremer/lws-authn/blob/master/scripts/ssi-did-key-demo.sh)
+Run [`scripts/did-key-demo.sh`](https://github.com/ebremer/lws-authn/blob/master/scripts/did-key-demo.sh)
 from a checkout of the repository:
 
 ```bash
-bash scripts/ssi-did-key-demo.sh            # P-256 (zDn…, ES256)
-KEYTYPE=ed25519 bash scripts/ssi-did-key-demo.sh   # Ed25519 (z6Mk…, EdDSA)
+bash scripts/did-key-demo.sh            # P-256 (zDn…, ES256)
+KEYTYPE=ed25519 bash scripts/did-key-demo.sh   # Ed25519 (z6Mk…, EdDSA)
 ```
 
 It mints a keypair, derives the `did:key`, self-signs a JWT with `kid` set to the verification method
