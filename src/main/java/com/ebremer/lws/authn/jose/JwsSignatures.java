@@ -16,10 +16,9 @@ import org.keycloak.jose.jws.JWSInput;
 /**
  * Verifies a JWS signature (RFC 7515 §5.2) without a Keycloak session.
  *
- * <p>Used by the did:key verifier, which has never needed one, and by the self-signed CID verifier
- * when it runs outside Keycloak (its unit tests). Inside Keycloak the self-signed CID verifier goes
- * through Keycloak's own {@code SignatureProvider}, so the crypto provider an operator configured —
- * including FIPS — is the one that decides.</p>
+ * <p>Used by the self-signed CID verifier when it runs outside Keycloak (its unit tests). Inside
+ * Keycloak that verifier goes through Keycloak's own {@code SignatureProvider}, so the crypto provider
+ * an operator configured — including FIPS — is the one that decides.</p>
  *
  * <p>Only the asymmetric algorithms a self-issued credential can use with the key types this provider
  * decodes are supported. Everything else, {@code none} and {@code HS*} included, verifies as

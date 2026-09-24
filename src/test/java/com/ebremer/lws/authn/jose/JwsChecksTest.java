@@ -21,8 +21,8 @@ import org.junit.jupiter.api.Test;
 import org.keycloak.jose.jws.JWSInput;
 
 /**
- * The checks all three JWT suites share. Getting these wrong once is getting them wrong three times,
- * which is why they live in one place.
+ * The checks both JWT suites share. Getting these wrong once is getting them wrong twice, which is
+ * why they live in one place.
  */
 class JwsChecksTest {
 

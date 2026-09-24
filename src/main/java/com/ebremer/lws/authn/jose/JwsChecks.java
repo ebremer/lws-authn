@@ -3,8 +3,8 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Checks shared by the three JWT-based authentication suites, so OpenID, self-signed CID and
- * did:key cannot drift apart on the parts of RFC 7515 they all have to get right.
+ * Checks shared by the two JWT-based authentication suites, so OpenID and self-signed CID cannot
+ * drift apart on the parts of RFC 7515 they both have to get right.
  */
 package com.ebremer.lws.authn.jose;
 
@@ -119,7 +119,7 @@ public final class JwsChecks {
     }
 
     /**
-     * Leeway allowed on {@code exp} and {@code nbf}. All three JWT suites say a verifier "MAY provide
+     * Leeway allowed on {@code exp} and {@code nbf}. Both JWT suites say a verifier "MAY provide
      * for some small leeway to account for clock skew"; Keycloak's own {@code isActive()} allows 10
      * seconds on {@code nbf} and none at all on {@code exp}, so a credential could be refused by a
      * server whose clock ran a second fast. The 60-second default matches what the SAML verifier
