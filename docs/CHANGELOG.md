@@ -39,6 +39,12 @@ Identifiers 1.0 §3.3, which that suite cites normatively for selecting a key.
   publishes no such metadata; the field belongs in `lws-server`.
 - The rest — ETag rules, the `lws10-index` rename, `lws:StorageResource`, straight quotes — is storage
   or editorial and touches nothing in this provider. The OpenID and SAML suites have not changed.
+- **Re-reviewed against the specifications as of 28 September 2026** (`w3c/lws-protocol` at `9b03b32`):
+  no normative change since `3ddc642`, so no code change. Core and the self-signed CID suite were
+  published as Working Drafts on 21 September 2026 from the text reviewed here; the `did:key` suite's
+  Discontinued Draft snapshot was prepared for publication on 29 September. The conformance statement's
+  table of published versions was stale, and it named a 21 August vocabulary draft that was never
+  published (the latest is the Group Note Draft of 14 July 2026). It is corrected.
 
 ### Added
 

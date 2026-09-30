@@ -10,8 +10,10 @@ nav_order: 5
 each suite enforces, which are deferred to the relying party, and what is supported. It is written for
 someone integrating against this provider, who needs to know what a `"valid": true` actually asserts.
 
-**Last reviewed:** 22 September 2026, against the editor's drafts of 21 September 2026
-(`w3c/lws-protocol` at `3ddc642`) and the code in this tree. Previous review: 3 September 2026.
+**Last reviewed:** 30 September 2026, against the specifications as they stood on 28 September 2026
+(`w3c/lws-protocol` at `9b03b32`) and the code in this tree. No normative text changed after the
+previous review of 22 September 2026, which was against `3ddc642`: the four commits since touch only the
+discontinued `did:key` suite's snapshot, the README and the wiki. Earlier review: 3 September 2026.
 
 Item ids like **P0-3** refer to [`TODO.md`](https://github.com/ebremer/lws-authn/blob/master/TODO.md), which carries the reasoning and the history.
 Where this document says a check exists, it names the field that appears in the `checks` object of the
@@ -24,13 +26,14 @@ verify response, so a claim here can be tested against a real response.
 These are **W3C Working Drafts**, not Recommendations. Conformance here means "matches the published
 normative requirements", not a Rec-level conformance certificate — the text can still change.
 
-| Document | Latest published version | Editor's draft, as reviewed |
+| Document | Latest published version, 28 September 2026 | Editor's draft, as reviewed |
 |---|---|---|
-| Linked Web Storage Protocol 1.0 (core) | W3C Working Draft **21 August 2026** | 21 September 2026 — adds authorization server metadata `subject_identifier_types_supported`, which does not apply here (see *Known divergences*) |
-| LWS 1.0 Authn Suite: Self-signed Identity (Controlled Identifiers) | W3C Working Draft **21 August 2026** | **21 September 2026 — "designed to work with subject identifiers that use HTTPS URIs as well as DID URIs"** |
+| Linked Web Storage Protocol 1.0 (core) | W3C Working Draft **21 September 2026** | same text — adds authorization server metadata `subject_identifier_types_supported`, which does not apply here (see *Known divergences*) |
+| LWS 1.0 Authn Suite: Self-signed Identity (Controlled Identifiers) | W3C Working Draft **21 September 2026** | same text — **"designed to work with subject identifiers that use HTTPS URIs as well as DID URIs"** |
 | LWS 1.0 Authn Suite: OpenID Connect | W3C Working Draft 3 August 2026 | unchanged |
 | LWS 1.0 Authn Suite: SAML 2.0 | W3C Working Draft 3 August 2026 | unchanged |
-| Linked Web Storage Vocabulary | Group Note draft, 21 August 2026 | 21 September 2026 (adds `lws:StorageResource`; nothing here uses it) |
+| LWS 1.0 Authn Suite: Self-signed Identity using did:key | W3C Working Draft 3 August 2026; published as a **Discontinued Draft on 29 September 2026** | discontinued 18 September 2026 in favour of the self-signed CID suite, which verifies `did:key` subjects |
+| Linked Web Storage Vocabulary | W3C Group Note Draft, **14 July 2026** | 21 September 2026 (adds `lws:StorageResource`; nothing here uses it) |
 | Controlled Identifiers (CID) 1.0 | **W3C Recommendation, 15 May 2025** | — |
 | Decentralized Identifiers (DIDs) 1.1 | W3C Candidate Recommendation Snapshot, 5 March 2026 | cited by the self-signed CID suite for DID documents |
 | The did:key Method | W3C CCG Draft Community Group Report, v0.9 | how a `did:key` expands to its DID document |
