@@ -50,6 +50,10 @@ behaviours are covered by tests — `mvn test` for the unit tests, `mvn verify` 
   up front when its declared length does, and the connection is aborted rather than read to the end;
   and one caller may have at most `http-max-concurrent-per-caller` (4) fetches in flight, so a single
   caller cannot occupy the connection pool every verifier shares.
+- **Who may call verify.** In the default `bearer` mode the caller must hold the realm role
+  `lws-verifier` (configurable), checked against the user's current role mappings, so revoking it takes
+  effect immediately. Any user of the realm — including a self-registered one — used to be enough, and
+  every verify request makes this server fetch URLs the caller chose.
 - **Rate limits.** Each verify endpoint admits `rate-limit` requests a minute (60) per caller address —
   an IPv6 address by its `/64` — and, in `bearer` mode, per authenticated user, which no header can
   spoof. Behind a reverse proxy the address is what the proxy forwards, so the proxy must overwrite

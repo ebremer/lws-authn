@@ -80,7 +80,8 @@ curl -s -X POST "$KC/realms/$REALM/lws-saml/verify" \
 ```
 
 > `Authorization` identifies **you**, the caller: the `…/verify` endpoints are authenticated by
-> default. The credential being checked always travels in the request body. See
+> default, and the caller must hold the realm role `lws-verifier`. The credential being checked always
+> travels in the request body. See
 > [Securing the verify endpoints](configuration.md#securing-the-verify-endpoints).
 
 The assertion must also satisfy the parts of SAML 2.0 that make a bearer assertion an authentication

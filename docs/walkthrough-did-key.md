@@ -36,7 +36,8 @@ client_id ==` the `did:key`, and the verifier reconstructs the public key from i
 - `curl`, `jq`, and `node` (Node is used to mint the key/JWT; base58btc is impractical in pure shell).
 - For a quick local run: `docker compose up --build --wait` in a checkout — see
   [Run with Docker](build.md#run-with-docker) — which serves `http://localhost:8080` with admin/admin.
-  The script needs no realm of its own; it uses `master`.
+  The script needs no realm of its own; it uses `master`, and calls `/verify` as the `admin` user,
+  whom it first grants the realm role `lws-verifier` that a caller needs.
 
 ---
 
@@ -96,7 +97,8 @@ curl -s -X POST "$KC/realms/$REALM/lws-ssi-cid/verify" \
 ```
 
 > `Authorization` identifies **you**, the caller: the `…/verify` endpoints are authenticated by
-> default. The credential being checked always travels in the request body. See
+> default, and the caller must hold the realm role `lws-verifier`. The credential being checked always
+> travels in the request body. See
 > [Securing the verify endpoints](configuration.md#securing-the-verify-endpoints).
 
 ```json

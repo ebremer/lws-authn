@@ -399,6 +399,42 @@ class LwsAuthIT {
     }
 
     /**
+     * R-11. Being a user of the realm does not make one a verifier: without the verifier role the caller
+     * is refused, and a role taken away stops working at once rather than when the token expires.
+     */
+    @Test
+    void onlyAHolderOfTheVerifierRoleMayVerify() throws Exception {
+        String admin = JSON.readTree(postForm(base + "/realms/master/protocol/openid-connect/token",
+                Map.of("grant_type", "password", "client_id", "admin-cli", "username", keycloak.getAdminUsername(),
+                        "password", keycloak.getAdminPassword()), null).body()).get("access_token").asText();
+        String username = "caller-" + System.nanoTime();
+        String password = "pw-" + username;
+        HttpResponse<String> created = sendJson("POST", base + "/admin/realms/" + REALM + "/users",
+                "{\"username\":\"" + username + "\",\"enabled\":true,\"emailVerified\":true,"
+                        + "\"email\":\"" + username + "@example.org\",\"firstName\":\"A\",\"lastName\":\"Caller\","
+                        + "\"credentials\":[{\"type\":\"password\",\"value\":\"" + password + "\",\"temporary\":false}]}",
+                admin);
+        assertEquals(201, created.statusCode(), created.body());
+        String mappings = created.headers().firstValue("Location").orElseThrow() + "/role-mappings/realm";
+        String role = "[" + HTTP.send(HttpRequest.newBuilder(URI.create(base + "/admin/realms/" + REALM + "/roles/lws-verifier"))
+                .header("Authorization", "Bearer " + admin).GET().build(), HttpResponse.BodyHandlers.ofString()).body() + "]";
+        String verify = base + "/realms/" + REALM + "/lws/verify";
+        Map<String, String> form = Map.of("credential", idToken());
+
+        HttpResponse<String> refused = postForm(verify, form, userAccessToken(username, password));
+        assertEquals(403, refused.statusCode(), "a realm user without the role must be refused");
+        assertTrue(refused.body().contains("insufficient_scope"), refused.body());
+
+        assertEquals(204, sendJson("POST", mappings, role, admin).statusCode());
+        String granted = userAccessToken(username, password);
+        assertEquals(200, postForm(verify, form, granted).statusCode(), "with the role, the caller is answered");
+
+        assertEquals(204, sendJson("DELETE", mappings, role, admin).statusCode());
+        assertEquals(403, postForm(verify, form, granted).statusCode(),
+                "the same token, its role since taken away, must be refused");
+    }
+
+    /**
      * P3-1. An invalid credential is an answer, not a refusal: RFC 9110 §15.5.2 requires a 401 to carry
      * a {@code WWW-Authenticate} challenge, and these used to send a bare 401 for a credential that
      * simply did not verify. The status was wrong as well as incomplete — the request <em>was</em>
@@ -816,6 +852,21 @@ class LwsAuthIT {
      */
     private String accessToken() throws Exception {
         return JSON.readTree(tokenResponse()).get("access_token").asText();
+    }
+
+    private String userAccessToken(String username, String password) throws Exception {
+        return JSON.readTree(postForm(base + "/realms/" + REALM + "/protocol/openid-connect/token",
+                Map.of("grant_type", "password", "client_id", "lws-app",
+                        "username", username, "password", password, "scope", "openid"), null).body())
+                .get("access_token").asText();
+    }
+
+    private static HttpResponse<String> sendJson(String method, String url, String json, String bearer)
+            throws Exception {
+        return HTTP.send(HttpRequest.newBuilder(URI.create(url))
+                .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer " + bearer)
+                .method(method, HttpRequest.BodyPublishers.ofString(json)).build(), HttpResponse.BodyHandlers.ofString());
     }
 
     private String tokenResponse() throws Exception {

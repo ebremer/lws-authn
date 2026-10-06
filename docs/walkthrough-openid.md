@@ -100,11 +100,17 @@ issuer below is assumed to be `http://localhost:8080/realms/lws-demo`.
 ### 3. Get an ID Token
 
 ```bash
-ID_TOKEN=$(curl -s -X POST \
+TOKENS=$(curl -s -X POST \
   http://localhost:8080/realms/lws-demo/protocol/openid-connect/token \
   -d grant_type=password -d client_id=lws-app -d scope=openid \
-  -d username=alice -d password=alice | jq -r .id_token)
+  -d username=alice -d password=alice)
+ID_TOKEN=$(echo "$TOKENS" | jq -r .id_token)
+ACCESS_TOKEN=$(echo "$TOKENS" | jq -r .access_token)
 ```
+
+The ID Token is the credential. The access token from the same login identifies *you* when you call
+`/verify` in step 6, which needs a caller holding the realm role `lws-verifier` — `alice` does, in the
+demo realm.
 
 ### 4. Inspect — your `sub` is a WebID
 
@@ -159,7 +165,7 @@ This is exactly what an LWS server does, exposed as an endpoint:
 
 ```bash
 curl -s -X POST "$(echo "$ID_TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq -r .iss)/lws/verify" \
-  --data-urlencode "credential=$ID_TOKEN" | jq
+  -H "Authorization: Bearer $ACCESS_TOKEN" --data-urlencode "credential=$ID_TOKEN" | jq
 ```
 
 ```json

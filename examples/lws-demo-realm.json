@@ -5,6 +5,14 @@
   "sslRequired": "external",
   "registrationAllowed": false,
   "loginWithEmailAllowed": true,
+  "roles": {
+    "realm": [
+      {
+        "name": "lws-verifier",
+        "description": "May call the lws-authn verify endpoints, which a bearer caller needs this role for. alice holds it so the demo scripts can verify with her token; in a real deployment grant it to the authorization server's service account, not to end users."
+      }
+    ]
+  },
   "components": {
     "org.keycloak.userprofile.UserProfileProvider": [
       {
@@ -56,6 +64,7 @@
       "firstName": "Alice",
       "lastName": "Example",
       "email": "alice@example.org",
+      "realmRoles": ["lws-verifier"],
       "credentials": [
         { "type": "password", "value": "alice", "temporary": false }
       ]

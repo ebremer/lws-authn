@@ -27,6 +27,7 @@ KC_URL="${KC_URL:-http://localhost:8080}"
 REALM="${REALM:-lws-demo}"
 USERNAME="${USERNAME:-alice}"
 PASSWORD="${PASSWORD:-alice}"
+VERIFY_ROLE="${VERIFY_ROLE:-lws-verifier}"   # the verify endpoints' `role` setting
 ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASS="${ADMIN_PASS:-admin}"
 KID="${KID:-agent-key-1}"
@@ -53,6 +54,18 @@ verify_post() {
 note() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 die()  { printf '\033[1;31m%s\033[0m\n' "$*" >&2; exit 1; }
 api()  { curl -sS -H "Authorization: Bearer $ADMIN_TOKEN" "$@"; }
+# A bearer caller of a verify endpoint must hold the verifier realm role (docs/configuration.md,
+# "Securing the verify endpoints"). Create it if this realm lacks it, and grant it to user $1.
+ensure_verifier_role() {
+  if [ "$(api -o /dev/null -w '%{http_code}' "$KC_URL/admin/realms/$REALM/roles/$VERIFY_ROLE")" = 404 ]; then
+    api -X POST "$KC_URL/admin/realms/$REALM/roles" -H 'Content-Type: application/json' \
+        -d "{\"name\":\"$VERIFY_ROLE\",\"description\":\"May call the lws-authn verify endpoints\"}"
+    echo "created realm role $VERIFY_ROLE"
+  fi
+  api -X POST "$KC_URL/admin/realms/$REALM/users/$1/role-mappings/realm" -H 'Content-Type: application/json' \
+      -d "[$(api "$KC_URL/admin/realms/$REALM/roles/$VERIFY_ROLE")]"
+  echo "granted $VERIFY_ROLE"
+}
 b64u_str() { printf '%s' "$1" | openssl base64 -A | tr '+/' '-_' | tr -d '='; }
 b64u_bin() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }     # stdin (binary) -> base64url
 
@@ -91,6 +104,7 @@ JSON
 else
   echo "user $USERNAME already exists ($USER_UUID)"
 fi
+ensure_verifier_role "$USER_UUID"
 
 note "4. Obtain a caller token for the verify endpoint"
 # admin-cli exists in every realm and allows the password grant, so this needs no extra client.

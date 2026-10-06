@@ -410,7 +410,7 @@ is needed.
   header overwritten it no longer matters. `secret` mode still has only the address bucket: its callers
   share one secret, so a bucket per secret would throttle them all together.
 
-- [ ] **R-11 · Default access mode admits every realm user, and the role check reads stale claims.**
+- [x] **R-11 · Default access mode admits every realm user, and the role check reads stale claims.**
   `Medium` · security/decision · `S` · *verified*
   `VerifyAccess.java:171-184`: `bearer` mode authenticates any access token issued by the realm, for any
   client, with no audience check; `role` is unset by default, so any user — including a self-registered
@@ -419,6 +419,22 @@ is needed.
   **Decide:** require `role` (refuse to start the verify endpoints in `bearer` mode without one, or deny
   by default), and/or require tokens issued to a configured client. At minimum, `configuration.md` and
   `hardening.md` must say that `role` is effectively mandatory on any realm with untrusted users.
+  **Decided and done: a role is required by default.** `role` now defaults to `lws-verifier`
+  (`VerifyAccess.DEFAULT_ROLE`); `role=*` (`ANY_USER`) is the explicit opt-out to the old behaviour and
+  logs a warning at startup. A realm with no such role refuses every bearer caller with `403
+  insufficient_scope` and logs that once per realm. The role is checked with `UserModel.hasRole` —
+  current mappings, composites and groups — and no longer read from the token: a revoked role stops
+  working at once, and a caller with a lightweight access token (Keycloak's default for `admin-cli`,
+  which the demo scripts use) is no longer refused for carrying no role claim. Not done: restricting
+  callers to tokens issued to a configured client — with a role required, that adds little.
+  The demo realm defines the role and grants it to `alice`; `lws-demo.sh`, `ssi-cid-demo.sh` and
+  `did-key-demo.sh` create it if missing and grant it to the user they verify as (`VERIFY_ROLE`
+  overrides the name). `VerifyAccessTest` covers the default, the override, `*`, and `holdsRole`;
+  `LwsAuthIT.onlyAHolderOfTheVerifierRoleMayVerify` creates a user, shows `403` without the role, `200`
+  with it, and `403` on the same token once it is revoked — written, not run (no Docker; R-43). **The
+  demo scripts' new role step is untested here too** (no Keycloak). Breaking for every existing
+  `bearer` deployment, which is why the CHANGELOG's upgrade box leads with it — including the live one
+  (R-15).
 
 - [ ] **R-12 · Runtime options documented as `kc.sh build` flags are silently ignored by Keycloak.**
   `Medium` · security/docs · `S` · *verified in the docs; Keycloak behaviour checked in its CLI bytecode*

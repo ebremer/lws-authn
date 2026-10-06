@@ -19,11 +19,18 @@ amplification, a network-probe oracle and a cheap denial of service.
 |---|---|---|---|---|
 | Mode | `access` | `lws.authn.verify.access` | `LWS_AUTHN_VERIFY_ACCESS` | `bearer` |
 | Shared secret | `secret` | `lws.authn.verify.secret` | `LWS_AUTHN_VERIFY_SECRET` | — |
-| Required realm role | `role` | `lws.authn.verify.role` | `LWS_AUTHN_VERIFY_ROLE` | — |
+| Required realm role (`*`: any user of the realm) | `role` | `lws.authn.verify.role` | `LWS_AUTHN_VERIFY_ROLE` | `lws-verifier` |
 | Requests per minute, per caller | `rate-limit` | `lws.authn.verify.rateLimit` | `LWS_AUTHN_VERIFY_RATE_LIMIT` | `60` |
 
-- **`bearer`** (default) — the caller presents a Keycloak access token for the realm. Set `role` to
-  additionally require a realm role.
+- **`bearer`** (default) — the caller presents a Keycloak access token for the realm, **and must hold
+  the realm role `role` names: `lws-verifier` unless you name another.** Create that role in each realm
+  that serves the verify endpoints and grant it to whatever calls them — normally your authorization
+  server's service account, not end users. Until somebody holds it, every bearer caller gets a `403`,
+  and the server log says once per realm that the role is missing. The role is checked against the
+  user's role mappings as they are *now* — directly, through a composite role or through a group — so
+  taking it away takes effect at once, not when the caller's token expires. `role=*` admits any user
+  of the realm, which was the default before; it logs a warning at startup, and is only for a realm
+  whose every user you trust to make this server fetch URLs of their choosing.
 - **`secret`** — the caller presents a pre-shared secret as `Authorization: Bearer <secret>`, for a
   verifier that is not a Keycloak client. Configuring `secret` mode with no secret falls back to
   `bearer`; it never fails open.

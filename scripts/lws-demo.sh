@@ -6,7 +6,7 @@
 #   1. log in as the Keycloak admin
 #   2. ensure a realm exists
 #   3. ensure a client exists with the "LWS WebID Subject" protocol mapper
-#   4. ensure a user exists (with a password)
+#   4. ensure a user exists (with a password), holding the role that may call /verify
 #   5. obtain an ID Token for that user
 #   6. dereference the resulting WebID (the controlled identifier document)
 #   7. run the credential through the provider's /verify endpoint
@@ -33,6 +33,7 @@ PASSWORD="${PASSWORD:-alice}"
 ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASS="${ADMIN_PASS:-admin}"
 WEBID_ATTRIBUTE="${WEBID_ATTRIBUTE:-}"   # empty => Keycloak hosts the WebID at {iss}/lws/cid/{userId}
+VERIFY_ROLE="${VERIFY_ROLE:-lws-verifier}"   # the verify endpoints' `role` setting
 
 command -v curl >/dev/null || { echo "curl is required"; exit 1; }
 command -v jq   >/dev/null || { echo "jq is required";   exit 1; }
@@ -53,6 +54,19 @@ verify_post() {
 note() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 die()  { printf '\033[1;31m%s\033[0m\n' "$*" >&2; exit 1; }
 api()  { curl -sS -H "Authorization: Bearer $ADMIN_TOKEN" "$@"; }
+
+# A bearer caller of a verify endpoint must hold the verifier realm role (docs/configuration.md,
+# "Securing the verify endpoints"). Create it if this realm lacks it, and grant it to user $1.
+ensure_verifier_role() {
+  if [ "$(api -o /dev/null -w '%{http_code}' "$KC_URL/admin/realms/$REALM/roles/$VERIFY_ROLE")" = 404 ]; then
+    api -X POST "$KC_URL/admin/realms/$REALM/roles" -H 'Content-Type: application/json' \
+        -d "{\"name\":\"$VERIFY_ROLE\",\"description\":\"May call the lws-authn verify endpoints\"}"
+    echo "created realm role $VERIFY_ROLE"
+  fi
+  api -X POST "$KC_URL/admin/realms/$REALM/users/$1/role-mappings/realm" -H 'Content-Type: application/json' \
+      -d "[$(api "$KC_URL/admin/realms/$REALM/roles/$VERIFY_ROLE")]"
+  echo "granted $VERIFY_ROLE"
+}
 
 # decode a JWT payload (base64url) to JSON; works with both GNU and BSD base64
 jwt_payload() {
@@ -140,6 +154,8 @@ JSON
 else
   echo "user $USERNAME already exists ($USER_UUID)"
 fi
+# The same user calls /verify below, with the access token from the same login.
+ensure_verifier_role "$USER_UUID"
 
 note "5. Obtain an ID Token for '$USERNAME'"
 TOKEN_RESPONSE=$(curl -sS -X POST "$KC_URL/realms/$REALM/protocol/openid-connect/token" \

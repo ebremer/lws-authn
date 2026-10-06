@@ -348,14 +348,20 @@ good, since that is the order the specification's cold-trust algorithm requires.
 |---|---|---|---|
 | Mode (`bearer` / `secret` / `public`) | `LWS_AUTHN_VERIFY_ACCESS` | `lws.authn.verify.access` | `bearer` |
 | Shared secret (mode `secret`) | `LWS_AUTHN_VERIFY_SECRET` | `lws.authn.verify.secret` | — |
-| Required realm role (mode `bearer`) | `LWS_AUTHN_VERIFY_ROLE` | `lws.authn.verify.role` | — |
+| Required realm role (mode `bearer`; `*` for any user) | `LWS_AUTHN_VERIFY_ROLE` | `lws.authn.verify.role` | `lws-verifier` |
 | Requests per minute, per caller | `LWS_AUTHN_VERIFY_RATE_LIMIT` | `lws.authn.verify.rateLimit` | `60` |
 
 The same settings are available as build-time provider options, one per provider id, e.g.
 `kc.sh build --spi-realm-restapi-extension--lws--access=public`. The environment variables need no
 rebuild, so they are what the systemd unit below uses.
 
-- **`bearer`** — the caller presents a Keycloak access token for the realm.
+- **`bearer`** — the caller presents a Keycloak access token for the realm **and holds the realm role
+  `lws-verifier`** (or the one `LWS_AUTHN_VERIFY_ROLE` names). In each realm that serves `/verify`,
+  create the role (*Realm roles → Create role*) and grant it to the caller — typically the service
+  account of the authorization server that verifies credentials (*Clients → that client → Service
+  accounts roles → Assign role*). Nobody holds it by default, so until you grant it every bearer caller
+  gets a `403`. Do **not** grant it to end users, and do not set `LWS_AUTHN_VERIFY_ROLE=*` (any user of
+  the realm) on a realm that lets people register themselves.
 - **`secret`** — the caller presents a pre-shared secret as `Authorization: Bearer <secret>`. Choosing
   `secret` without configuring one falls back to `bearer`; it never fails open.
 - **`public`** — anonymous, the pre-1.0 behaviour. Only for endpoints already restricted to a trusted

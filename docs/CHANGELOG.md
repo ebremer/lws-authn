@@ -25,6 +25,11 @@ Identifiers 1.0 §3.3, which that suite cites normatively for selecting a key.
 > `/lws-ssi-cid/verify` first. And the self-signed CID verifier is **stricter**, so a document that used
 > to verify may now fail — see *Behaviour that got stricter* below. And the JAR is now
 > `lws-authn-0.3.0-SNAPSHOT.jar`: the tree is unreleased work, and the filename says so.
+>
+> **In `bearer` mode — the default — a caller of `/verify` now needs the realm role `lws-verifier`**
+> (R-11). Create it in each realm and grant it to the service account that verifies credentials
+> *before* upgrading, or every caller gets a `403`. `LWS_AUTHN_VERIFY_ROLE` names a different role;
+> `LWS_AUTHN_VERIFY_ROLE=*` restores the old "any user of the realm".
 
 ### What changed in the specifications
 
@@ -127,6 +132,14 @@ realm under the default `bearer` access mode, before any signature is checked.
   has a bucket too, which no header can change; IPv6 addresses are bucketed by `/64`; and INSTALL's
   nginx block overwrites `X-Forwarded-For`, with `proxy-trusted-addresses` set in `keycloak.conf`.
   **Existing installs following INSTALL step 12 should make the same two changes.**
+- **A caller of `/verify` must hold a role, and losing it takes effect at once** (R-11). In the default
+  `bearer` mode any access token of the realm was enough — a self-registered user's, or the demo
+  `alice`'s — and every verify request makes this server fetch URLs the caller chose. The realm role
+  `lws-verifier` is now required unless `role` names another, or is `*` to admit any user (which logs a
+  warning). And a configured role was read from the caller's token, so a role taken away kept working
+  until the token expired; it is now checked against the user's current role mappings, which also
+  admits a holder whose token is a lightweight one carrying no role claim. The demo realm grants
+  `alice` the role, and the demo scripts grant it to the user they verify as.
 
 ### Added
 
@@ -172,7 +185,11 @@ realm under the default `bearer` access mode, before any signature is checked.
 
 ### Behaviour that got stricter
 
-Each is a requirement of CID 1.0, which the self-signed CID suite cites for selecting the key, and
+- **`/verify` in `bearer` mode needs the realm role `lws-verifier`** (R-11) — see the box at the top.
+  A realm that does not define it refuses every bearer caller with a `403`, and the server log says so
+  once per realm.
+
+The rest are requirements of CID 1.0, which the self-signed CID suite cites for selecting the key, and
 each may reject a document that used to verify. Check your issuers' documents before rolling this out.
 
 - **Only methods the `authentication` relationship names can authenticate.** CID 1.0 §2.3: "Verification

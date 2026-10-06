@@ -26,17 +26,48 @@ KC_URL="${KC_URL:-http://localhost:8080}"
 REALM="${REALM:-master}"
 KEYTYPE="${KEYTYPE:-p256}"   # p256 (zDn…, ES256) or ed25519 (z6Mk…, EdDSA)
 # The verify endpoints are authenticated by default (docs/configuration.md, "Securing the verify endpoints").
-# Supply a caller token directly, or let the script fetch one with these realm credentials.
+# Supply a caller token directly, or let the script fetch one with these realm credentials — after
+# granting that user the role a caller must hold (VERIFY_ROLE, the endpoints' `role` setting), for which
+# it logs in as the admin.
 VERIFY_TOKEN="${VERIFY_TOKEN:-}"
 VERIFY_USER="${VERIFY_USER:-admin}"
 VERIFY_PASS="${VERIFY_PASS:-admin}"
+VERIFY_ROLE="${VERIFY_ROLE:-lws-verifier}"
+ADMIN_USER="${ADMIN_USER:-admin}"
+ADMIN_PASS="${ADMIN_PASS:-admin}"
 
 for t in curl jq node; do command -v "$t" >/dev/null || { echo "$t is required"; exit 1; }; done
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+api() { curl -sS -H "Authorization: Bearer $ADMIN_TOKEN" "$@"; }
+# A bearer caller of a verify endpoint must hold the verifier realm role (docs/configuration.md,
+# "Securing the verify endpoints"). Create it if this realm lacks it, and grant it to user $1.
+ensure_verifier_role() {
+  if [ "$(api -o /dev/null -w '%{http_code}' "$KC_URL/admin/realms/$REALM/roles/$VERIFY_ROLE")" = 404 ]; then
+    api -X POST "$KC_URL/admin/realms/$REALM/roles" -H 'Content-Type: application/json' \
+        -d "{\"name\":\"$VERIFY_ROLE\",\"description\":\"May call the lws-authn verify endpoints\"}"
+    echo "created realm role $VERIFY_ROLE"
+  fi
+  api -X POST "$KC_URL/admin/realms/$REALM/users/$1/role-mappings/realm" -H 'Content-Type: application/json' \
+      -d "[$(api "$KC_URL/admin/realms/$REALM/roles/$VERIFY_ROLE")]"
+  echo "granted $VERIFY_ROLE"
+}
+
 if [ -z "$VERIFY_TOKEN" ]; then
+  ADMIN_TOKEN=$(curl -sS -X POST "$KC_URL/realms/master/protocol/openid-connect/token" \
+    -d grant_type=password -d client_id=admin-cli \
+    -d username="$ADMIN_USER" -d password="$ADMIN_PASS" | jq -r '.access_token // empty')
+  VERIFY_USER_ID=""
+  if [ -n "$ADMIN_TOKEN" ]; then
+    VERIFY_USER_ID=$(api "$KC_URL/admin/realms/$REALM/users?username=$VERIFY_USER&exact=true" | jq -r '.[0].id // empty')
+  fi
+  if [ -n "$VERIFY_USER_ID" ]; then
+    ensure_verifier_role "$VERIFY_USER_ID" >&2
+  else
+    echo "warning: could not grant $VERIFY_ROLE to $VERIFY_USER; /verify will refuse unless they hold it" >&2
+  fi
   VERIFY_TOKEN=$(curl -sS -X POST "$KC_URL/realms/$REALM/protocol/openid-connect/token" \
     -d grant_type=password -d client_id=admin-cli \
     -d username="$VERIFY_USER" -d password="$VERIFY_PASS" | jq -r '.access_token // empty')

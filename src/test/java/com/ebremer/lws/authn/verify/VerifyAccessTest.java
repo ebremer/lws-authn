@@ -10,7 +10,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.reflect.Proxy;
+import java.util.Set;
+
 import org.junit.jupiter.api.Test;
+import org.keycloak.models.RoleModel;
+import org.keycloak.models.UserModel;
 
 /**
  * P0-3. The endpoints must be closed by default, and a misconfiguration must never fail open.
@@ -115,5 +120,51 @@ class VerifyAccessTest {
     @Test
     void aUsersBucketIsApartFromEveryAddresss() {
         assertFalse(VerifyAccess.principalKey("203.0.113.7").equals(VerifyAccess.addressKey("203.0.113.7")));
+    }
+
+    /**
+     * R-11. A verify endpoint is called by an authorization server, not by every user of the realm: the
+     * default requires a role, and admitting any user is a choice that has to be spelled out.
+     */
+    @Test
+    void requiresTheVerifierRoleByDefault() {
+        assertEquals(VerifyAccess.DEFAULT_ROLE, VerifyAccess.defaults().getRequiredRole());
+        assertEquals("auditor", withProperty("lws.authn.verify.role", "auditor",
+                () -> VerifyAccess.defaults().getRequiredRole()));
+        assertNull(withProperty("lws.authn.verify.role", "*", () -> VerifyAccess.defaults().getRequiredRole()),
+                "'*' is the explicit opt-out");
+    }
+
+    /** R-11. What counts is whether the user holds the role now, not what a token said when it was issued. */
+    @Test
+    void theRoleMustStillBeHeld() {
+        RoleModel role = role("lws-verifier");
+        assertTrue(VerifyAccess.holdsRole(user(role), role));
+        assertFalse(VerifyAccess.holdsRole(user(), role), "taken away since the token was issued");
+        assertFalse(VerifyAccess.holdsRole(user(role("something-else")), role));
+        assertFalse(VerifyAccess.holdsRole(user(role), null), "the realm defines no such role");
+        assertFalse(VerifyAccess.holdsRole(null, role));
+    }
+
+    private static RoleModel role(String name) {
+        return (RoleModel) Proxy.newProxyInstance(RoleModel.class.getClassLoader(), new Class<?>[]{RoleModel.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "getName" -> name;
+                    case "hashCode" -> name.hashCode();
+                    case "equals" -> proxy == args[0];
+                    default -> throw new UnsupportedOperationException(method.getName());
+                });
+    }
+
+    /** A user holding exactly {@code held}. */
+    private static UserModel user(RoleModel... held) {
+        Set<RoleModel> roles = Set.of(held);
+        return (UserModel) Proxy.newProxyInstance(UserModel.class.getClassLoader(), new Class<?>[]{UserModel.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "hasRole" -> roles.contains(args[0]);
+                    case "hashCode" -> System.identityHashCode(proxy);
+                    case "equals" -> proxy == args[0];
+                    default -> throw new UnsupportedOperationException(method.getName());
+                });
     }
 }

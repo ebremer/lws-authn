@@ -13,6 +13,8 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.Locale;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
@@ -21,7 +23,8 @@ import org.jboss.logging.Logger;
 import org.keycloak.Config;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
-import org.keycloak.representations.AccessToken;
+import org.keycloak.models.RoleModel;
+import org.keycloak.models.UserModel;
 import org.keycloak.services.managers.AppAuthManager;
 import org.keycloak.services.managers.AuthenticationManager;
 
@@ -40,7 +43,8 @@ import com.ebremer.lws.authn.http.JsonResponses;
  * <p>The endpoints are therefore authenticated by default. Modes:</p>
  * <ul>
  *   <li><b>{@code bearer}</b> (default) — the caller presents a Keycloak access token for this realm in
- *       {@code Authorization}. Optionally a realm role may be required.</li>
+ *       {@code Authorization}, and must hold a realm role — {@value #DEFAULT_ROLE} unless {@code role}
+ *       names another, or is {@value #ANY_USER} to admit any user of the realm.</li>
  *   <li><b>{@code secret}</b> — the caller presents a pre-shared secret as
  *       {@code Authorization: Bearer <secret>}. For verifiers that are not Keycloak clients.</li>
  *   <li><b>{@code public}</b> — no caller authentication, the pre-existing behaviour. Only for a
@@ -61,7 +65,7 @@ import com.ebremer.lws.authn.http.JsonResponses;
  *   <tr><th>Scope key</th><th>System property</th><th>Environment</th><th>Default</th></tr>
  *   <tr><td>{@code access}</td><td>{@code lws.authn.verify.access}</td><td>{@code LWS_AUTHN_VERIFY_ACCESS}</td><td>{@code bearer}</td></tr>
  *   <tr><td>{@code secret}</td><td>{@code lws.authn.verify.secret}</td><td>{@code LWS_AUTHN_VERIFY_SECRET}</td><td>—</td></tr>
- *   <tr><td>{@code role}</td><td>{@code lws.authn.verify.role}</td><td>{@code LWS_AUTHN_VERIFY_ROLE}</td><td>—</td></tr>
+ *   <tr><td>{@code role}</td><td>{@code lws.authn.verify.role}</td><td>{@code LWS_AUTHN_VERIFY_ROLE}</td><td>{@value #DEFAULT_ROLE}</td></tr>
  *   <tr><td>{@code rate-limit}</td><td>{@code lws.authn.verify.rateLimit}</td><td>{@code LWS_AUTHN_VERIFY_RATE_LIMIT}</td><td>{@code 60}</td></tr>
  * </table>
  *
@@ -84,6 +88,20 @@ public final class VerifyAccess {
     private static final String BEARER_PREFIX = "Bearer ";
     private static final int DEFAULT_RATE_LIMIT = 60;
 
+    /**
+     * The realm role a {@code bearer} caller must hold when {@code role} is not set (R-11).
+     *
+     * <p>Without one, any user of the realm — a self-registered one, a demo user whose password is
+     * public — could make this server fetch URLs of their choosing, and every fetch-side defence (the
+     * deadline, the breaker, the SSRF guard, the rate limit) was all that stood between them and an
+     * outage. A verify endpoint is called by an authorization server, not by end users, so the right
+     * default is that nobody may call it until somebody has been given the role.</p>
+     */
+    public static final String DEFAULT_ROLE = "lws-verifier";
+
+    /** The {@code role} value that admits any user of the realm: the behaviour before R-11, chosen explicitly. */
+    public static final String ANY_USER = "*";
+
     private final Mode mode;
     private final byte[] secret;
     private final String requiredRole;
@@ -103,7 +121,7 @@ public final class VerifyAccess {
     public static VerifyAccess from(Config.Scope scope) {
         String access = Settings.get(scope, "access", "lws.authn.verify.access", "LWS_AUTHN_VERIFY_ACCESS", "bearer");
         String secret = Settings.get(scope, "secret", "lws.authn.verify.secret", "LWS_AUTHN_VERIFY_SECRET", null);
-        String role = Settings.get(scope, "role", "lws.authn.verify.role", "LWS_AUTHN_VERIFY_ROLE", null);
+        String role = Settings.get(scope, "role", "lws.authn.verify.role", "LWS_AUTHN_VERIFY_ROLE", DEFAULT_ROLE);
         String rate = Settings.get(scope, "rate-limit", "lws.authn.verify.rateLimit", "LWS_AUTHN_VERIFY_RATE_LIMIT",
                 String.valueOf(DEFAULT_RATE_LIMIT));
 
@@ -123,13 +141,19 @@ public final class VerifyAccess {
             log.warn("lws-authn verify endpoints are configured as PUBLIC: any anonymous caller can make this "
                     + "server dereference URLs of its choosing. Only do this on a trusted network.");
         }
+        String requiredRole = ANY_USER.equals(role.trim()) ? null : blankToNull(role);
+        if (mode == Mode.BEARER && requiredRole == null) {
+            log.warn("lws-authn verify endpoints admit ANY user of the realm (role=*): every one of them can "
+                    + "make this server dereference URLs of their choosing. Only do this on a realm whose users "
+                    + "are all trusted.");
+        }
         int permits;
         try {
             permits = Integer.parseInt(rate.trim());
         } catch (RuntimeException e) {
             permits = DEFAULT_RATE_LIMIT;
         }
-        return new VerifyAccess(mode, secret, blankToNull(role), Math.max(0, permits));
+        return new VerifyAccess(mode, secret, requiredRole, Math.max(0, permits));
     }
 
     /** The policy that applies when nothing is configured: bearer-authenticated and rate limited. */
@@ -139,6 +163,11 @@ public final class VerifyAccess {
 
     public Mode getMode() {
         return mode;
+    }
+
+    /** The realm role a {@code bearer} caller must hold, or {@code null} if any user of the realm may call. */
+    public String getRequiredRole() {
+        return requiredRole;
     }
 
     /**
@@ -186,7 +215,7 @@ public final class VerifyAccess {
                     return error(Response.Status.TOO_MANY_REQUESTS, "slow_down",
                             "too many verification requests; retry shortly", session, false);
                 }
-                if (requiredRole != null && !hasRealmRole(auth.token(), requiredRole)) {
+                if (requiredRole != null && !holdsRole(auth.user(), realmRole(session, requiredRole))) {
                     return error(Response.Status.FORBIDDEN, "insufficient_scope",
                             "the '" + requiredRole + "' realm role is required", session, true);
                 }
@@ -224,9 +253,35 @@ public final class VerifyAccess {
 
     // --------------------------------------------------------------------------------- internals
 
-    private static boolean hasRealmRole(AccessToken token, String role) {
-        return token != null && token.getRealmAccess() != null && token.getRealmAccess().isUserInRole(role);
+    /**
+     * True iff the user holds {@code role} now (R-11), directly, through a composite role or through a
+     * group — {@link UserModel#hasRole} follows all three.
+     *
+     * <p>This used to read the token's {@code realm_access} claim, which is a statement about the moment
+     * the token was issued: a role taken away kept working until the token expired. And a lightweight
+     * access token — what Keycloak issues to {@code admin-cli} by default — carries no role claim at all,
+     * so a caller holding the role was refused for the shape of its token.</p>
+     *
+     * @param role the realm's role, or {@code null} if the realm defines no role of that name, which
+     *             nobody can then hold
+     */
+    static boolean holdsRole(UserModel user, RoleModel role) {
+        return role != null && user != null && user.hasRole(role);
     }
+
+    private static RoleModel realmRole(KeycloakSession session, String name) {
+        RealmModel realm = session.getContext().getRealm();
+        RoleModel role = realm == null ? null : realm.getRole(name);
+        if (role == null && realm != null && REALMS_WARNED.add(realm.getId())) {
+            log.warnf("lws-authn verify endpoints require the realm role '%s', which realm '%s' does not define, "
+                    + "so every bearer caller is refused. Create the role and grant it to the callers that verify "
+                    + "credentials (docs/configuration.md, \"Securing the verify endpoints\").", name, realm.getName());
+        }
+        return role;
+    }
+
+    /** Realms already warned about a missing role, so the log says it once rather than per request. */
+    private static final Set<String> REALMS_WARNED = ConcurrentHashMap.newKeySet();
 
     /**
      * Builds the denial. A 401 or 403 carries {@code WWW-Authenticate} as RFC 9110 §15.5.2 requires:
