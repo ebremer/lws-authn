@@ -232,8 +232,28 @@ public class SamlCredentialVerifier {
                 return result.fail();
             }
 
+            // --- conditions (SAML Core §2.5.1) ---
+            // At most one <Conditions> — the schema allows one, and only the first used to be read — and
+            // every condition in it one this verifier understands. §2.5.1.1: a condition that is not
+            // understood makes the assertion Indeterminate, and "An assertion that is determined to be
+            // Invalid or Indeterminate MUST be rejected" (R-21).
+            List<Element> allConditions = children(assertion, NS, "Conditions");
+            Element conditions = allConditions.isEmpty() ? null : allConditions.get(0);
+            String notUnderstood = allConditions.size() > 1 ? "the assertion has more than one <Conditions>"
+                    : conditionsProblem(conditions);
+            result.check("conditionsUnderstood", notUnderstood == null);
+            if (notUnderstood != null) {
+                result.error("Assertion <Conditions> cannot be evaluated: " + notUnderstood);
+                return result.fail();
+            }
+            // §2.5.1.5: a OneTimeUse assertion "SHOULD be used immediately by the relying party and MUST NOT
+            // be retained for future use". This verifier retains nothing; the caller is told, so that it
+            // does not either.
+            if (firstChild(conditions, NS, "OneTimeUse") != null) {
+                result.setOneTimeUse(Boolean.TRUE);
+            }
+
             // --- validity window ---
-            Element conditions = firstChild(assertion, NS, "Conditions");
             String notBefore = attr(conditions, "NotBefore");
             String notOnOrAfter = attr(conditions, "NotOnOrAfter");
             result.setNotBefore(notBefore);
@@ -254,17 +274,23 @@ public class SamlCredentialVerifier {
             }
 
             // --- audience ---
-            List<String> audiences = audiences(conditions);
+            // §2.5.1.4: several <AudienceRestriction>s "each MUST be evaluated independently" and form a
+            // conjunction — the assertion is for an audience only if every restriction names it. They used
+            // to be pooled, so [app] AND [elsewhere] passed for app (R-21).
+            List<List<String>> restrictions = audienceRestrictions(conditions);
+            List<String> audiences = restrictions.stream().flatMap(List::stream).distinct().toList();
             result.setAudiences(audiences);
             if (expectedAudience != null && !expectedAudience.isBlank()) {
-                boolean matched = audiences.contains(expectedAudience);
+                boolean matched = !restrictions.isEmpty()
+                        && restrictions.stream().allMatch(restriction -> restriction.contains(expectedAudience));
                 result.check("audienceMatched", matched);
                 if (!matched) {
-                    result.error("Expected audience <" + expectedAudience + "> is not in the assertion's AudienceRestriction");
+                    result.error("Expected audience <" + expectedAudience
+                            + "> is not in every <AudienceRestriction> of the assertion");
                     return result.fail();
                 }
             } else {
-                boolean present = !audiences.isEmpty();
+                boolean present = !restrictions.isEmpty();
                 result.check("audiencePresent", present);
                 if (!present) {
                     result.error("Assertion has no <AudienceRestriction>");
@@ -434,14 +460,86 @@ public class SamlCredentialVerifier {
         return matches.get(0);
     }
 
-    private static List<String> audiences(Element conditions) {
-        List<String> out = new ArrayList<>();
+    /** Each {@code <AudienceRestriction>}'s audiences, one list per restriction. */
+    private static List<List<String>> audienceRestrictions(Element conditions) {
+        List<List<String>> out = new ArrayList<>();
         for (Element restriction : children(conditions, NS, "AudienceRestriction")) {
+            List<String> audiences = new ArrayList<>();
             for (Element audience : children(restriction, NS, "Audience")) {
-                out.add(audience.getTextContent().trim());
+                audiences.add(audience.getTextContent().trim());
             }
+            out.add(audiences);
         }
         return out;
+    }
+
+    private static final String XSI_NS = "http://www.w3.org/2001/XMLSchema-instance";
+
+    /**
+     * Why {@code conditions} cannot be evaluated, or {@code null} if every condition in it is one this
+     * verifier understands (SAML Core §2.5.1): {@code <AudienceRestriction>}s of non-blank
+     * {@code <Audience>}s, at most one {@code <OneTimeUse>} (§2.5.1.5) and at most one
+     * {@code <ProxyRestriction>} (§2.5.1.6) — a restriction on what a relying party may go on to assert,
+     * which does not affect the assertion's validity here. A {@code <Condition>} is an extension point,
+     * and an extension this verifier does not implement is the "not understood" §2.5.1.1 means.
+     */
+    private static String conditionsProblem(Element conditions) {
+        if (conditions == null) {
+            return null;
+        }
+        int oneTimeUse = 0;
+        int proxyRestriction = 0;
+        for (Node n = conditions.getFirstChild(); n != null; n = n.getNextSibling()) {
+            if (n.getNodeType() != Node.ELEMENT_NODE) {
+                continue;
+            }
+            Element condition = (Element) n;
+            String name = condition.getLocalName();
+            if (!NS.equals(condition.getNamespaceURI())) {
+                return "<" + name + "> is not a SAML condition";
+            }
+            switch (name) {
+                case "AudienceRestriction" -> {
+                    List<Element> audiences = children(condition, NS, "Audience");
+                    if (audiences.isEmpty() || audiences.size() != elementChildren(condition)) {
+                        return "an <AudienceRestriction> holds something other than <Audience> elements, or none";
+                    }
+                    for (Element audience : audiences) {
+                        if (audience.getTextContent().isBlank()) {
+                            return "an <Audience> is empty";
+                        }
+                    }
+                }
+                case "OneTimeUse" -> {
+                    if (++oneTimeUse > 1) {
+                        return "more than one <OneTimeUse>";
+                    }
+                }
+                case "ProxyRestriction" -> {
+                    if (++proxyRestriction > 1) {
+                        return "more than one <ProxyRestriction>";
+                    }
+                }
+                case "Condition" -> {
+                    String type = condition.getAttributeNS(XSI_NS, "type");
+                    return "a <Condition> of type '" + type + "' is not one this verifier understands";
+                }
+                default -> {
+                    return "<" + name + "> is not a SAML condition";
+                }
+            }
+        }
+        return null;
+    }
+
+    private static int elementChildren(Element parent) {
+        int count = 0;
+        for (Node n = parent.getFirstChild(); n != null; n = n.getNextSibling()) {
+            if (n.getNodeType() == Node.ELEMENT_NODE) {
+                count++;
+            }
+        }
+        return count;
     }
 
     /** True iff {@code value} is an absolute URI: it parses, and it has a scheme. */

@@ -203,8 +203,15 @@ the subject "MUST be a URI") — a username, an email address or an opaque handl
 `Format` is reported as `subjectFormat`. `<Issuer>` is required (`issuerPresent`), must be an absolute
 URI and, per SAML Profiles §4.1.4.2, carry no `Format` or the `entity` one (`issuerWellFormed`). The bearer
 `<SubjectConfirmationData>` is checked for method, `Recipient` and `NotOnOrAfter`
-(`bearerSubjectConfirmation`, `recipientPresent`, `subjectConfirmationWithinWindow`). `<Conditions>`
-window with clock skew (`withinValidityWindow`), and audience (`audiencePresent`, `audienceMatched`).
+(`bearerSubjectConfirmation`, `recipientPresent`, `subjectConfirmationWithinWindow`). One
+`<Conditions>`, holding only conditions the verifier understands — `<AudienceRestriction>`s of
+non-blank `<Audience>`s, at most one `<OneTimeUse>` and at most one `<ProxyRestriction>`
+(`conditionsUnderstood`): an extension `<Condition>`, or any other element, makes the assertion
+Indeterminate, and SAML Core §2.5.1.1 says "An assertion that is determined to be Invalid or
+Indeterminate MUST be rejected". Its window with clock skew (`withinValidityWindow`), and the audience
+(`audiencePresent`, `audienceMatched`) — named by **every** `<AudienceRestriction>`, which "form a
+conjunction" (§2.5.1.4). A `<OneTimeUse>` assertion is valid and reported as `oneTimeUse: true`: it
+"MUST NOT be retained for future use" (§2.5.1.5), so a caller that caches verdicts must not cache it.
 XML is parsed with DTDs **disallowed** and external entities disabled, independent of any caller or
 library configuration.
 

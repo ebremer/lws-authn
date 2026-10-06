@@ -244,6 +244,14 @@ realm under the default `bearer` access mode, before any signature is checked.
   the `entity` one, as SAML Profiles §4.1.4.2 requires (`issuerWellFormed`). The result reports the
   `NameID`'s `Format` as `subjectFormat`. An IdP sending usernames or email addresses as `NameID` must
   be configured to send the user's WebID instead.
+- **SAML `<Conditions>` are evaluated as SAML Core §2.5.1 says** (R-21). Several
+  `<AudienceRestriction>`s "form a conjunction", but their audiences were pooled, so an assertion
+  restricted to `[app]` *and* `[https://elsewhere.example]` verified for `app`; now every restriction must
+  name the audience. A condition the verifier does not understand — an extension `<Condition>`, an
+  unknown element, a second `<OneTimeUse>` or `<ProxyRestriction>`, an empty `<AudienceRestriction>` —
+  and a second `<Conditions>`, which used to be ignored, now fail `conditionsUnderstood`: §2.5.1.1 makes
+  such an assertion Indeterminate, which "MUST be rejected". A `<OneTimeUse>` assertion still verifies,
+  and the result says `oneTimeUse: true`.
 - **An `iat` in the future, or after `exp`, is refused** in both JWT suites (new check
   `issuedAtConsistent`; the clock skew allowance applies). A credential "issued" ten years from now used
   to pass.

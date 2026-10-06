@@ -149,7 +149,9 @@ curl -X POST https://keycloak.example/realms/myrealm/lws-saml/verify \
 The verifier additionally requires the Response's `<samlp:StatusCode>` to be
 `…:status:Success`, exactly one bearer `<SubjectConfirmation>` whose `<SubjectConfirmationData>`
 carries a `Recipient` (the LWS client identifier) and an unexpired `NotOnOrAfter`, and a signing
-certificate that is inside its own validity period.
+certificate that is inside its own validity period. Every `<AudienceRestriction>` must name the
+`audience`, and a `<Conditions>` holding anything the verifier does not understand is refused, as SAML
+Core §2.5.1.1 requires; a `<OneTimeUse>` assertion is reported as `oneTimeUse: true`.
 
 Guide: **[SAML 2.0 walkthrough](walkthrough-saml.md)** (there is no shell demo — producing a
 signed SAML Response requires a SAML login flow).

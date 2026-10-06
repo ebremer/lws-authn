@@ -95,6 +95,8 @@ credential, none of which `<Conditions>` implies on its own:
 - there is exactly one `<SubjectConfirmation>`, with `Method="…:cm:bearer"`;
 - its `<SubjectConfirmationData>` carries a `Recipient` — the LWS client identifier, which the suite
   makes mandatory — and a `NotOnOrAfter` that has not passed;
+- its `<Conditions>` hold nothing the verifier does not understand — an extension `<Condition>`, a
+  second `<OneTimeUse>` — and every `<AudienceRestriction>` names your `audience`;
 - the IdP certificate you supply is itself inside its validity period. Pass
   `allowExpiredCertificate=true` to override that, but only for offline analysis of an old
   credential — an expired certificate is not a trust anchor.
@@ -138,8 +140,9 @@ the credential is presented as a bearer token (`Authorization: Bearer …`) with
   means re-distributing the certificate.
 - **What is validated.** The XML-DSig signature against the supplied certificate; that the certificate
   is itself within its validity period; the Response's `<samlp:StatusCode>`; a single bearer
-  `<SubjectConfirmation>` with a `Recipient` and an unexpired `NotOnOrAfter`; the `<Conditions>` time
-  window; and the audience. The verifier does not build an X.509 trust chain or fetch metadata — it
+  `<SubjectConfirmation>` with a `Recipient` and an unexpired `NotOnOrAfter`; the `<Conditions>` —
+  understood, and within their time window; and the audience, in every `<AudienceRestriction>`. A
+  `<OneTimeUse>` assertion is reported as `oneTimeUse: true`; do not cache the verdict on one. The verifier does not build an X.509 trust chain or fetch metadata — it
   trusts the certificate you give it, and only checks that the certificate has not expired.
 - **Audience / token exchange.** Restrict the assertion's audience to the target server, and use OAuth
   2.0 Token Exchange (RFC 8693, token type `urn:ietf:params:oauth:token-type:saml2`) where a broadly

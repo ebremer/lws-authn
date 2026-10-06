@@ -642,7 +642,7 @@ is needed.
   previous verifier. `COMPLIANCE.md`'s core table, its SAML section, `suites.md`, the SAML walkthrough
   and the CHANGELOG say so.
 
-- [ ] **R-21 · SAML `<Conditions>` processing fails open.**
+- [x] **R-21 · SAML `<Conditions>` processing fails open.**
   `Medium` · spec-conformance/security · `S` · *demonstrated*
   `SamlCredentialVerifier.java:394-402` flattens every `<Audience>` of every `<AudienceRestriction>`
   into one list; `:213` evaluates only the first `<Conditions>`; other condition elements are ignored.
@@ -655,6 +655,14 @@ is needed.
   **Do:** every `AudienceRestriction` must contain the expected audience; reject unknown conditions,
   duplicate `OneTimeUse`/`ProxyRestriction`, and more than one `<Conditions>`; report `OneTimeUse` (or
   reject it unless replay protection is on — R-34).
+  **Done, reporting `OneTimeUse`.** New check `conditionsUnderstood`: one `<Conditions>`, holding only
+  `<AudienceRestriction>`s of non-blank `<Audience>`s, at most one `<OneTimeUse>` and at most one
+  `<ProxyRestriction>` (§2.5.1.6: "always valid"). An extension `<Condition>` or an element of another
+  name or namespace fails it. `audienceMatched` requires the audience in every restriction;
+  `audiences` still lists them all, once each. A `<OneTimeUse>` assertion verifies and the result carries
+  `oneTimeUse: true` — §2.5.1.5 makes it "valid … a condition on use", and its "MUST NOT be retained"
+  binds whoever retains it, which this verifier does not. Four tests in `SamlVerifierTest` fail against
+  the previous verifier.
 
 - [ ] **R-22 · SAML: SAML Core §5 signature processing is not enforced.**
   `Medium` · security/spec-conformance · `M` · *demonstrated*

@@ -21,7 +21,7 @@ import com.fasterxml.jackson.annotation.JsonPropertyOrder;
  * @author Erich Bremer
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
-@JsonPropertyOrder({"valid", "subject", "issuer", "client", "audiences", "recipient", "tokenType", "notBefore", "notOnOrAfter", "checks", "errors", "traceId"})
+@JsonPropertyOrder({"valid", "subject", "subjectFormat", "issuer", "client", "audiences", "recipient", "tokenType", "notBefore", "notOnOrAfter", "oneTimeUse", "checks", "errors", "traceId"})
 public class SamlVerificationResult {
 
     private boolean valid;
@@ -31,6 +31,7 @@ public class SamlVerificationResult {
     private String recipient;
     private String notBefore;
     private String notOnOrAfter;
+    private Boolean oneTimeUse;
     private List<String> audiences = new ArrayList<>();
     private final Map<String, Boolean> checks = new LinkedHashMap<>();
     private final List<String> errors = new ArrayList<>();
@@ -93,6 +94,20 @@ public class SamlVerificationResult {
 
     public void setNotOnOrAfter(String notOnOrAfter) {
         this.notOnOrAfter = notOnOrAfter;
+    }
+
+    /**
+     * {@code true} when the assertion carries {@code <OneTimeUse>}, otherwise absent. SAML Core §2.5.1.5:
+     * such an assertion "SHOULD be used immediately by the relying party and MUST NOT be retained for
+     * future use". This verifier retains nothing; a caller that caches verdicts must not cache this one
+     * (R-21).
+     */
+    public Boolean getOneTimeUse() {
+        return oneTimeUse;
+    }
+
+    public void setOneTimeUse(Boolean oneTimeUse) {
+        this.oneTimeUse = oneTimeUse;
     }
 
     public List<String> getAudiences() {

@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayInputStream;
@@ -196,6 +197,90 @@ class SamlVerifierTest {
     void reportsTheNameIdFormat() throws Exception {
         SamlVerificationResult r = new SamlCredentialVerifier().verify(signedResponse(ALICE), idpCert, AUDIENCE);
         assertEquals("urn:oasis:names:tc:SAML:2.0:nameid-format:persistent", r.getSubjectFormat());
+    }
+
+    // ----------------------------------------------------------------- <Conditions> (R-21)
+
+    private static final String RESTRICTION = "<saml:AudienceRestriction><saml:Audience>" + AUDIENCE
+            + "</saml:Audience></saml:AudienceRestriction>";
+
+    /** The response template with the {@code <AudienceRestriction>} replaced by {@code conditions}. */
+    private String withConditions(String conditions) throws Exception {
+        String xml = responseTemplate(ALICE);
+        assertTrue(xml.contains(RESTRICTION));
+        return signed(xml.replace(RESTRICTION, conditions));
+    }
+
+    /**
+     * SAML Core §2.5.1.4: several {@code <AudienceRestriction>}s "each MUST be evaluated independently"
+     * and form a conjunction. They used to be pooled, so [app] AND [elsewhere] passed for app.
+     */
+    @Test
+    void everyAudienceRestrictionMustNameTheAudience() throws Exception {
+        String elsewhere = "<saml:AudienceRestriction><saml:Audience>https://only-this-one.example</saml:Audience>"
+                + "</saml:AudienceRestriction>";
+        SamlVerificationResult r = new SamlCredentialVerifier().verify(withConditions(RESTRICTION + elsewhere),
+                idpCert, AUDIENCE);
+        assertFalse(r.isValid());
+        assertEquals(Boolean.FALSE, r.getChecks().get("audienceMatched"));
+
+        String alsoApp = "<saml:AudienceRestriction><saml:Audience>https://only-this-one.example</saml:Audience>"
+                + "<saml:Audience>" + AUDIENCE + "</saml:Audience></saml:AudienceRestriction>";
+        SamlVerificationResult both = new SamlCredentialVerifier().verify(withConditions(RESTRICTION + alsoApp),
+                idpCert, AUDIENCE);
+        assertTrue(both.isValid(), () -> String.valueOf(both.getErrors()));
+        assertEquals(List.of(AUDIENCE, "https://only-this-one.example"), both.getAudiences());
+    }
+
+    /**
+     * SAML Core §2.5.1.1: a condition that is not understood makes the assertion Indeterminate, and "An
+     * assertion that is determined to be Invalid or Indeterminate MUST be rejected by a relying party".
+     */
+    @Test
+    void aConditionThatIsNotUnderstoodIsRejected() throws Exception {
+        String[] notUnderstood = {
+                "<saml:Condition xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:x=\"urn:x\""
+                        + " xsi:type=\"x:OnlyOnTuesdays\"/>",
+                "<x:Whatever xmlns:x=\"urn:x\"/>",
+                "<saml:ProxyRestriction Count=\"0\"/><saml:ProxyRestriction Count=\"1\"/>",
+                "<saml:OneTimeUse/><saml:OneTimeUse/>",
+                "<saml:AudienceRestriction/>",
+                "<saml:AudienceRestriction><saml:Audience> </saml:Audience></saml:AudienceRestriction>"};
+        for (String extra : notUnderstood) {
+            SamlVerificationResult r = new SamlCredentialVerifier().verify(withConditions(RESTRICTION + extra),
+                    idpCert, AUDIENCE);
+            assertFalse(r.isValid(), extra);
+            assertEquals(Boolean.FALSE, r.getChecks().get("conditionsUnderstood"), extra);
+        }
+        // One ProxyRestriction is understood, and always Valid (§2.5.1.6).
+        SamlVerificationResult proxy = new SamlCredentialVerifier().verify(
+                withConditions(RESTRICTION + "<saml:ProxyRestriction Count=\"0\"/>"), idpCert, AUDIENCE);
+        assertTrue(proxy.isValid(), () -> String.valueOf(proxy.getErrors()));
+        assertEquals(Boolean.TRUE, proxy.getChecks().get("conditionsUnderstood"));
+    }
+
+    /** The schema allows one {@code <Conditions>}; only the first used to be read, so a second was ignored. */
+    @Test
+    void aSecondConditionsIsRejected() throws Exception {
+        String expired = "<saml:Conditions NotBefore=\"" + iso(-7200) + "\" NotOnOrAfter=\"" + iso(-3600) + "\">"
+                + RESTRICTION + "</saml:Conditions>";
+        String xml = responseTemplate(ALICE).replace("</saml:Conditions>", "</saml:Conditions>" + expired);
+        SamlVerificationResult r = new SamlCredentialVerifier().verify(signed(xml), idpCert, AUDIENCE);
+        assertFalse(r.isValid());
+        assertEquals(Boolean.FALSE, r.getChecks().get("conditionsUnderstood"));
+    }
+
+    /**
+     * SAML Core §2.5.1.5: a OneTimeUse assertion "MUST NOT be retained for future use". It is valid, and
+     * the result says so, so a caller that caches verdicts knows not to cache this one.
+     */
+    @Test
+    void oneTimeUseIsReported() throws Exception {
+        SamlVerificationResult once = new SamlCredentialVerifier().verify(
+                withConditions(RESTRICTION + "<saml:OneTimeUse/>"), idpCert, AUDIENCE);
+        assertTrue(once.isValid(), () -> String.valueOf(once.getErrors()));
+        assertEquals(Boolean.TRUE, once.getOneTimeUse());
+        assertNull(new SamlCredentialVerifier().verify(signedResponse(ALICE), idpCert, AUDIENCE).getOneTimeUse());
     }
 
     /** XXE: a credential containing a DOCTYPE / external entity must be rejected at parse time. */
