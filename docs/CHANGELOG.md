@@ -247,6 +247,16 @@ realm under the default `bearer` access mode, before any signature is checked.
 - **An `iat` in the future, or after `exp`, is refused** in both JWT suites (new check
   `issuedAtConsistent`; the clock skew allowance applies). A credential "issued" ten years from now used
   to pass.
+- **A JWS must be strictly encoded** (R-24), in both JWT suites. RFC 7515 §5.2 decodes each part "with
+  no line breaks, whitespace, or other additional characters", but Keycloak's decoder skips past them:
+  a signed header carrying `"crit": ["urn:x"]` with `=junk` appended verified, because the `crit` check's
+  strict decoder failed on it and reported no `crit` at all. A token must now be three base64url
+  segments and nothing else (`compactSerializationWellFormed`; whitespace around the whole token is
+  ignored), and a header that does not decode is refused as an unsupported `crit`. `exp`, `nbf` and
+  `iat` must be JSON numbers (`numericDatesWellFormed`) — `"exp": "1900000000"` used to read as the
+  number; a fractional value is still accepted, as RFC 7519 §2 allows. And an `ES256`, `ES384` or
+  `ES512` signature must be exactly 64, 96 or 132 octets (RFC 7518 §3.4): Keycloak's ECDSA verifier
+  read the first 64 bytes of an 80-byte `ES256` signature and ignored the rest.
 
 The rest are requirements of CID 1.0, which the self-signed CID suite cites for selecting the key, and
 each may reject a document that used to verify. Check your issuers' documents before rolling this out.

@@ -63,9 +63,68 @@ class JwsChecksTest {
     }
 
     @Test
-    void survivesAnUnreadableHeader() {
-        // An unreadable header is the signature check's problem to report, not this one's.
+    void survivesAMissingJws() {
         assertTrue(JwsChecks.criticalHeaders(null).isEmpty());
+    }
+
+    /**
+     * R-24. RFC 7515 §5.2: a header that does not decode means the JWS "MUST be rejected". This used to
+     * report "no crit", while Keycloak's lenient decoder read the header up to the {@code =}.
+     */
+    @Test
+    void anUndecodableHeaderCountsAsCritical() throws Exception {
+        String header = b64("{\"alg\":\"ES256\",\"crit\":[\"urn:x\"]}") + "=junk";
+        JWSInput jws = new JWSInput(header + "." + b64("{\"sub\":\"x\"}") + "." + b64("sig"));
+        assertFalse(JwsChecks.criticalHeaders(jws).isEmpty());
+    }
+
+    // --------------------------------------------------------------- compact serialization (R-24)
+
+    @Test
+    void acceptsOnlyStrictBase64urlInThreeSegments() {
+        String good = b64("{\"alg\":\"ES256\"}") + "." + b64("{\"sub\":\"x\"}") + "." + b64("signature");
+        assertTrue(JwsChecks.compactSerializationWellFormed(good));
+        for (String bad : new String[]{
+                null, "", good + "=", good.replace(".", "=."), good + ".", "." + good,
+                good.substring(0, good.lastIndexOf('.')),          // two segments
+                good + "." + b64("x"),                             // four
+                good.replace(".", ". "), good + "\n", " " + good,  // whitespace
+                good.replace('-', '+').replace('_', '/') + "+/",   // base64, not base64url
+                good + "A"}) {                                     // a length no encoding has
+            assertFalse(JwsChecks.compactSerializationWellFormed(bad), String.valueOf(bad));
+        }
+    }
+
+    // ------------------------------------------------------------------- NumericDate (R-24)
+
+    @Test
+    void datesMustBeJsonNumbers() throws Exception {
+        assertTrue(JwsChecks.nonNumericDates(bytes("{\"exp\":1900000000,\"iat\":1800000000,\"nbf\":1800000000}")).isEmpty());
+        assertTrue(JwsChecks.nonNumericDates(bytes("{\"exp\":1900000000.5}")).isEmpty(),
+                "RFC 7519 §2: non-integer values can be represented");
+        assertTrue(JwsChecks.nonNumericDates(bytes("{\"sub\":\"x\"}")).isEmpty(), "absence is checked elsewhere");
+        assertEquals(List.of("exp"), JwsChecks.nonNumericDates(bytes("{\"exp\":\"1900000000\"}")));
+        assertEquals(List.of("exp", "nbf", "iat"),
+                JwsChecks.nonNumericDates(bytes("{\"exp\":null,\"nbf\":true,\"iat\":[1800000000]}")));
+    }
+
+    private static byte[] bytes(String s) {
+        return s.getBytes(StandardCharsets.UTF_8);
+    }
+
+    // --------------------------------------------------------------- signature length (R-24)
+
+    /** RFC 7518 §3.4: an ES* signature is exactly 64, 96 or 132 octets; "If it is not … the validation has failed". */
+    @Test
+    void ecdsaSignaturesMustBeExactlyTheirLength() {
+        assertTrue(JwsChecks.signatureLengthValid("ES256", new byte[64]));
+        assertTrue(JwsChecks.signatureLengthValid("ES384", new byte[96]));
+        assertTrue(JwsChecks.signatureLengthValid("ES512", new byte[132]));
+        assertFalse(JwsChecks.signatureLengthValid("ES256", new byte[80]));
+        assertFalse(JwsChecks.signatureLengthValid("ES256", new byte[63]));
+        assertFalse(JwsChecks.signatureLengthValid("ES512", new byte[130]));
+        assertFalse(JwsChecks.signatureLengthValid("ES256", null));
+        assertTrue(JwsChecks.signatureLengthValid("RS256", new byte[7]), "left to the RSA provider, which checks");
     }
 
     // ------------------------------------------------------------------------- algorithm pinning

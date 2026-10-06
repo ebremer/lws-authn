@@ -85,7 +85,11 @@ and fails closed when the client identifier is absent.
 
 ## OpenID Connect suite
 
-**Enforced.** `alg` is never `none`; no unsupported `crit`; `typ`, when present, names a JWT — not
+**Enforced.** The token is a JWS in strict compact serialization — three base64url segments with no
+padding, whitespace or other characters (`compactSerializationWellFormed`; RFC 7515 §5.2), so every
+decoder reads the same header — and `exp`, `nbf` and `iat` are JSON numbers
+(`numericDatesWellFormed`; RFC 7519 §2). `alg` is never `none`; no unsupported `crit`, and a header that
+does not decode counts as one; `typ`, when present, names a JWT — not
 `at+jwt`, an access token's type; the payload's `typ`, when present, says it is an ID Token
 (`tokenIsIdToken`: Keycloak's access tokens say `Bearer`, and their header is `JWT` like an ID Token's);
 `sub` and `iss` present; `iss` an https URL with no query or fragment, as OpenID Connect Core §2 defines
@@ -119,8 +123,9 @@ issuance too (Resource Indicators, RFC 8707).
 
 ## Self-signed Controlled Identifier suite
 
-**Enforced.** `alg` never `none`; no unsupported `crit`; `typ` names a JWT if present, not an access
-token's `at+jwt`;
+**Enforced.** Strict compact serialization (`compactSerializationWellFormed`) and numeric dates
+(`numericDatesWellFormed`), as in the OpenID suite; `alg` never `none`; no unsupported `crit`; `typ`
+names a JWT if present, not an access token's `at+jwt`;
 `sub == iss == client_id` (`selfIssued`); a `kid` is present (`keyIdPresent`) — no fallback to "the
 only key", because the credential says which key signed it. `sub` is dereferenced — over https; plain
 http only to an allow-listed host — or, for a DID, resolved (below), and the document's `id` must equal
@@ -237,8 +242,9 @@ does.
 representation. **Verification method types:** `JsonWebKey` and `Multikey`, the two CID 1.0 defines.
 
 **Signature algorithms:** whatever Keycloak's `SignatureProvider` offers for the JWT suites (RS*, PS*,
-ES256/384/512, EdDSA), constrained by the published key — each `ES*` pinned to its curve (RFC 7518
-§3.4). `alg: none` is refused everywhere.
+ES256/384/512, EdDSA), constrained by the published key — each `ES*` pinned to its curve, and its
+signature exactly the 64, 96 or 132 octets RFC 7518 §3.4 requires, which Keycloak's ECDSA verifier does
+not check itself. `alg: none` is refused everywhere.
 
 ---
 

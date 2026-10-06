@@ -194,4 +194,32 @@ class LWSCredentialVerifierTest {
         assertEquals(Boolean.TRUE, fine.getChecks().get("issuedAtConsistent"));
         assertEquals(Boolean.TRUE, fine.getChecks().get("audiencePresent"));
     }
+
+    /**
+     * R-24. RFC 7515 §5.2: each part is base64url "with no line breaks, whitespace, or other additional
+     * characters". A header with {@code =junk} appended read as one thing to Keycloak and another to the
+     * {@code crit} check. Whitespace around the whole token is the form field's, and is ignored.
+     */
+    @Test
+    void requiresAStrictCompactSerialization() {
+        String token = token("{\"alg\":\"RS256\",\"crit\":[\"urn:x\"]}", "{" + CLAIMS + "}");
+        String padded = token.replaceFirst("\\.", "=junk.");
+        VerificationResult r = new LWSCredentialVerifier(null).verify(padded);
+        assertFalse(r.isValid());
+        assertEquals(Boolean.FALSE, r.getChecks().get("compactSerializationWellFormed"));
+
+        VerificationResult trimmed = new LWSCredentialVerifier(null).verify("  " + token + "\n");
+        assertEquals(Boolean.TRUE, trimmed.getChecks().get("compactSerializationWellFormed"));
+        assertEquals(Boolean.FALSE, trimmed.getChecks().get("noUnsupportedCriticalHeaders"));
+    }
+
+    /** R-24. RFC 7519 §2: a NumericDate is a JSON number; Jackson read {@code "exp": "…"} as the same Long. */
+    @Test
+    void rejectsDatesThatAreNotNumbers() {
+        long now = java.time.Instant.now().getEpochSecond();
+        VerificationResult r = verify("{\"alg\":\"RS256\"}", "{" + CLAIMS + ",\"aud\":[\"https://c.example\"],"
+                + "\"iat\":" + now + ",\"exp\":\"" + (now + 300) + "\"}");
+        assertFalse(r.isValid());
+        assertEquals(Boolean.FALSE, r.getChecks().get("numericDatesWellFormed"));
+    }
 }

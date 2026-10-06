@@ -126,7 +126,17 @@ public class SelfSignedCidVerifier {
         result.setTraceId(Trace.newId());
         result.setTokenType(SsiCidConstants.TOKEN_TYPE_JWT);
         try {
-            JWSInput jws = new JWSInput(credential);
+            // RFC 7515 §5.2 steps 1-2: strict base64url, so every decoder reads the same header (R-24).
+            // Whitespace around the token belongs to the form field, not to the JWS.
+            String compact = credential == null ? null : credential.strip();
+            boolean wellFormed = JwsChecks.compactSerializationWellFormed(compact);
+            result.check("compactSerializationWellFormed", wellFormed);
+            if (!wellFormed) {
+                result.error("Credential is not a JWS in compact serialization: three base64url segments, "
+                        + "with no padding, whitespace or other characters");
+                return result.fail();
+            }
+            JWSInput jws = new JWSInput(compact);
             JWSHeader header = jws.getHeader();
             JsonWebToken token = JsonSerialization.readValue(jws.getContent(), JsonWebToken.class);
 
@@ -156,6 +166,14 @@ public class SelfSignedCidVerifier {
             result.check("typeIsJwt", typeOk);
             if (!typeOk) {
                 result.error("Credential 'typ' header is not a JWT type");
+                return result.fail();
+            }
+
+            // RFC 7519 §2: exp, nbf and iat are JSON numbers. "1900000000" read as the same Long (R-24).
+            List<String> nonNumericDates = JwsChecks.nonNumericDates(jws.getContent());
+            result.check("numericDatesWellFormed", nonNumericDates.isEmpty());
+            if (!nonNumericDates.isEmpty()) {
+                result.error("Credential date claims are not JSON numbers: " + nonNumericDates);
                 return result.fail();
             }
 
@@ -233,6 +251,13 @@ public class SelfSignedCidVerifier {
                 return result.fail();
             }
 
+            // RFC 7518 §3.4 fixes an ES* signature's length, which Keycloak's ECDSA verifier does not
+            // check, so an over-long signature verified here but not on the JDK path (R-24).
+            if (!JwsChecks.signatureLengthValid(alg, jws.getSignature())) {
+                result.check("signatureValid", false);
+                result.error("Credential " + alg + " signature is not the length RFC 7518 requires");
+                return result.fail();
+            }
             boolean signatureValid;
             if (session == null) {
                 signatureValid = JwsSignatures.verify(alg, publicKey, jws);

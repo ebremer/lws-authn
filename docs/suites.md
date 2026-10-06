@@ -77,8 +77,8 @@ verifiers can find it, and offers a verifier.
    key).
 
 `GET …/lws-ssi-cid/cid/{userId}` serves the CID publishing the registered key(s) as `authentication`
-methods; `POST …/lws-ssi-cid/verify` validates a self-issued JWT: reject `none` and any unsupported
-`crit` header; enforce `sub == iss == client_id`; require a `kid`; dereference `sub` to a document
+methods; `POST …/lws-ssi-cid/verify` validates a self-issued JWT: require strict base64url and numeric
+dates; reject `none` and any unsupported `crit` header; enforce `sub == iss == client_id`; require a `kid`; dereference `sub` to a document
 whose `id` **is** `sub`; select, by `kid`, a `JsonWebKey` or `Multikey` method the document's
 `authentication` relationship names — embedded or by reference — that the subject **controls** and
 that is neither revoked nor expired; pin the `alg` to that key; validate the signature; require `iat`

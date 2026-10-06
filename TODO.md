@@ -692,7 +692,7 @@ is needed.
   **Do:** refuse id-less methods and methods with more than one key-material property or `type`/
   `controller` value; match the method id (absolute, then fragment) before the JWK `kid`; fix the comment.
 
-- [ ] **R-24 · JWS validation per RFC 7515 §5.2 / RFC 7518 §3.4: two strictness gaps.**
+- [x] **R-24 · JWS validation per RFC 7515 §5.2 / RFC 7518 §3.4: two strictness gaps.**
   `Low` · spec-conformance · `S` · *demonstrated*
   - `JwsChecks.criticalHeaders` (`:47-76`) decodes the header with the strict JDK decoder and reports
     "no `crit`" when that fails, while Keycloak's `Base64Url.decode` truncates at `=` and maps `+`/`/`. A
@@ -706,6 +706,20 @@ is needed.
   - RFC 7519 NumericDate must be a JSON number; `exp` as a string or float is accepted.
   **Do:** require all three segments to match `[A-Za-z0-9_-]*` and fail on an undecodable header; check
   the ES\* signature length before calling the provider (both JWT suites); reject non-integer dates.
+  **Done, except "non-integer".** `JwsChecks.compactSerializationWellFormed` (new check
+  `compactSerializationWellFormed`, first in both JWT verifiers) requires three non-empty base64url
+  segments and nothing else, and refuses a segment whose length no encoding has; whitespace around the
+  whole token is stripped as the form field's. `criticalHeaders` reports an undecodable header as a
+  critical one instead of "none". `signatureLengthValid` refuses an `ES*` signature that is not 64, 96
+  or 132 octets before the signature provider sees it, in both verifiers. `nonNumericDates` (new check
+  `numericDatesWellFormed`) refuses an `exp`, `nbf` or `iat` that is not a JSON number. A fractional
+  one is still accepted: RFC 7519 §2 defines NumericDate as "a JSON numeric value" and says
+  "non-integer values can be represented", so refusing it would reject a conforming token; Keycloak
+  truncates it, which moves `exp` earlier and `iat`/`nbf` by under a second. `JwsStrictnessTest` runs
+  each case through the self-signed verifier with a `did:key` subject — the `=junk` header, string
+  dates, and an 81-byte `ES256` signature through a session whose verifier reads R‖S as Keycloak's does
+  — and `LWSCredentialVerifierTest` the first two through the OpenID one; all fail against the previous
+  code, with a fractional `exp` as the control.
 
 - [ ] **R-25 · SAML trust is "out of band" in the suite but supplied per request here**
   (challenges COMPLIANCE divergence 5). `Medium` · security/design · `M` · *verified*

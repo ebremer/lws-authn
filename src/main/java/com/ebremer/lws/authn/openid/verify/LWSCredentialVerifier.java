@@ -92,7 +92,17 @@ public class LWSCredentialVerifier {
         result.setTraceId(Trace.newId());
         result.setTokenType(LWSConstants.TOKEN_TYPE_ID_TOKEN);
         try {
-            JWSInput jws = new JWSInput(credential);
+            // RFC 7515 §5.2 steps 1-2: strict base64url, so every decoder reads the same header (R-24).
+            // Whitespace around the token belongs to the form field, not to the JWS.
+            String compact = credential == null ? null : credential.strip();
+            boolean wellFormed = JwsChecks.compactSerializationWellFormed(compact);
+            result.check("compactSerializationWellFormed", wellFormed);
+            if (!wellFormed) {
+                result.error("ID Token is not a JWS in compact serialization: three base64url segments, "
+                        + "with no padding, whitespace or other characters");
+                return result.fail();
+            }
+            JWSInput jws = new JWSInput(compact);
             JWSHeader header = jws.getHeader();
             IDToken token = JsonSerialization.readValue(jws.getContent(), IDToken.class);
 
@@ -139,6 +149,14 @@ public class LWSCredentialVerifier {
             result.check("tokenIsIdToken", isIdToken);
             if (!isIdToken) {
                 result.error("The token's 'typ' claim says it is not an ID Token");
+                return result.fail();
+            }
+
+            // RFC 7519 §2: exp, nbf and iat are JSON numbers. "1900000000" read as the same Long (R-24).
+            List<String> nonNumericDates = JwsChecks.nonNumericDates(jws.getContent());
+            result.check("numericDatesWellFormed", nonNumericDates.isEmpty());
+            if (!nonNumericDates.isEmpty()) {
+                result.error("ID Token date claims are not JSON numbers: " + nonNumericDates);
                 return result.fail();
             }
 
@@ -233,7 +251,13 @@ public class LWSCredentialVerifier {
                 return result.fail();
             }
 
-            // 5. Signature verification.
+            // 5. Signature verification. RFC 7518 §3.4 fixes an ES* signature's length, which Keycloak's
+            // ECDSA verifier does not check (R-24).
+            if (!JwsChecks.signatureLengthValid(alg, jws.getSignature())) {
+                result.check("signatureValid", false);
+                result.error("ID Token " + alg + " signature is not the length RFC 7518 requires");
+                return result.fail();
+            }
             SignatureProvider signatureProvider = session.getProvider(SignatureProvider.class, alg);
             if (signatureProvider == null) {
                 result.check("signatureValid", false);

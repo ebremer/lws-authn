@@ -15,6 +15,8 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import org.keycloak.crypto.KeyType;
@@ -30,6 +32,87 @@ import com.ebremer.lws.authn.config.ServerSettings;
 public final class JwsChecks {
 
     private JwsChecks() {
+    }
+
+    /** RFC 7515 §7.1: three base64url segments — no padding, whitespace or any other character. */
+    private static final Pattern COMPACT_SERIALIZATION =
+            Pattern.compile("([A-Za-z0-9_-]+)\\.([A-Za-z0-9_-]+)\\.([A-Za-z0-9_-]+)");
+
+    /**
+     * True iff {@code credential} is a JWS in compact serialization that every base64url decoder reads
+     * the same way.
+     *
+     * <p>RFC 7515 §5.2 decodes each part "following the restriction that no line breaks, whitespace, or
+     * other additional characters have been used", and a JWS that does not decode "MUST be rejected".
+     * Keycloak's own decoder is lenient — it maps {@code +} and {@code /}, and stops at {@code =} — so a
+     * header could say one thing to it and another to a strict reader. A signed header carrying
+     * {@code "crit": ["urn:x"]} with {@code =junk} appended verified, with
+     * {@code noUnsupportedCriticalHeaders: true} (R-24). A segment of a length no base64 encoding has
+     * (one more than a multiple of four) is refused here too.</p>
+     */
+    public static boolean compactSerializationWellFormed(String credential) {
+        if (credential == null) {
+            return false;
+        }
+        Matcher segments = COMPACT_SERIALIZATION.matcher(credential);
+        if (!segments.matches()) {
+            return false;
+        }
+        for (int i = 1; i <= 3; i++) {
+            if (segments.group(i).length() % 4 == 1) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** The registered claims RFC 7519 makes a NumericDate (§4.1.4-4.1.6). */
+    private static final List<String> DATE_CLAIMS = List.of("exp", "nbf", "iat");
+
+    /**
+     * The date claims in {@code payload} that are present but not JSON numbers.
+     *
+     * <p>RFC 7519 §2: a NumericDate is "a JSON numeric value". Jackson reads {@code "exp": "1900000000"}
+     * into the same {@code Long} as the number, so the typed token cannot tell them apart and the raw
+     * payload is read instead (R-24). A fractional value is a JSON number, and §2 says "non-integer
+     * values can be represented", so it is accepted; the token reads it to the whole second below,
+     * which can only bring {@code exp} earlier, and {@code iat} or {@code nbf} by under a second.</p>
+     *
+     * @return the offending claim names, empty when there are none
+     * @throws java.io.IOException if the payload is not JSON
+     */
+    public static List<String> nonNumericDates(byte[] payload) throws java.io.IOException {
+        JsonNode claims = JsonSerialization.mapper.readTree(payload);
+        List<String> wrong = new ArrayList<>();
+        if (claims != null && claims.isObject()) {
+            for (String name : DATE_CLAIMS) {
+                JsonNode value = claims.get(name);
+                if (value != null && !value.isNumber()) {
+                    wrong.add(name);
+                }
+            }
+        }
+        return wrong;
+    }
+
+    /**
+     * True iff {@code signature} is as long as {@code alg} requires, for the algorithms where the
+     * signature provider does not check that itself.
+     *
+     * <p>RFC 7518 §3.4: an {@code ES256} signature "MUST be a 64-octet sequence. If it is not … the
+     * validation has failed" — 96 octets for {@code ES384}, 132 for {@code ES512}. Keycloak's ECDSA
+     * verifier converts R‖S to DER from the first bytes and ignores the rest, so an 80-byte
+     * {@code ES256} signature verified inside Keycloak while the JDK path refused it (R-24). Other
+     * algorithms are left to their providers, which do check.</p>
+     */
+    public static boolean signatureLengthValid(String alg, byte[] signature) {
+        int required = alg == null ? -1 : switch (alg) {
+            case "ES256" -> 64;
+            case "ES384" -> 96;
+            case "ES512" -> 132;
+            default -> -1;
+        };
+        return required < 0 || (signature != null && signature.length == required);
     }
 
     /**
@@ -54,8 +137,10 @@ public final class JwsChecks {
             byte[] raw = Base64.getUrlDecoder().decode(jws.getEncodedHeader());
             header = JsonSerialization.mapper.readTree(new String(raw, StandardCharsets.UTF_8));
         } catch (Exception unreadable) {
-            // An unreadable header is not this method's failure to report; the signature check will
-            // reject it. Report "no critical headers" and let validation continue to that point.
+            // RFC 7515 §5.2 step 2: a header that does not decode means the JWS "MUST be rejected".
+            // This used to report "no critical headers" here, while Keycloak's lenient decoder read the
+            // same header — crit and all — once a trailing "=junk" was stripped (R-24).
+            critical.add("(header is not base64url-encoded JSON)");
             return critical;
         }
         JsonNode crit = header == null ? null : header.get("crit");
@@ -201,7 +286,6 @@ public final class JwsChecks {
         return algorithm;
     }
 
-    /** True iff {@code audience} contains {@code expected}. */
     /**
      * True iff {@code audience} names at least one audience and none of them is blank. A blank entry —
      * {@code "aud": [""]} — names nothing, and used to satisfy "present" on its own (R-16).
@@ -236,6 +320,7 @@ public final class JwsChecks {
         return exp == null || exp == 0 || iat <= exp;
     }
 
+    /** True iff {@code audience} contains {@code expected}. */
     public static boolean audienceIncludes(String[] audience, String expected) {
         if (audience == null || expected == null) {
             return false;
