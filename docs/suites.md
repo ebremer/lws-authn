@@ -19,7 +19,10 @@ same things step by step.
    `<client>-dedicated` → Add mapper → By configuration → **LWS WebID Subject***.
    - **WebID user attribute** *(optional)* — a user attribute holding a WebID the user already owns.
      When empty, the `sub` becomes the Keycloak-hosted URL `{issuer}/lws/cid/{userId}`.
-   - **Add to ID token / access token / userinfo** — default on. The ID Token is the LWS credential.
+   - **Add to ID token / userinfo** — default on. The ID Token is the LWS credential.
+   - **Add to access token** — default **off**. An access token is not an LWS credential, and one carrying
+     the WebID as its `sub` looks like one; the verifier refuses it by its type (`tokenIsIdToken`), but
+     other verifiers may not. Turn it on only if something downstream needs the WebID there.
 
 ### Endpoints — `/realms/{realm}/lws`
 

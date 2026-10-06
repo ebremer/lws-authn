@@ -85,7 +85,9 @@ and fails closed when the client identifier is absent.
 
 ## OpenID Connect suite
 
-**Enforced.** `alg` is never `none`; no unsupported `crit`; `typ`, when present, names a JWT;
+**Enforced.** `alg` is never `none`; no unsupported `crit`; `typ`, when present, names a JWT — not
+`at+jwt`, an access token's type; the payload's `typ`, when present, says it is an ID Token
+(`tokenIsIdToken`: Keycloak's access tokens say `Bearer`, and their header is `JWT` like an ID Token's);
 `sub` and `iss` present; `azp` present (`clientPresent`). `sub` is dereferenced over the guarded HTTP
 stack and the document must have an `id` equal to `sub` (`subjectDereferenced`, `subjectIdMatches`) —
 on *both* the RDF and the JSON-LD path; the JSON-LD path used to default a missing `id` to the subject,
@@ -110,7 +112,8 @@ issuance too (Resource Indicators, RFC 8707).
 
 ## Self-signed Controlled Identifier suite
 
-**Enforced.** `alg` never `none`; no unsupported `crit`; `typ` names a JWT if present;
+**Enforced.** `alg` never `none`; no unsupported `crit`; `typ` names a JWT if present, not an access
+token's `at+jwt`;
 `sub == iss == client_id` (`selfIssued`); a `kid` is present (`keyIdPresent`) — no fallback to "the
 only key", because the credential says which key signed it. `sub` is dereferenced — or, for a DID,
 resolved (below) — and the document's `id` must equal it (`subjectDereferenced`, `subjectIdMatches`).

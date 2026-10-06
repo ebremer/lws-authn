@@ -86,7 +86,7 @@ MAPPER=$(cat <<JSON
   "config": {
     "lws.webid.attribute": "$WEBID_ATTRIBUTE",
     "id.token.claim": "true",
-    "access.token.claim": "true",
+    "access.token.claim": "false",
     "userinfo.token.claim": "true"
   }
 }

@@ -52,6 +52,7 @@ import org.keycloak.jose.jws.JWSInput;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.representations.IDToken;
 import org.keycloak.util.JsonSerialization;
+import org.keycloak.util.TokenUtil;
 
 import com.ebremer.lws.authn.openid.LWSConstants;
 
@@ -118,6 +119,22 @@ public class LWSCredentialVerifier {
             result.check("typeIsJwt", typeOk);
             if (!typeOk) {
                 result.error("ID Token 'typ' header is not a JWT type");
+                return result.fail();
+            }
+
+            // An access token is not an ID Token, and must not pass for one (R-05). Keycloak puts
+            // "typ": "JWT" in the header of both, so the header cannot tell them apart; the payload's own
+            // "typ" claim can — "ID" for an ID Token, "Bearer" or "DPoP" for an access token, "Refresh",
+            // "Logout". With this realm's WebID mapper on the access token, an access token carried a
+            // WebID sub, iss, azp and exp: everything checked below. A resource server that was handed one
+            // could replay it as the user's credential. Other providers rarely set the claim, so its
+            // absence is not held against a token; only a type that says it is something else is.
+            String payloadType = token.getType();
+            boolean isIdToken = payloadType == null || payloadType.isBlank()
+                    || TokenUtil.TOKEN_TYPE_ID.equalsIgnoreCase(payloadType.trim());
+            result.check("tokenIsIdToken", isIdToken);
+            if (!isIdToken) {
+                result.error("The token's 'typ' claim says it is not an ID Token");
                 return result.fail();
             }
 

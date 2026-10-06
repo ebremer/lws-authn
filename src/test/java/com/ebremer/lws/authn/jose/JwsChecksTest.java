@@ -136,4 +136,15 @@ class JwsChecksTest {
         assertFalse(JwsChecks.audienceIncludes(audience, null));
         assertFalse(JwsChecks.audienceIncludes(new String[0], "https://as.example"));
     }
+
+    /** RFC 8725 §3.11: absent or a JWT type is accepted; an access token's type is not (R-05). */
+    @Test
+    void acceptsOnlyAJwtTypeOrNone() {
+        for (String typ : new String[]{null, "", "JWT", "jwt", "application/jwt", " JWT "}) {
+            assertTrue(JwsChecks.typeIsJwtOrAbsent(typ), String.valueOf(typ));
+        }
+        for (String typ : new String[]{"at+jwt", "application/at+jwt", "AT+JWT", "logout+jwt", "dpop+jwt", "JWE"}) {
+            assertFalse(JwsChecks.typeIsJwtOrAbsent(typ), typ);
+        }
+    }
 }

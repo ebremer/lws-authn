@@ -91,4 +91,39 @@ class LWSCredentialVerifierTest {
         assertNotNull(verify("{\"alg\":\"none\"}", "{}").getTraceId());
         assertNotNull(new LWSCredentialVerifier(null).verify("not a jwt at all").getTraceId());
     }
+
+    /**
+     * R-05. Keycloak writes {@code "typ": "JWT"} in the header of access tokens and ID Tokens alike; the
+     * payload's own {@code typ} says which it is. With the WebID mapper on access tokens, a realm access
+     * token carried everything else this verifier checks.
+     */
+    @Test
+    void rejectsATokenWhosePayloadSaysItIsNotAnIdToken() {
+        for (String type : new String[]{"Bearer", "DPoP", "Refresh", "Logout"}) {
+            VerificationResult r = verify("{\"alg\":\"RS256\",\"typ\":\"JWT\"}",
+                    "{\"typ\":\"" + type + "\",\"sub\":\"https://id.example/u\",\"iss\":\"https://op.example\","
+                            + "\"azp\":\"https://c.example\"}");
+            assertFalse(r.isValid(), type);
+            assertEquals(Boolean.FALSE, r.getChecks().get("tokenIsIdToken"), type);
+        }
+    }
+
+    /** An ID Token that says so, or says nothing — as most providers do — gets past the type check. */
+    @Test
+    void acceptsAnIdTokenTypeOrNone() {
+        for (String claims : new String[]{
+                "{\"typ\":\"ID\",\"sub\":\"https://id.example/u\",\"iss\":\"https://op.example\",\"azp\":\"https://c.example\"}",
+                "{\"sub\":\"https://id.example/u\",\"iss\":\"https://op.example\",\"azp\":\"https://c.example\"}"}) {
+            assertEquals(Boolean.TRUE, verify("{\"alg\":\"RS256\"}", claims).getChecks().get("tokenIsIdToken"), claims);
+        }
+    }
+
+    /** R-05. {@code at+jwt} in the header is RFC 9068's explicit "this is an access token". */
+    @Test
+    void rejectsAHeaderTypedAsAnAccessToken() {
+        VerificationResult r = verify("{\"alg\":\"RS256\",\"typ\":\"at+jwt\"}",
+                "{\"sub\":\"https://id.example/u\",\"iss\":\"https://op.example\",\"azp\":\"https://c.example\"}");
+        assertFalse(r.isValid());
+        assertEquals(Boolean.FALSE, r.getChecks().get("typeIsJwt"));
+    }
 }

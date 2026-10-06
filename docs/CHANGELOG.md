@@ -85,6 +85,15 @@ realm under the default `bearer` access mode, before any signature is checked.
   the Thrift reader allocate 95 MB and return an empty graph without error; a few dozen at once ran the
   server out of memory. Now only Turtle, N-Triples, RDF/XML, JSON-LD and `application/json` are read,
   and anything else is refused by name.
+- **An access token no longer verifies as an LWS credential** (R-05). The JWT suites accepted a `typ`
+  header of `at+jwt` — RFC 9068's explicit "this is an access token" — and the OpenID verifier never
+  looked at the payload's `typ`, the only thing that distinguishes a Keycloak access token (`Bearer`)
+  from an ID Token (`ID`): Keycloak writes `"typ": "JWT"` in both headers. With the WebID mapper on
+  access tokens, which was its default, a realm access token carried a WebID `sub`, `iss`, `azp` and
+  `exp` — everything checked — so a resource server the user had handed one to could present it as the
+  user's credential. `at+jwt` is now refused in both JWT suites, and the OpenID verifier rejects a
+  payload `typ` other than `ID` (new check `tokenIsIdToken`; an absent claim, usual outside Keycloak,
+  is still fine).
 
 ### Added
 
@@ -149,9 +158,19 @@ each may reject a document that used to verify. Check your issuers' documents be
   This provider already refused to *publish* one (P0-1); it now refuses to *verify* against one too.
 - **`ES256`/`ES384`/`ES512` are pinned to P-256/P-384/P-521** (RFC 7518 §3.4), for every JWT suite. A
   JCA verifier accepts, say, a SHA-512 signature from a P-256 key; that is valid ECDSA and not ES512.
+- **A token typed as something other than an authentication credential is refused** (R-05): a `typ`
+  header of `at+jwt` in either JWT suite, and in the OpenID suite a payload `typ` other than `ID`. An
+  ID Token from a provider that sets the payload `typ` to something else would now fail
+  `tokenIsIdToken`; none known does.
 
 ### Changed
 
+- **The WebID mapper no longer puts the WebID in the access token by default** (R-05). *Add to access
+  token* now defaults to off, and a mapper whose configuration never mentions it — one created over
+  the admin API with only the attribute set — is off too, where "not set" used to mean on. The demo
+  realm and `lws-demo.sh` set it off explicitly. Existing mappers with the switch explicitly on keep
+  it; turn it off unless something downstream needs the WebID in the access token. The ID Token and
+  userinfo are unchanged.
 - **Built and tested against Keycloak 26.7.4** (was 26.7.3), released 16 September 2026 with six security
   fixes, among them an unauthenticated denial of service through locale caching (CVE-2026-79651) and
   the `impersonation` role reaching a realm administrator (CVE-2026-17526). Run the provider on 26.7.4;

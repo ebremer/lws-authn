@@ -68,9 +68,15 @@ public final class SelfIssuedJwts {
      */
     public static String sign(Map<String, Object> claims, String alg, String kid, PrivateKey key, String jca)
             throws Exception {
+        return sign(claims, alg, kid, key, jca, "JWT");
+    }
+
+    /** As {@link #sign(Map, String, String, PrivateKey, String)}, with the header's {@code typ} chosen. */
+    public static String sign(Map<String, Object> claims, String alg, String kid, PrivateKey key, String jca,
+                              String typ) throws Exception {
         Map<String, Object> header = new LinkedHashMap<>();
         header.put("alg", alg);
-        header.put("typ", "JWT");
+        header.put("typ", typ);
         if (kid != null) {
             header.put("kid", kid);
         }

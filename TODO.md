@@ -265,7 +265,7 @@ is needed.
   which also needs context injection to make it useful. Not done: excluding the Thrift/Protobuf readers
   from the shaded JAR — unreachable now, so it is a size question rather than a security one.
 
-- [ ] **R-05 · A realm access token verifies as an LWS ID Token credential (token substitution).**
+- [x] **R-05 · A realm access token verifies as an LWS ID Token credential (token substitution).**
   `Medium` · security · `S` · *verified*
   `jose/JwsChecks.java:133` accepts `typ: at+jwt` — the RFC 9068 marker that says "this is an access
   token" — for both JWT suites, defeating the explicit typing RFC 8725 §3.11 exists for. And Keycloak
@@ -280,6 +280,17 @@ is needed.
   present and not `ID`; default the mapper's access-token inclusion to off and say why in its help text
   and the demo realm. Add a negative test (`LwsAuthIT`: mint an access token, expect `typeIsJwt` or a
   new `tokenIsIdToken` check to fail).
+  **Done.** `at+jwt` is out of `JwsChecks.ACCEPTED_TYPES` (both JWT suites). The OpenID verifier adds
+  check `tokenIsIdToken` straight after `typeIsJwt`: a payload `typ` that is present and not `ID`
+  (Keycloak's `TokenUtil.TOKEN_TYPE_ID`) fails — `Bearer`, `DPoP`, `Refresh`, `Logout` — and an absent
+  one passes, since most providers omit it. `LWSSubMapper`'s *Add to access token* defaults to off, and
+  `include` now takes the default per switch, so a mapper with no setting for it is off too (it used to
+  treat "not set" as on); the demo realm and `lws-demo.sh` say `false`. Tests: `JwsChecksTest`,
+  `LWSCredentialVerifierTest` (four payload types, the `at+jwt` header, and that `ID`/absent pass),
+  `SelfSignedCidDidSubjectTest` (an otherwise valid `did:key` credential typed `at+jwt`), a new
+  `LWSSubMapperTest`, each failing against the previous code; and
+  `LwsAuthIT.anAccessTokenIsNotAnLwsCredential`, which presents a real realm access token — written,
+  not yet run (no Docker here; see R-43).
 
 - [ ] **R-06 · Revocation and expiry of a verification method fail open.**
   `Medium` · security/spec-conformance · `S` · *verified*

@@ -40,7 +40,7 @@
           "config": {
             "lws.webid.attribute": "",
             "id.token.claim": "true",
-            "access.token.claim": "true",
+            "access.token.claim": "false",
             "userinfo.token.claim": "true"
           }
         }

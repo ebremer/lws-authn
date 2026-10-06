@@ -129,8 +129,15 @@ public final class JwsChecks {
         return ServerSettings.clockSkewSeconds();
     }
 
-    /** JOSE {@code typ} values this provider accepts when the header declares one (RFC 8725 §3.11). */
-    private static final Set<String> ACCEPTED_TYPES = Set.of("jwt", "at+jwt", "application/jwt");
+    /**
+     * JOSE {@code typ} values this provider accepts when the header declares one (RFC 8725 §3.11).
+     *
+     * <p>Not {@code at+jwt}, which this set once included. That is RFC 9068's marker for an OAuth
+     * access token, and explicit typing exists precisely so that a token minted for one purpose cannot
+     * be presented as another: an access token is not an authentication credential in either JWT
+     * suite (R-05).</p>
+     */
+    private static final Set<String> ACCEPTED_TYPES = Set.of("jwt", "application/jwt");
 
     /**
      * True iff {@code token} is inside its validity window, allowing {@link #clockSkewSeconds()} of

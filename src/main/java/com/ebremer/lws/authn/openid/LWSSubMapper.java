@@ -71,15 +71,23 @@ public class LWSSubMapper extends AbstractOIDCProtocolMapper
         CONFIG_PROPERTIES.add(attr);
 
         CONFIG_PROPERTIES.add(includeProperty(OIDCAttributeMapperHelper.INCLUDE_IN_ID_TOKEN,
-                "Add to ID token", "Set the LWS WebID as the 'sub' claim of the ID token (the LWS credential)."));
+                "Add to ID token", "Set the LWS WebID as the 'sub' claim of the ID token (the LWS credential).",
+                true));
         CONFIG_PROPERTIES.add(includeProperty(OIDCAttributeMapperHelper.INCLUDE_IN_ACCESS_TOKEN,
-                "Add to access token", "Set the LWS WebID as the 'sub' claim of the access token."));
+                "Add to access token", "Off by default. Set the LWS WebID as the 'sub' claim of the access token. "
+                        + "An access token is not an LWS credential; with a WebID 'sub' it looks like one to a "
+                        + "verifier that does not check the token's type, so a party the user handed an access "
+                        + "token to could present it as the user's credential. Turn on only if something "
+                        + "downstream needs the WebID in the access token.",
+                false));
         CONFIG_PROPERTIES.add(includeProperty(OIDCAttributeMapperHelper.INCLUDE_IN_USERINFO,
-                "Add to userinfo", "Set the LWS WebID as the 'sub' claim returned from the userinfo endpoint."));
+                "Add to userinfo", "Set the LWS WebID as the 'sub' claim returned from the userinfo endpoint.",
+                true));
     }
 
-    private static ProviderConfigProperty includeProperty(String name, String label, String help) {
-        return new ProviderConfigProperty(name, label, help, ProviderConfigProperty.BOOLEAN_TYPE, "true");
+    private static ProviderConfigProperty includeProperty(String name, String label, String help, boolean onByDefault) {
+        return new ProviderConfigProperty(name, label, help, ProviderConfigProperty.BOOLEAN_TYPE,
+                String.valueOf(onByDefault));
     }
 
     @Override
@@ -112,7 +120,7 @@ public class LWSSubMapper extends AbstractOIDCProtocolMapper
     @Override
     public AccessToken transformAccessToken(AccessToken token, ProtocolMapperModel mappingModel, KeycloakSession session,
             UserSessionModel userSession, ClientSessionContext clientSessionCtx) {
-        if (include(mappingModel, OIDCAttributeMapperHelper.INCLUDE_IN_ACCESS_TOKEN)) {
+        if (include(mappingModel, OIDCAttributeMapperHelper.INCLUDE_IN_ACCESS_TOKEN, false)) {
             token.setSubject(resolveWebId(token, mappingModel, session, userSession));
         }
         return token;
@@ -121,7 +129,7 @@ public class LWSSubMapper extends AbstractOIDCProtocolMapper
     @Override
     public IDToken transformIDToken(IDToken token, ProtocolMapperModel mappingModel, KeycloakSession session,
             UserSessionModel userSession, ClientSessionContext clientSessionCtx) {
-        if (include(mappingModel, OIDCAttributeMapperHelper.INCLUDE_IN_ID_TOKEN)) {
+        if (include(mappingModel, OIDCAttributeMapperHelper.INCLUDE_IN_ID_TOKEN, true)) {
             token.setSubject(resolveWebId(token, mappingModel, session, userSession));
         }
         return token;
@@ -130,7 +138,7 @@ public class LWSSubMapper extends AbstractOIDCProtocolMapper
     @Override
     public AccessToken transformUserInfoToken(AccessToken token, ProtocolMapperModel mappingModel, KeycloakSession session,
             UserSessionModel userSession, ClientSessionContext clientSessionCtx) {
-        if (include(mappingModel, OIDCAttributeMapperHelper.INCLUDE_IN_USERINFO)) {
+        if (include(mappingModel, OIDCAttributeMapperHelper.INCLUDE_IN_USERINFO, true)) {
             // userinfo subject is conveyed as an "other" claim, matching Keycloak's pairwise mapper
             token.getOtherClaims().put("sub", resolveWebId(token, mappingModel, session, userSession));
         }
@@ -199,8 +207,9 @@ public class LWSSubMapper extends AbstractOIDCProtocolMapper
     }
 
     /** Reads an include flag, defaulting to {@code true} when unset (LWS wants the WebID in all tokens). */
-    private static boolean include(ProtocolMapperModel mappingModel, String key) {
+    /** The mapper's setting for {@code key}, or {@code onByDefault} when it was never set (R-05). */
+    private static boolean include(ProtocolMapperModel mappingModel, String key, boolean onByDefault) {
         String value = mappingModel.getConfig().get(key);
-        return value == null || value.isBlank() || Boolean.parseBoolean(value);
+        return value == null || value.isBlank() ? onByDefault : Boolean.parseBoolean(value);
     }
 }

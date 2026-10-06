@@ -302,6 +302,19 @@ class LwsAuthIT {
     }
 
     /**
+     * R-05. A realm access token is not an LWS credential. Keycloak writes {@code "typ": "JWT"} in the
+     * header of access tokens and ID Tokens alike, and only the payload's {@code typ} ({@code Bearer}
+     * here) tells them apart; with the WebID mapper on access tokens, one used to verify as the user's
+     * ID Token. Rejected by the type check, whatever the mapper is configured to put in it.
+     */
+    @Test
+    void anAccessTokenIsNotAnLwsCredential() throws Exception {
+        JsonNode r = JSON.readTree(postForm(base + "/realms/" + REALM + "/lws/verify",
+                Map.of("credential", accessToken()), accessToken()).body());
+        assertRejected(r, "tokenIsIdToken");
+    }
+
+    /**
      * P2-1, and the packaging that carries it. The verifier dereferences a document served as JSON-LD
      * by a third party, written with an aliased term inside an {@code @graph} — a shape the old
      * key-walking reader could not see at all. Passing means Jena's JSON-LD 1.1 reader works inside

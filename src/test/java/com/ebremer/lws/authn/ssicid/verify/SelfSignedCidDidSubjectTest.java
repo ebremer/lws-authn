@@ -209,4 +209,21 @@ class SelfSignedCidDidSubjectTest {
         assertEquals(Boolean.FALSE, result.getChecks().get(failedCheck),
                 () -> failedCheck + " should have failed; checks=" + result.getChecks() + " errors=" + result.getErrors());
     }
+
+    /**
+     * R-05. {@code at+jwt} is RFC 9068's marker for an OAuth access token. A credential that says it is
+     * one is not a self-issued authentication credential, however good its signature.
+     */
+    @Test
+    void aCredentialTypedAsAnAccessTokenIsRejected() throws Exception {
+        KeyPair pair = SelfIssuedJwts.ed25519();
+        String did = DidKey.encodeEd25519(pair.getPublic());
+        for (String typ : new String[]{"at+jwt", "application/at+jwt"}) {
+            String jwt = SelfIssuedJwts.sign(SelfIssuedJwts.claims(did), "EdDSA", methodId(did),
+                    pair.getPrivate(), "Ed25519", typ);
+            SsiCidVerificationResult result = verify(jwt);
+            assertFalse(result.isValid(), typ);
+            assertEquals(Boolean.FALSE, result.getChecks().get("typeIsJwt"), typ);
+        }
+    }
 }
