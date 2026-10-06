@@ -338,7 +338,7 @@ is needed.
   use `https` URLs so they go on testing the address rather than the scheme. `LwsAuthIT`'s fixtures are
   all on its allow-listed hosts.
 
-- [ ] **R-08 · SSRF guard: special-purpose and address-embedding IPv6/IPv4 ranges pass.**
+- [x] **R-08 · SSRF guard: special-purpose and address-embedding IPv6/IPv4 ranges pass.**
   `Medium` · security · `S` · *demonstrated (classification)*
   `net/SsrfGuard.java:133-158` relies on `InetAddress.is*` predicates plus a few ranges. Allowed today:
   NAT64 `64:ff9b::/96` (e.g. `64:ff9b::a9fe:a9fe` → 169.254.169.254) and `64:ff9b:1::/48`;
@@ -349,6 +349,15 @@ is needed.
   **Do:** unwrap the embedded IPv4 address of NAT64, compatible, SIIT, 6to4 and Teredo addresses and
   re-check it; block the listed ranges — or better, allow only global unicast (IPv6 `2000::/3` minus the
   IANA special-purpose registry). Extend `SsrfGuardTest` with each case.
+  **Done, the better way.** `SsrfGuard.isInternal` now allows IPv6 only within `2000::/3`, less the
+  not-globally-reachable blocks inside it (`2001::/23`, which holds Teredo and benchmarking;
+  `2001:db8::/32`; `3fff::/20`; `5f00::/16`). IPv4-mapped, NAT64 `64:ff9b::/96` and 6to4 `2002::/16`
+  addresses are judged by the IPv4 address they carry; everything else outside global unicast —
+  IPv4-compatible, SIIT, local-use NAT64, `100::/64` — is refused with the rest. IPv4 follows a table of
+  the IANA registry's not-globally-reachable blocks plus multicast and the deprecated 6to4 relay
+  anycast; the JDK predicates stay in front as a backstop. Four new `SsrfGuardTest` cases, each case in
+  this item's list among them, and one that the neighbours of every block stay reachable; three fail
+  against the previous guard.
 
 - [ ] **R-09 · `StackOverflowError` from attacker-controlled nesting escapes every handler.**
   `Medium` · robustness/DoS · `S` · *demonstrated*

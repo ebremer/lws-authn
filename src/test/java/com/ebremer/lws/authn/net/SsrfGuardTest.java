@@ -112,4 +112,69 @@ class SsrfGuardTest {
         assertDoesNotThrow(() -> SsrfGuard.verify("https://100.63.0.1/", NONE));
         assertDoesNotThrow(() -> SsrfGuard.verify("https://100.128.0.1/", NONE));
     }
+
+    private static void assertBlocked(String literal) {
+        String host = literal.contains(":") ? "[" + literal + "]" : literal;
+        assertThrows(SsrfGuard.BlockedException.class, () -> SsrfGuard.verify("https://" + host + "/", NONE),
+                "should block " + literal);
+    }
+
+    private static void assertAllowed(String literal) {
+        String host = literal.contains(":") ? "[" + literal + "]" : literal;
+        assertDoesNotThrow(() -> SsrfGuard.verify("https://" + host + "/", NONE), "should allow " + literal);
+    }
+
+    /**
+     * R-08. IPv6 formats that carry an IPv4 address are judged by that address. NAT64 is the one that
+     * matters in practice: on an IPv6-only subnet with DNS64, {@code 64:ff9b::a9fe:a9fe} is
+     * 169.254.169.254.
+     */
+    @Test
+    void judgesAnEmbeddedIpv4AddressByItself() {
+        assertBlocked("64:ff9b::a9fe:a9fe");       // NAT64 → 169.254.169.254
+        assertBlocked("64:ff9b::7f00:1");          // NAT64 → 127.0.0.1
+        assertBlocked("64:ff9b::a00:1");           // NAT64 → 10.0.0.1
+        assertBlocked("2002:a9fe:a9fe::1");        // 6to4 → 169.254.169.254
+        assertBlocked("2002:c0a8:101::1");         // 6to4 → 192.168.1.1
+        assertAllowed("64:ff9b::808:808");         // NAT64 → 8.8.8.8
+        assertAllowed("2002:808:808::1");          // 6to4 → 8.8.8.8
+    }
+
+    /** R-08. Outside global unicast, or in a block of it that is not globally reachable. */
+    @Test
+    void blocksIpv6ThatIsNotGlobalUnicast() {
+        for (String literal : new String[]{
+                "::127.0.0.1", "::8.8.8.8",              // IPv4-compatible, deprecated
+                "::ffff:0:a9fe:a9fe",                    // SIIT
+                "64:ff9b:1::a9fe:a9fe",                  // local-use NAT64
+                "100::1",                                // discard-only
+                "2001::1", "2001:0:4136:e378::1",        // Teredo
+                "2001:2::1",                             // benchmarking
+                "2001:db8::1", "3fff::1",                // documentation
+                "5f00::1",                               // SRv6
+                "fc00::1", "fd12:3456::1",               // unique-local
+                "fe80::1", "fec0::1",                    // link-local, old site-local
+                "ff02::1", "::", "::1"}) {
+            assertBlocked(literal);
+        }
+    }
+
+    /** R-08. The IPv4 special-purpose blocks the JDK's predicates miss. */
+    @Test
+    void blocksIpv4SpecialPurposeRanges() {
+        for (String literal : new String[]{"192.0.0.1", "192.0.0.170", "192.0.2.1", "192.88.99.1",
+                "198.18.0.1", "198.19.255.255", "198.51.100.1", "203.0.113.1", "240.0.0.1", "255.255.255.255"}) {
+            assertBlocked(literal);
+        }
+    }
+
+    /** And nothing global is caught by the blocks either side of it. */
+    @Test
+    void allowsGlobalAddressesNextToTheBlocks() {
+        for (String literal : new String[]{"8.8.8.8", "1.1.1.1", "192.0.1.1", "192.0.3.1", "198.17.255.255",
+                "198.20.0.1", "203.0.114.1", "223.255.255.254", "192.31.196.1",
+                "2606:4700:4700::1111", "2001:4860:4860::8888", "2001:200::1", "2a00:1450:4001::1"}) {
+            assertAllowed(literal);
+        }
+    }
 }

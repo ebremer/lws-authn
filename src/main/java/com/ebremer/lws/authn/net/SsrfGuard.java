@@ -165,31 +165,56 @@ public final class SsrfGuard {
         return h;
     }
 
-    private static boolean isInternal(InetAddress a) {
-        byte[] b = a.getAddress();
-        // Unwrap an IPv4-mapped IPv6 address (::ffff:a.b.c.d) and re-check its embedded IPv4, so a
-        // loopback/private target cannot slip through dressed as IPv6.
-        if (b.length == 16 && isIpv4Mapped(b)) {
-            try {
-                return isInternal(InetAddress.getByAddress(Arrays.copyOfRange(b, 12, 16)));
-            } catch (UnknownHostException e) {
-                return true; // cannot normalize -> treat as internal (fail closed)
-            }
-        }
+    /**
+     * True unless {@code a} is a globally reachable unicast address (R-08).
+     *
+     * <p>IPv6 is decided by what is allowed rather than what is not: only global unicast,
+     * {@code 2000::/3}, less the blocks the IANA IPv6 Special-Purpose Address Registry marks as not
+     * globally reachable. That excludes in one stroke everything below it — loopback, unspecified, the
+     * deprecated IPv4-compatible {@code ::a.b.c.d}, SIIT's {@code ::ffff:0:a.b.c.d}, discard-only
+     * {@code 100::/64}, local-use NAT64 {@code 64:ff9b:1::/48}, unique-local, link-local, multicast.
+     * Three formats carry an IPv4 address the packet is really bound for, and are judged by that address
+     * instead: IPv4-mapped {@code ::ffff:a.b.c.d}, well-known NAT64 {@code 64:ff9b::/96} — real on
+     * IPv6-only cloud subnets with DNS64, where {@code 64:ff9b::a9fe:a9fe} reaches 169.254.169.254 — and
+     * 6to4 {@code 2002::/16}. Teredo ({@code 2001::/32}) obscures its address, and falls in a
+     * not-reachable block anyway.</p>
+     *
+     * <p>IPv4 is decided by the IANA IPv4 Special-Purpose Address Registry's not-globally-reachable
+     * blocks, which the JDK's own predicates only partly cover.</p>
+     */
+    static boolean isInternal(InetAddress a) {
         if (a.isLoopbackAddress() || a.isAnyLocalAddress() || a.isLinkLocalAddress()
                 || a.isSiteLocalAddress() || a.isMulticastAddress()) {
-            return true; // 127/8, ::1, 0.0.0.0, 169.254/16 (incl. cloud metadata), 10/8 172.16/12 192.168/16, fe80::, etc.
+            return true; // what the JDK already knows; the tables below are the rule
         }
+        byte[] b = a.getAddress();
         if (b.length == 4) {
-            int first = b[0] & 0xFF, second = b[1] & 0xFF;
-            if (first == 0) {
-                return true; // 0.0.0.0/8 "this network" (isAnyLocalAddress matches only 0.0.0.0 itself)
-            }
-            if (first == 100 && (second & 0xC0) == 0x40) {
-                return true; // 100.64.0.0/10 carrier-grade NAT (RFC 6598), not flagged site-local by the JDK
+            return isInternalIpv4(b);
+        }
+        if (isIpv4Mapped(b) || NAT64.contains(b)) {
+            return isInternalIpv4(Arrays.copyOfRange(b, 12, 16));
+        }
+        if (SIX_TO_FOUR.contains(b)) {
+            return isInternalIpv4(Arrays.copyOfRange(b, 2, 6));
+        }
+        if (!IPV6_GLOBAL_UNICAST.contains(b)) {
+            return true;
+        }
+        for (Block block : IPV6_NOT_GLOBAL) {
+            if (block.contains(b)) {
+                return true;
             }
         }
-        return b.length == 16 && (b[0] & 0xfe) == 0xfc; // IPv6 unique-local fc00::/7
+        return false;
+    }
+
+    private static boolean isInternalIpv4(byte[] b) {
+        for (Block block : IPV4_NOT_GLOBAL) {
+            if (block.contains(b)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** True for an IPv4-mapped IPv6 address (::ffff:a.b.c.d): 80 zero bits then 0xffff. */
@@ -200,6 +225,74 @@ public final class SsrfGuard {
             }
         }
         return (b[10] & 0xFF) == 0xFF && (b[11] & 0xFF) == 0xFF;
+    }
+
+    /**
+     * IPv4 blocks that are not globally reachable (IANA IPv4 Special-Purpose Address Registry, plus
+     * multicast and the deprecated 6to4 relay anycast). The few globally reachable anycast addresses
+     * inside {@code 192.0.0.0/24} are refused with it: nothing a verifier fetches lives there.
+     */
+    private static final Block[] IPV4_NOT_GLOBAL = {
+        Block.of("0.0.0.0/8"),          // "this network"
+        Block.of("10.0.0.0/8"),         // private
+        Block.of("100.64.0.0/10"),      // carrier-grade NAT
+        Block.of("127.0.0.0/8"),        // loopback
+        Block.of("169.254.0.0/16"),     // link-local, including cloud metadata
+        Block.of("172.16.0.0/12"),      // private
+        Block.of("192.0.0.0/24"),       // IETF protocol assignments, DS-Lite, NAT64 discovery
+        Block.of("192.0.2.0/24"),       // documentation
+        Block.of("192.88.99.0/24"),     // 6to4 relay anycast, deprecated
+        Block.of("192.168.0.0/16"),     // private
+        Block.of("198.18.0.0/15"),      // benchmarking
+        Block.of("198.51.100.0/24"),    // documentation
+        Block.of("203.0.113.0/24"),     // documentation
+        Block.of("224.0.0.0/4"),        // multicast
+        Block.of("240.0.0.0/4"),        // reserved, and the limited broadcast address
+    };
+
+    private static final Block IPV6_GLOBAL_UNICAST = Block.of("2000::/3");
+    private static final Block NAT64 = Block.of("64:ff9b::/96");
+    private static final Block SIX_TO_FOUR = Block.of("2002::/16");
+
+    /** Blocks inside {@code 2000::/3} that are not globally reachable (IANA IPv6 Special-Purpose Registry). */
+    private static final Block[] IPV6_NOT_GLOBAL = {
+        Block.of("2001::/23"),          // IETF protocol assignments: Teredo, benchmarking, ORCHID, …
+        Block.of("2001:db8::/32"),      // documentation
+        Block.of("3fff::/20"),          // documentation
+        Block.of("5f00::/16"),          // SRv6 segment identifiers
+    };
+
+    /** An address block: a prefix and its length in bits. */
+    private record Block(byte[] prefix, int bits) {
+
+        /** Parses {@code address/bits}; the address is a literal, so nothing is looked up. */
+        static Block of(String cidr) {
+            int slash = cidr.indexOf('/');
+            try {
+                byte[] prefix = InetAddress.getByName(cidr.substring(0, slash)).getAddress();
+                return new Block(prefix, Integer.parseInt(cidr.substring(slash + 1)));
+            } catch (UnknownHostException e) {
+                throw new IllegalArgumentException(cidr, e);
+            }
+        }
+
+        boolean contains(byte[] address) {
+            if (address.length != prefix.length) {
+                return false;
+            }
+            int whole = bits / 8;
+            for (int i = 0; i < whole; i++) {
+                if (address[i] != prefix[i]) {
+                    return false;
+                }
+            }
+            int rest = bits % 8;
+            if (rest == 0) {
+                return true;
+            }
+            int mask = (0xFF << (8 - rest)) & 0xFF;
+            return (address[whole] & mask) == (prefix[whole] & mask);
+        }
     }
 
     /** The configured allow-list of internal host names. */

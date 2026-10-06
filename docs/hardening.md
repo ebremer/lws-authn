@@ -12,8 +12,12 @@ behaviours are covered by tests — `mvn test` for the unit tests, `mvn verify` 
 - **SSRF.** The OpenID and self-signed-CID verifiers dereference URLs taken from the credential
   (`sub`, `iss`, `jwks_uri`). Before each fetch,
   [`SsrfGuard`](https://github.com/ebremer/lws-authn/blob/master/src/main/java/com/ebremer/lws/authn/net/SsrfGuard.java) rejects non-`http(s)` schemes
-  and any host that resolves to a loopback / private / link-local / reserved address (including the
-  `169.254.169.254` cloud-metadata endpoint). Legitimate internal targets are opt-in via a
+  and any host that resolves to anything but a **globally reachable unicast address** — loopback,
+  private, link-local (including the `169.254.169.254` cloud-metadata endpoint), carrier-grade NAT,
+  documentation, benchmarking and reserved ranges, by the IANA special-purpose registries. IPv6 is
+  allowed only within global unicast (`2000::/3`), and an IPv6 address that carries an IPv4 one —
+  IPv4-mapped, NAT64 `64:ff9b::/96` (which on an IPv6-only subnet with DNS64 reaches private IPv4),
+  6to4 — is judged by the IPv4 address inside it. Legitimate internal targets are opt-in via a
   comma-separated allow-list — system property `lws.authn.allowedInternalHosts` or environment
   variable `LWS_AUTHN_ALLOWED_INTERNAL_HOSTS`.
   - The check is part of **name resolution**, not a separate step before it: the guard is installed as

@@ -106,6 +106,12 @@ realm under the default `bearer` access mode, before any signature is checked.
   now `https` — plain `http` only to a host on `allowed-internal-hosts`, which the demos and the
   integration test use — and the OpenID verifier checks that `iss` is an Issuer Identifier as OpenID
   Connect Core §2 defines one: https, with no query or fragment (new check `issuerWellFormed`).
+- **The SSRF guard admits only globally reachable addresses** (R-08). It refused loopback, private,
+  link-local and a few other ranges, and let through everything it did not list: NAT64
+  (`64:ff9b::a9fe:a9fe` is 169.254.169.254 on an IPv6-only subnet with DNS64), IPv4-compatible
+  `::127.0.0.1`, SIIT, 6to4, Teredo, the benchmarking, documentation and reserved IPv4 ranges. IPv6 is
+  now allowed only within global unicast less the IANA special-purpose blocks, an embedded IPv4 address
+  is judged by itself, and IPv4 follows the IANA IPv4 special-purpose registry.
 
 ### Added
 
