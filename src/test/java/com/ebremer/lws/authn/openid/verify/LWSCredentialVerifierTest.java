@@ -222,4 +222,22 @@ class LWSCredentialVerifierTest {
         assertFalse(r.isValid());
         assertEquals(Boolean.FALSE, r.getChecks().get("numericDatesWellFormed"));
     }
+
+    /** R-28. With a maximum lifetime configured, {@code exp − iat} over it is refused before any fetch. */
+    @Test
+    void aConfiguredMaximumLifetimeIsEnforced() {
+        long now = java.time.Instant.now().getEpochSecond();
+        String claims = "{" + CLAIMS + ",\"aud\":[\"https://c.example\"],\"iat\":" + now + ",\"exp\":" + (now + 86_400) + "}";
+        assertEquals(null, verify("{\"alg\":\"RS256\"}", claims).getChecks().get("lifetimeWithinLimit"));
+        System.setProperty("lws.authn.maxCredentialLifetimeSeconds", "3600");
+        try {
+            com.ebremer.lws.authn.config.ServerSettings.contribute("test", null);
+            VerificationResult r = verify("{\"alg\":\"RS256\"}", claims);
+            assertFalse(r.isValid());
+            assertEquals(Boolean.FALSE, r.getChecks().get("lifetimeWithinLimit"));
+        } finally {
+            System.clearProperty("lws.authn.maxCredentialLifetimeSeconds");
+            com.ebremer.lws.authn.config.ServerSettings.reset();
+        }
+    }
 }

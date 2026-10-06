@@ -44,6 +44,7 @@ import java.util.Set;
 
 import com.ebremer.lws.authn.did.DidKey;
 import com.ebremer.lws.authn.did.Dids;
+import com.ebremer.lws.authn.config.ServerSettings;
 import com.ebremer.lws.authn.jose.JwsChecks;
 import com.ebremer.lws.authn.jose.JwsSignatures;
 import com.ebremer.lws.authn.jose.KeyIdFragment;
@@ -314,6 +315,16 @@ public class SelfSignedCidVerifier {
             if (!issuedAtConsistent) {
                 result.error("Credential 'iat' is in the future, or after its 'exp'");
                 return result.fail();
+            }
+            // A deployment may bound how long a credential lives, so a stolen one ages out (R-28).
+            if (ServerSettings.maxCredentialLifetimeSeconds() > 0) {
+                boolean lifetimeWithinLimit = JwsChecks.lifetimeWithinLimit(token);
+                result.check("lifetimeWithinLimit", lifetimeWithinLimit);
+                if (!lifetimeWithinLimit) {
+                    result.error("Credential is valid for longer than this server accepts: 'exp' - 'iat' is over "
+                            + ServerSettings.maxCredentialLifetimeSeconds() + " seconds");
+                    return result.fail();
+                }
             }
 
             // "The `aud` claim MUST include the target authorization server." Every conforming credential

@@ -108,7 +108,9 @@ type (`algorithmMatchesKey`) — the classic HS256-against-an-RSA-public-key con
 (`signatureValid`) and an explicit `exp` (`notExpired`; a missing `exp` is not "never expires"). The
 claims OpenID Connect Core §2 makes REQUIRED in an ID Token are required whatever the caller asks:
 `iat` (`issuedAtPresent`) — not in the future, nor after `exp` (`issuedAtConsistent`) — and a non-blank
-`aud` (`audiencePresent`), checked with `sub`, `iss` and `azp` before anything is fetched.
+`aud` (`audiencePresent`), checked with `sub`, `iss` and `azp` before anything is fetched. With
+`max-credential-lifetime-seconds` configured, `exp − iat` must be within it (`lifetimeWithinLimit`);
+neither suite bounds a credential's lifetime, so by default nothing does.
 
 **Enforced when the caller asks.** OpenID Connect Core §3.1.3.7 steps 3–5, which the suite
 incorporates by reference: pass `client_id` and `aud` must list it (`audienceContainsClient`) and `azp`
@@ -159,7 +161,8 @@ order, so the method a fragment names under §3.4 is the one selected. The key m
 published for signing and consistent with the token's algorithm (`verificationMethodUsableForSigning`,
 `algorithmMatchesKey` — `ES*` pinned to its curve). Signature (`signatureValid`), explicit `exp`
 (`notExpired`), required `iat` (`issuedAtPresent`) that is not in the future nor after `exp`
-(`issuedAtConsistent`), and an audience that is present, not blank, and **includes the target
+(`issuedAtConsistent`), a lifetime within `max-credential-lifetime-seconds` when one is configured
+(`lifetimeWithinLimit`), and an audience that is present, not blank, and **includes the target
 authorization server** (`audiencePresent`, `audienceMatched`): "The `aud` claim MUST include the target
 authorization server." The target is the request's `audience` or the configured one, and a request with
 neither is a `400` — there is no verdict without it.

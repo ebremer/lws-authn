@@ -29,6 +29,7 @@ import java.security.PublicKey;
 import java.util.List;
 import java.util.Set;
 
+import com.ebremer.lws.authn.config.ServerSettings;
 import com.ebremer.lws.authn.jose.JwsChecks;
 import com.ebremer.lws.authn.net.OutboundHttp;
 import com.ebremer.lws.authn.net.SsrfGuard;
@@ -208,6 +209,16 @@ public class LWSCredentialVerifier {
             if (!issuedAtConsistent) {
                 result.error("ID Token 'iat' is in the future, or after its 'exp'");
                 return result.fail();
+            }
+            // A deployment may bound how long a credential lives, so a stolen one ages out (R-28).
+            if (ServerSettings.maxCredentialLifetimeSeconds() > 0) {
+                boolean lifetimeWithinLimit = JwsChecks.lifetimeWithinLimit(token);
+                result.check("lifetimeWithinLimit", lifetimeWithinLimit);
+                if (!lifetimeWithinLimit) {
+                    result.error("ID Token is valid for longer than this server accepts: 'exp' - 'iat' is over "
+                            + ServerSettings.maxCredentialLifetimeSeconds() + " seconds");
+                    return result.fail();
+                }
             }
             String[] audience = token.getAudience();
             boolean audiencePresent = JwsChecks.audiencePresent(audience);

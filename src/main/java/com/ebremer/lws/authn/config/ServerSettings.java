@@ -42,6 +42,7 @@ import org.keycloak.Config;
  *   <tr><td>{@code http-deadline-millis}</td><td>{@code lws.authn.http.deadlineMillis}</td><td>{@code LWS_AUTHN_HTTP_DEADLINE_MILLIS}</td><td>{@code 10000}</td></tr>
  *   <tr><td>{@code http-max-concurrent-per-caller}</td><td>{@code lws.authn.http.maxConcurrentPerCaller}</td><td>{@code LWS_AUTHN_HTTP_MAX_CONCURRENT_PER_CALLER}</td><td>{@code 4}</td></tr>
  *   <tr><td>{@code clock-skew-seconds}</td><td>{@code lws.authn.clockSkewSeconds}</td><td>{@code LWS_AUTHN_CLOCK_SKEW_SECONDS}</td><td>{@code 60}</td></tr>
+ *   <tr><td>{@code max-credential-lifetime-seconds}</td><td>{@code lws.authn.maxCredentialLifetimeSeconds}</td><td>{@code LWS_AUTHN_MAX_CREDENTIAL_LIFETIME_SECONDS}</td><td>{@code 0} (no limit)</td></tr>
  * </table>
  *
  * @author Erich Bremer
@@ -87,12 +88,24 @@ public final class ServerSettings {
     /** Upper bound on the configurable skew: past a few minutes it stops being clock skew. */
     private static final long MAX_CLOCK_SKEW_SECONDS = 600;
 
+    /**
+     * The longest a JWT credential may be valid for — {@code exp} minus {@code iat} — or {@code 0} for no
+     * limit, the default. Neither suite bounds a credential's lifetime, so a self-issued token with
+     * {@code exp} in the year 9999 is valid until then; a deployment that wants stolen credentials to
+     * age out can say how fast (R-28).
+     */
+    public static final long DEFAULT_MAX_CREDENTIAL_LIFETIME_SECONDS = 0;
+
+    /** Upper bound on the configurable lifetime: ten years. */
+    private static final long MAX_MAX_CREDENTIAL_LIFETIME_SECONDS = 10L * 365 * 24 * 3600;
+
     private static volatile Set<String> allowedInternalHosts;
     private static volatile int httpTimeoutMillis = DEFAULT_HTTP_TIMEOUT_MILLIS;
     private static volatile long maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES;
     private static volatile int httpDeadlineMillis = DEFAULT_HTTP_DEADLINE_MILLIS;
     private static volatile int httpMaxConcurrentPerCaller = DEFAULT_HTTP_MAX_CONCURRENT_PER_CALLER;
     private static volatile long clockSkewSeconds = DEFAULT_CLOCK_SKEW_SECONDS;
+    private static volatile long maxCredentialLifetimeSeconds = DEFAULT_MAX_CREDENTIAL_LIFETIME_SECONDS;
 
     /** Which settings some provider has already contributed, so only a real disagreement is logged. */
     private static final Set<String> contributed = new LinkedHashSet<>();
@@ -151,6 +164,14 @@ public final class ServerSettings {
             warnOnConflict(providerId, "clock-skew-seconds", clockSkewSeconds, skew);
             clockSkewSeconds = skew;
         }
+        if (Settings.isSet(scope, "max-credential-lifetime-seconds",
+                "lws.authn.maxCredentialLifetimeSeconds", "LWS_AUTHN_MAX_CREDENTIAL_LIFETIME_SECONDS")) {
+            long lifetime = clamp(Settings.getLong(scope, "max-credential-lifetime-seconds",
+                    "lws.authn.maxCredentialLifetimeSeconds", "LWS_AUTHN_MAX_CREDENTIAL_LIFETIME_SECONDS",
+                    DEFAULT_MAX_CREDENTIAL_LIFETIME_SECONDS), 0, MAX_MAX_CREDENTIAL_LIFETIME_SECONDS);
+            warnOnConflict(providerId, "max-credential-lifetime-seconds", maxCredentialLifetimeSeconds, lifetime);
+            maxCredentialLifetimeSeconds = lifetime;
+        }
     }
 
     /**
@@ -194,6 +215,11 @@ public final class ServerSettings {
         return clockSkewSeconds;
     }
 
+    /** The longest {@code exp − iat} a JWT credential may have, in seconds; {@code 0} for no limit. */
+    public static long maxCredentialLifetimeSeconds() {
+        return maxCredentialLifetimeSeconds;
+    }
+
     /**
      * The server-wide settings in force, for the startup log (R-12). Keycloak drops a runtime option
      * given to {@code kc.sh build} with no more than a warning, so the settings an operator meant and
@@ -205,7 +231,9 @@ public final class ServerSettings {
                 + ", http-deadline-millis=" + httpDeadlineMillis
                 + ", http-max-response-bytes=" + maxResponseBytes
                 + ", http-max-concurrent-per-caller=" + httpMaxConcurrentPerCaller
-                + ", clock-skew-seconds=" + clockSkewSeconds;
+                + ", clock-skew-seconds=" + clockSkewSeconds
+                + ", max-credential-lifetime-seconds="
+                + (maxCredentialLifetimeSeconds == 0 ? "(no limit)" : maxCredentialLifetimeSeconds);
     }
 
     /** Logs {@link #describe()} once per server start, however many providers ask. */
@@ -227,6 +255,7 @@ public final class ServerSettings {
         httpDeadlineMillis = DEFAULT_HTTP_DEADLINE_MILLIS;
         httpMaxConcurrentPerCaller = DEFAULT_HTTP_MAX_CONCURRENT_PER_CALLER;
         clockSkewSeconds = DEFAULT_CLOCK_SKEW_SECONDS;
+        maxCredentialLifetimeSeconds = DEFAULT_MAX_CREDENTIAL_LIFETIME_SECONDS;
     }
 
     private static Set<String> parseHosts(String value) {

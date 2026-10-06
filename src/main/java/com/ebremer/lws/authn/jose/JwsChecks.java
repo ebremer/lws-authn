@@ -320,6 +320,24 @@ public final class JwsChecks {
         return exp == null || exp == 0 || iat <= exp;
     }
 
+    /**
+     * True iff {@code token}'s lifetime, {@code exp − iat}, is within the configured
+     * {@code max-credential-lifetime-seconds}, or no maximum is configured (R-28). A missing {@code iat}
+     * or {@code exp} passes here: each is required, and reported, by its own check.
+     */
+    public static boolean lifetimeWithinLimit(JsonWebToken token) {
+        long max = ServerSettings.maxCredentialLifetimeSeconds();
+        if (max <= 0 || token == null) {
+            return true;
+        }
+        Long iat = token.getIat();
+        Long exp = token.getExp();
+        if (iat == null || iat == 0 || exp == null || exp == 0) {
+            return true;
+        }
+        return exp - iat <= max;
+    }
+
     /** True iff {@code audience} contains {@code expected}. */
     public static boolean audienceIncludes(String[] audience, String expected) {
         if (audience == null || expected == null) {

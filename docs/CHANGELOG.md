@@ -172,6 +172,9 @@ realm under the default `bearer` access mode, before any signature is checked.
 
 ### Added
 
+- **A maximum credential lifetime** (R-28), `max-credential-lifetime-seconds`, off by default. Neither
+  JWT suite bounds how long a credential may be valid, so a self-issued one with `exp` in 9999 verified
+  until then; with the setting, `exp − iat` over it fails `lifetimeWithinLimit` in both JWT suites.
 - **SAML trust from the realm's identity providers** (R-25). The suite says the trust relationship with
   the issuing IdP is "established out-of-band", and `/lws-saml/verify` took it from the caller, per
   request, binding the certificate to no issuer — so a relying party that tried each certificate it

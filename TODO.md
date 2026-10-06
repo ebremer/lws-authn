@@ -816,13 +816,19 @@ is needed.
   **Do:** filter on `use`/`key_ops`/`alg`; try/continue per key; try all candidates when `kid` is absent;
   enforce RSA ≥ 2048; reject small-order and non-canonical Ed25519 points.
 
-- [ ] **R-28 · Time-claim hardening.** `Low` · security-hardening · `S` · *demonstrated*
+- [x] **R-28 · Time-claim hardening.** `Low` · security-hardening · `S` · *demonstrated*
   Accepted today in both JWT suites: `iat` ten years in the future, `iat > exp`, and `exp` in 9999 (no
   lifetime bound). **P1-C1** proposed rejecting a future `iat` and a configurable maximum credential age;
   only `iat` presence was implemented. **Do:** reject `iat > now + skew` and `iat > exp`; optional
   `max-credential-lifetime-seconds` on `exp − iat`.
   **Partly done with R-17:** `issuedAtConsistent` rejects both, in both suites. Open: the optional
   maximum lifetime.
+  **Done.** Server-wide `max-credential-lifetime-seconds` (default `0`, no limit; clamped to ten years),
+  in the startup log line. When set, both JWT verifiers check `exp − iat` against it right after
+  `issuedAtConsistent` (`lifetimeWithinLimit`, recorded only when a limit is configured; a missing `exp`
+  or `iat` is left to its own check). Not applied to SAML, which the item does not name. Tests in
+  `SelfSignedCidDidSubjectTest` (an `exp` in 9999 passes with no limit and fails at 3600 s) and
+  `LWSCredentialVerifierTest`.
 
 - [ ] **R-29 · Follow (or explicitly refuse) redirects when dereferencing a subject.**
   `Low` · interop/docs · `S` · *verified*

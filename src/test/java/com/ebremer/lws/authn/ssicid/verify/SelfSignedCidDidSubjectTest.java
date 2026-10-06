@@ -281,4 +281,31 @@ class SelfSignedCidDidSubjectTest {
         slightlyAhead.put("iat", now + 30);  // a clock a little fast is still a clock
         assertTrue(verify(edDsaCredential(pair, did, slightlyAhead)).isValid());
     }
+
+    /**
+     * R-28. A deployment may bound a credential's lifetime, {@code exp − iat}; by default nothing does, and
+     * a self-issued credential valid until 9999 verified.
+     */
+    @Test
+    void aConfiguredMaximumLifetimeIsEnforced() throws Exception {
+        KeyPair pair = SelfIssuedJwts.ed25519();
+        String did = DidKey.encodeEd25519(pair.getPublic());
+        Map<String, Object> forever = SelfIssuedJwts.claims(did);
+        forever.put("exp", 253_402_300_799L); // 9999-12-31T23:59:59Z
+        String longLived = edDsaCredential(pair, did, forever);
+        assertTrue(verify(longLived).isValid(), "no limit unless one is configured");
+        assertEquals(null, verify(longLived).getChecks().get("lifetimeWithinLimit"));
+
+        System.setProperty("lws.authn.maxCredentialLifetimeSeconds", "3600");
+        try {
+            com.ebremer.lws.authn.config.ServerSettings.contribute("test", null);
+            assertRejected(verify(longLived), "lifetimeWithinLimit");
+            SsiCidVerificationResult shortLived = verify(edDsaCredential(pair, did, SelfIssuedJwts.claims(did)));
+            assertTrue(shortLived.isValid(), () -> String.valueOf(shortLived.getErrors()));
+            assertEquals(Boolean.TRUE, shortLived.getChecks().get("lifetimeWithinLimit"));
+        } finally {
+            System.clearProperty("lws.authn.maxCredentialLifetimeSeconds");
+            com.ebremer.lws.authn.config.ServerSettings.reset();
+        }
+    }
 }
