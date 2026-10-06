@@ -58,6 +58,9 @@ public class SamlCredentialVerifier {
     /** The only {@code <samlp:StatusCode>} an authentication credential may carry (SAML Core §3.2.2). */
     private static final String STATUS_SUCCESS = "urn:oasis:names:tc:SAML:2.0:status:Success";
 
+    /** SAML Core §8.3.6: the NameID format of an entity — the only one an Issuer may carry. */
+    private static final String ENTITY_FORMAT = "urn:oasis:names:tc:SAML:2.0:nameid-format:entity";
+
     /** The confirmation method an LWS credential uses: it is a bearer token. */
     private static final String BEARER_METHOD = "urn:oasis:names:tc:SAML:2.0:cm:bearer";
 
@@ -147,8 +150,17 @@ public class SamlCredentialVerifier {
             }
             String subjectValue = nameId.getTextContent().trim();
             result.setSubject(subjectValue);
+            result.setSubjectFormat(attr(nameId, "Format"));
             if (subjectValue.isEmpty()) {
                 result.error("Assertion <NameID> subject is empty");
+                return result.fail();
+            }
+            // LWS core §4.1: the subject "MUST be a URI". A bare name ("alice"), an email address or a
+            // transient handle identifies someone only to this IdP, and is not an LWS subject (R-20).
+            boolean subjectIsUri = isAbsoluteUri(subjectValue);
+            result.check("subjectIsUri", subjectIsUri);
+            if (!subjectIsUri) {
+                result.error("Assertion <NameID> is not a URI, which an LWS subject must be");
                 return result.fail();
             }
 
@@ -162,6 +174,17 @@ public class SamlCredentialVerifier {
             result.check("issuerPresent", issuerPresent);
             if (!issuerPresent) {
                 result.error("The verified assertion has no <Issuer>");
+                return result.fail();
+            }
+            // LWS core §4.1: the issuer "MUST be a URI". SAML Profiles §4.1.4.2: its Format "MUST be
+            // omitted or have a value of urn:oasis:names:tc:SAML:2.0:nameid-format:entity" — an Issuer
+            // in any other format is not naming an entity at all (R-20).
+            String issuerFormat = attr(issuer, "Format");
+            boolean issuerWellFormed = isAbsoluteUri(issuerValue)
+                    && (issuerFormat == null || ENTITY_FORMAT.equals(issuerFormat.trim()));
+            result.check("issuerWellFormed", issuerWellFormed);
+            if (!issuerWellFormed) {
+                result.error("The assertion's <Issuer> is not an entity URI");
                 return result.fail();
             }
 
@@ -419,6 +442,16 @@ public class SamlCredentialVerifier {
             }
         }
         return out;
+    }
+
+    /** True iff {@code value} is an absolute URI: it parses, and it has a scheme. */
+    static boolean isAbsoluteUri(String value) {
+        try {
+            java.net.URI uri = new java.net.URI(value);
+            return uri.isAbsolute() && !uri.getSchemeSpecificPart().isEmpty();
+        } catch (java.net.URISyntaxException notAUri) {
+            return false;
+        }
     }
 
     private static String attr(Element e, String name) {

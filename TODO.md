@@ -623,7 +623,7 @@ is needed.
   (context-less documents as `ld+json`, `cid` and `json`; `application/cid`; arrays through the compact
   reader, with the processor as a control), `RdfParsingTest` and `RdfContentNegotiationTest`.
 
-- [ ] **R-20 · SAML: subject and issuer are not validated as URIs.**
+- [x] **R-20 · SAML: subject and issuer are not validated as URIs.**
   `Medium` · spec-conformance · `S` · *demonstrated*
   LWS core §4.1: subject "MUST be a URI", issuer "MUST be a URI". `SamlCredentialVerifier.java:144-166`
   accepts `NameID=alice` (the unit tests use exactly that), an email-format NameID, and `Issuer=idp`.
@@ -632,6 +632,15 @@ is needed.
   `COMPLIANCE.md`'s core table implies these are enforced.
   **Do:** require an absolute URI for both (as `LWSSubMapper` already does for the WebID); reject an
   Issuer `Format` other than absent or `entity`; report the NameID `Format`. Fix the tests' fixtures.
+  **Done.** New checks `subjectIsUri` (any absolute URI — `https:`, `urn:`, `did:` — not just a
+  fetchable URL: the SAML suite does not dereference its subject) and `issuerWellFormed` (absolute URI,
+  `Format` absent or `…:nameid-format:entity`); the result carries `subjectFormat`. Applied to the
+  covered assertion's `<Issuer>`, the one claims are read from. `NameQualifier`/`SPNameQualifier` are
+  still not reported. `SamlVerifierTest`'s fixtures use URI NameIDs; three new tests — bare name, email,
+  UUID, relative path and `urn:` refused, `urn:uuid:` and `did:key:` accepted; a non-URI or
+  `unspecified`-format Issuer refused, an `entity` one accepted; the format reported — fail against the
+  previous verifier. `COMPLIANCE.md`'s core table, its SAML section, `suites.md`, the SAML walkthrough
+  and the CHANGELOG say so.
 
 - [ ] **R-21 · SAML `<Conditions>` processing fails open.**
   `Medium` · spec-conformance/security · `S` · *demonstrated*

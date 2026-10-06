@@ -123,7 +123,9 @@ band**: the verifier validates the assertion's XML signature against a pre-confi
 no CID and no discovery, so this suite uses neither Jena nor a CID endpoint.
 
 Keycloak is a full SAML 2.0 IdP; to issue LWS SAML credentials, set up a SAML client and arrange for
-the `<NameID>` to carry the user's WebID. The realm's SAML signing certificate is published at
+the `<NameID>` to carry the user's WebID. The `<NameID>` must be a URI — an LWS subject "MUST be a URI"
+— so Keycloak's default username or email NameID is refused (`subjectIsUri`), and the `<Issuer>` must be
+the IdP's entity URI (`issuerWellFormed`). The realm's SAML signing certificate is published at
 `…/realms/{realm}/protocol/saml/descriptor`.
 
 `POST …/lws-saml/verify` — validates a signed SAML Response. Supply the trusted IdP certificate (since

@@ -67,8 +67,8 @@ suite to be associated with a token type URI.
 
 | Requirement | OpenID | SSI CID | SAML |
 |---|---|---|---|
-| subject REQUIRED | `subjectPresent` | `selfIssued` | `NameID` from the covered assertion |
-| issuer REQUIRED | `issuerPresent` + `issuerWellFormed` | `selfIssued` | `issuerPresent` |
+| subject REQUIRED, a URI | `subjectPresent` | `selfIssued` | `NameID` from the covered assertion, an absolute URI (`subjectIsUri`) |
+| issuer REQUIRED, a URI | `issuerPresent` + `issuerWellFormed` | `selfIssued` | `issuerPresent` + `issuerWellFormed` |
 | client REQUIRED | `clientPresent` (`azp`) | `selfIssued` (`client_id`) | `recipientPresent` |
 | audience restriction | `audiencePresent` always; `audienceMatched` when one is given | `audiencePresent` + `audienceMatched`, both always | `audiencePresent` + `audienceMatched` |
 | signed (§4.2) | `signatureValid` | `signatureValid` | `signatureValid` |
@@ -189,7 +189,10 @@ explicit `allowExpiredCertificate`, for offline analysis, never a live decision)
 (`signatureCoversSignedElement`); a signed Response must contain exactly one assertion
 (`singleAssertion`). Claims are read **only from the cryptographically covered assertion**, located by
 precise direct-child navigation rather than a document-wide search an injected element could win — the
-signature-wrapping (XSW) defence. `<Issuer>` required (`issuerPresent`). The bearer
+signature-wrapping (XSW) defence. The `<NameID>` must be an absolute URI (`subjectIsUri`; core §4.1:
+the subject "MUST be a URI") — a username, an email address or an opaque handle is refused — and its
+`Format` is reported as `subjectFormat`. `<Issuer>` is required (`issuerPresent`), must be an absolute
+URI and, per SAML Profiles §4.1.4.2, carry no `Format` or the `entity` one (`issuerWellFormed`). The bearer
 `<SubjectConfirmationData>` is checked for method, `Recipient` and `NotOnOrAfter`
 (`bearerSubjectConfirmation`, `recipientPresent`, `subjectConfirmationWithinWindow`). `<Conditions>`
 window with clock skew (`withinValidityWindow`), and audience (`audiencePresent`, `audienceMatched`).

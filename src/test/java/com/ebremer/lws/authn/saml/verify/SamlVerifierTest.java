@@ -56,6 +56,9 @@ class SamlVerifierTest {
 
     private static final String NS = "urn:oasis:names:tc:SAML:2.0:assertion";
     private static final String AUDIENCE = "https://app.example/SAML";
+    /** LWS core §4.1: a subject "MUST be a URI" (R-20). These used to be bare names. */
+    private static final String ALICE = "https://id.example/alice";
+    private static final String ATTACKER = "https://id.example/attacker";
     private static final String Q = "\"";
     private static final String STATUS_SUCCESS = "urn:oasis:names:tc:SAML:2.0:status:Success";
     private static final String STATUS_RESPONDER = "urn:oasis:names:tc:SAML:2.0:status:Responder";
@@ -71,22 +74,22 @@ class SamlVerifierTest {
 
     @Test
     void validSignedAssertionVerifies() throws Exception {
-        String xml = signedResponse("alice");
+        String xml = signedResponse(ALICE);
         SamlVerificationResult r = new SamlCredentialVerifier().verify(xml, idpCert, AUDIENCE);
         assertTrue(r.isValid(), () -> "expected valid, errors: " + r.getErrors());
-        assertEquals("alice", r.getSubject());
+        assertEquals(ALICE, r.getSubject());
     }
 
     @Test
     void tamperedSubjectRejected() throws Exception {
-        String xml = signedResponse("alice").replace(">alice<", ">attacker<");
+        String xml = signedResponse(ALICE).replace(">" + ALICE + "<", ">" + ATTACKER + "<");
         SamlVerificationResult r = new SamlCredentialVerifier().verify(xml, idpCert, AUDIENCE);
         assertFalse(r.isValid(), "a tampered NameID must not validate");
     }
 
     @Test
     void wrongCertificateRejected() throws Exception {
-        String xml = signedResponse("alice");
+        String xml = signedResponse(ALICE);
         SamlVerificationResult r = new SamlCredentialVerifier().verify(xml, selfSigned(rsa()), AUDIENCE);
         assertFalse(r.isValid(), "signature must not validate against a different certificate");
     }
@@ -98,13 +101,13 @@ class SamlVerifierTest {
      */
     @Test
     void signatureWrappingDefeated() throws Exception {
-        Document doc = parse(responseTemplate("alice"));
+        Document doc = parse(responseTemplate(ALICE));
         signAssertion(doc, idpKeyPair.getPrivate());
-        injectForgedAssertion(doc, "attacker");
+        injectForgedAssertion(doc, ATTACKER);
         SamlVerificationResult r = new SamlCredentialVerifier().verify(serialize(doc), idpCert, AUDIENCE);
 
-        assertNotEquals("attacker", r.getSubject(), "XML signature wrapping succeeded — read the forged identity!");
-        assertEquals("alice", r.getSubject(), "must read the signed identity");
+        assertNotEquals(ATTACKER, r.getSubject(), "XML signature wrapping succeeded — read the forged identity!");
+        assertEquals(ALICE, r.getSubject(), "must read the signed identity");
         assertTrue(r.isValid(), () -> "the genuine credential should still validate, errors: " + r.getErrors());
     }
 
@@ -127,7 +130,7 @@ class SamlVerifierTest {
                 advice.append("</x>");
             }
             advice.append("</saml:Advice>");
-            String xml = signedResponse("alice").replaceFirst(
+            String xml = signedResponse(ALICE).replaceFirst(
                     "(<saml:Assertion[^>]*><saml:Issuer>[^<]*</saml:Issuer>)", "$1" + advice);
             assertTrue(xml.contains("<saml:Advice>"));
             SamlVerificationResult r = new SamlCredentialVerifier().verify(xml, idpCert, AUDIENCE);
@@ -139,6 +142,60 @@ class SamlVerifierTest {
                 System.setProperty("jdk.xml.maxElementDepth", previous);
             }
         }
+    }
+
+    private String signed(String xml) throws Exception {
+        Document doc = parse(xml);
+        signAssertion(doc, idpKeyPair.getPrivate());
+        return serialize(doc);
+    }
+
+    /**
+     * R-20. LWS core §4.1: the subject "MUST be a URI". A bare name, an email address or an opaque
+     * handle names someone only to this IdP.
+     */
+    @Test
+    void aSubjectThatIsNotAUriIsRejected() throws Exception {
+        for (String nameId : new String[]{"alice", "alice@example.org", "3f2a9c1e-77b0-4f1a-9e1d-2c5b8e0a6d41",
+                "/relative/path", "urn:"}) {
+            SamlVerificationResult r = new SamlCredentialVerifier().verify(signed(responseTemplate(nameId)),
+                    idpCert, AUDIENCE);
+            assertFalse(r.isValid(), nameId);
+            assertEquals(Boolean.FALSE, r.getChecks().get("subjectIsUri"), nameId);
+        }
+        for (String nameId : new String[]{"urn:uuid:3f2a9c1e-77b0-4f1a-9e1d-2c5b8e0a6d41",
+                "did:key:z6MkmM42vxfqZQsv4ehtTjFFxQ4sQKS2w6WR7emozFAn5cxu"}) {
+            SamlVerificationResult r = new SamlCredentialVerifier().verify(signed(responseTemplate(nameId)),
+                    idpCert, AUDIENCE);
+            assertTrue(r.isValid(), () -> nameId + ": " + r.getErrors());
+        }
+    }
+
+    /**
+     * R-20. LWS core §4.1: the issuer "MUST be a URI"; SAML Profiles §4.1.4.2: its Format "MUST be
+     * omitted or have a value of urn:oasis:names:tc:SAML:2.0:nameid-format:entity".
+     */
+    @Test
+    void anIssuerThatIsNotAnEntityUriIsRejected() throws Exception {
+        String issuer = "<saml:Issuer>https://idp.example</saml:Issuer>";
+        for (String replacement : new String[]{"<saml:Issuer>idp</saml:Issuer>",
+                "<saml:Issuer Format=\"urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified\">https://idp.example</saml:Issuer>"}) {
+            SamlVerificationResult r = new SamlCredentialVerifier().verify(
+                    signed(responseTemplate(ALICE).replace(issuer, replacement)), idpCert, AUDIENCE);
+            assertFalse(r.isValid(), replacement);
+            assertEquals(Boolean.FALSE, r.getChecks().get("issuerWellFormed"), replacement);
+        }
+        SamlVerificationResult entity = new SamlCredentialVerifier().verify(signed(responseTemplate(ALICE).replace(issuer,
+                "<saml:Issuer Format=\"urn:oasis:names:tc:SAML:2.0:nameid-format:entity\">https://idp.example</saml:Issuer>")),
+                idpCert, AUDIENCE);
+        assertTrue(entity.isValid(), () -> String.valueOf(entity.getErrors()));
+    }
+
+    /** R-20. The NameID's Format is reported, so a caller can see what kind of identifier it got. */
+    @Test
+    void reportsTheNameIdFormat() throws Exception {
+        SamlVerificationResult r = new SamlCredentialVerifier().verify(signedResponse(ALICE), idpCert, AUDIENCE);
+        assertEquals("urn:oasis:names:tc:SAML:2.0:nameid-format:persistent", r.getSubjectFormat());
     }
 
     /** XXE: a credential containing a DOCTYPE / external entity must be rejected at parse time. */
@@ -157,7 +214,7 @@ class SamlVerifierTest {
      */
     @Test
     void assertionWithoutExpiryRejected() throws Exception {
-        Document doc = parse(responseTemplateNoExpiry("alice"));
+        Document doc = parse(responseTemplateNoExpiry(ALICE));
         signAssertion(doc, idpKeyPair.getPrivate());
         SamlVerificationResult r = new SamlCredentialVerifier().verify(serialize(doc), idpCert, AUDIENCE);
         assertFalse(r.isValid(), "an assertion with no Conditions/@NotOnOrAfter must be rejected");
@@ -170,7 +227,7 @@ class SamlVerifierTest {
      */
     @Test
     void nonSuccessStatusRejected() throws Exception {
-        Document doc = parse(responseTemplate("alice").replace(STATUS_SUCCESS, STATUS_RESPONDER));
+        Document doc = parse(responseTemplate(ALICE).replace(STATUS_SUCCESS, STATUS_RESPONDER));
         signAssertion(doc, idpKeyPair.getPrivate());
         SamlVerificationResult r = new SamlCredentialVerifier().verify(serialize(doc), idpCert, AUDIENCE);
         assertFalse(r.isValid(), "a Response whose StatusCode is not Success must be rejected");
@@ -180,7 +237,7 @@ class SamlVerifierTest {
     /** P0-8: a Response with no {@code <samlp:Status>} at all is equally not a success. */
     @Test
     void missingStatusRejected() throws Exception {
-        Document doc = parse(responseTemplate("alice").replace(status(STATUS_SUCCESS), ""));
+        Document doc = parse(responseTemplate(ALICE).replace(status(STATUS_SUCCESS), ""));
         signAssertion(doc, idpKeyPair.getPrivate());
         SamlVerificationResult r = new SamlCredentialVerifier().verify(serialize(doc), idpCert, AUDIENCE);
         assertFalse(r.isValid(), "a Response with no StatusCode must be rejected");
@@ -195,7 +252,7 @@ class SamlVerifierTest {
     void expiredIdpCertificateRejected() throws Exception {
         KeyPair kp = rsa();
         X509Certificate expired = certificate(kp, -172_800_000L, -86_400_000L); // expired a day ago
-        Document doc = parse(responseTemplate("alice"));
+        Document doc = parse(responseTemplate(ALICE));
         signAssertion(doc, kp.getPrivate());
         String xml = serialize(doc);
 
@@ -212,7 +269,7 @@ class SamlVerifierTest {
     /** P0-9: the bearer SubjectConfirmationData window is enforced, not only {@code <Conditions>}. */
     @Test
     void expiredSubjectConfirmationRejected() throws Exception {
-        Document doc = parse(withSubjectConfirmationExpiry(responseTemplate("alice"), iso(-3600)));
+        Document doc = parse(withSubjectConfirmationExpiry(responseTemplate(ALICE), iso(-3600)));
         signAssertion(doc, idpKeyPair.getPrivate());
         SamlVerificationResult r = new SamlCredentialVerifier().verify(serialize(doc), idpCert, AUDIENCE);
         assertFalse(r.isValid(), "an expired bearer SubjectConfirmationData must be rejected");
@@ -222,7 +279,7 @@ class SamlVerifierTest {
     /** P0-9 / LWS SAML suite: Recipient carries the LWS client identifier, so it is required. */
     @Test
     void missingRecipientRejected() throws Exception {
-        Document doc = parse(responseTemplate("alice").replace("Recipient=" + '"' + AUDIENCE + '"' + " ", ""));
+        Document doc = parse(responseTemplate(ALICE).replace("Recipient=" + '"' + AUDIENCE + '"' + " ", ""));
         signAssertion(doc, idpKeyPair.getPrivate());
         SamlVerificationResult r = new SamlCredentialVerifier().verify(serialize(doc), idpCert, AUDIENCE);
         assertFalse(r.isValid(), "an assertion with no SubjectConfirmationData/@Recipient must be rejected");
@@ -232,7 +289,7 @@ class SamlVerifierTest {
     /** P0-9: only a bearer subject confirmation is an LWS credential. */
     @Test
     void nonBearerSubjectConfirmationRejected() throws Exception {
-        Document doc = parse(responseTemplate("alice")
+        Document doc = parse(responseTemplate(ALICE)
                 .replace("urn:oasis:names:tc:SAML:2.0:cm:bearer", "urn:oasis:names:tc:SAML:2.0:cm:holder-of-key"));
         signAssertion(doc, idpKeyPair.getPrivate());
         SamlVerificationResult r = new SamlCredentialVerifier().verify(serialize(doc), idpCert, AUDIENCE);
@@ -246,7 +303,7 @@ class SamlVerifierTest {
      */
     @Test
     void missingIssuerRejected() throws Exception {
-        Document doc = parse(responseTemplate("alice")
+        Document doc = parse(responseTemplate(ALICE)
                 .replace("<saml:Assertion ID=" + Q + "a1" + Q + " Version=" + Q + "2.0" + Q
                         + " IssueInstant=" + Q + iso(0) + Q + ">"
                         + "<saml:Issuer>https://idp.example</saml:Issuer>",
@@ -261,7 +318,7 @@ class SamlVerifierTest {
     /** P1-K1/K2: the result names the LWS client (the Recipient) and the suite token type. */
     @Test
     void reportsClientAndTokenType() throws Exception {
-        SamlVerificationResult r = new SamlCredentialVerifier().verify(signedResponse("alice"), idpCert, AUDIENCE);
+        SamlVerificationResult r = new SamlCredentialVerifier().verify(signedResponse(ALICE), idpCert, AUDIENCE);
         assertTrue(r.isValid(), () -> "errors: " + r.getErrors());
         assertEquals(AUDIENCE, r.getClient());
         assertEquals("urn:ietf:params:oauth:token-type:saml2", r.getTokenType());

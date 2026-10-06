@@ -47,6 +47,10 @@ Create a SAML client (your SP) in the realm and arrange for the assertion's `<Na
 user's WebID (controlled identifier) — via the client's *Name ID format* / NameID settings. Keycloak
 signs assertions with the realm SAML signing key by default.
 
+The `<NameID>` has to be a URI: LWS core says the subject "MUST be a URI", and the verifier refuses a
+username or an email address (`subjectIsUri`). Keycloak's `<Issuer>` is the realm URL, an entity URI,
+as the verifier requires (`issuerWellFormed`).
+
 ## 2. Obtain the IdP signing certificate (out-of-band)
 
 The realm publishes its SAML metadata, including the signing certificate, at the descriptor endpoint:
@@ -114,7 +118,8 @@ credential, none of which `<Conditions>` implies on its own:
 ```
 
 The verifier: validates the enveloped XML signature against the supplied certificate, reads the
-subject from `<NameID>` and the issuer from `<Issuer>`, enforces the `<Conditions>` validity window
+subject from `<NameID>` (a URI, its `Format` reported as `subjectFormat`) and the issuer from
+`<Issuer>` (an entity URI), enforces the `<Conditions>` validity window
 (±60 s clock skew), and checks the audience restriction.
 
 ## 5. Present it to an LWS server

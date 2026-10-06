@@ -26,6 +26,7 @@ public class SamlVerificationResult {
 
     private boolean valid;
     private String subject;
+    private String subjectFormat;
     private String issuer;
     private String recipient;
     private String notBefore;
@@ -51,6 +52,15 @@ public class SamlVerificationResult {
 
     public void setSubject(String subject) {
         this.subject = subject;
+    }
+
+    /** The {@code <NameID>}'s {@code Format}, or {@code null} if it names none (R-20). */
+    public String getSubjectFormat() {
+        return subjectFormat;
+    }
+
+    public void setSubjectFormat(String subjectFormat) {
+        this.subjectFormat = subjectFormat;
     }
 
     public String getIssuer() {

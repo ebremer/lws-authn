@@ -238,6 +238,12 @@ realm under the default `bearer` access mode, before any signature is checked.
   fetched document about somebody else is reported as `subjectIdMatches: false` — the self-signed suite
   used to report it as `subjectDereferenced: false`, "failed to dereference", and to report
   `subjectIdMatches: true` regardless.
+- **A SAML subject and issuer must be URIs** (R-20). LWS core §4.1 says both "MUST be a URI"; the SAML
+  verifier accepted `<NameID>alice</NameID>`, an email address, and `<Issuer>idp</Issuer>`. The `NameID`
+  must now be an absolute URI (`subjectIsUri`), and the `Issuer` an absolute URI with no `Format` or
+  the `entity` one, as SAML Profiles §4.1.4.2 requires (`issuerWellFormed`). The result reports the
+  `NameID`'s `Format` as `subjectFormat`. An IdP sending usernames or email addresses as `NameID` must
+  be configured to send the user's WebID instead.
 - **An `iat` in the future, or after `exp`, is refused** in both JWT suites (new check
   `issuedAtConsistent`; the clock skew allowance applies). A credential "issued" ten years from now used
   to pass.
