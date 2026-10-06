@@ -155,4 +155,26 @@ class DidsTest {
             assertFalse(Dids.isDidDocumentMediaType(bad), bad);
         }
     }
+
+    /**
+     * R-03. The syntax check is a character class plus a scan of each {@code %}, not a repeated
+     * alternation Java runs by recursion — which overflowed the stack on a DID of a couple of thousand
+     * characters, a 500 rather than a refusal — and a DID longer than anything this provider resolves
+     * is refused before it is looked at at all.
+     */
+    @Test
+    void refusesAnOverlongDidWithoutOverflowingTheStack() {
+        String longest = "did:web:" + "a".repeat(Dids.MAX_DID_LENGTH - "did:web:".length());
+        assertEquals("web", Dids.methodOf(longest));
+        assertThrows(InvalidDidException.class, () -> Dids.methodOf(longest + "a"));
+        assertThrows(InvalidDidException.class, () -> Dids.methodOf("did:web:" + "%41".repeat(100_000)));
+    }
+
+    @Test
+    void checksEveryPercentEncoding() {
+        assertEquals("web", Dids.methodOf("did:web:example.com%3A8443:%7Ealice"));
+        for (String bad : new String[]{"did:web:example.com%3", "did:web:a%", "did:web:a%4:b", "did:web:a%G1"}) {
+            assertThrows(InvalidDidException.class, () -> Dids.methodOf(bad), bad);
+        }
+    }
 }

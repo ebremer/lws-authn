@@ -9,8 +9,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 
@@ -270,5 +272,111 @@ class VerificationMethodRulesTest {
         List<VerificationMethod> methods = json(MINIMUM_CONFORMANT);
         assertNull(SelfSignedCidVerifier.selectByKid(methods, "https://attacker.example/doc#key-456"));
         assertNull(SelfSignedCidVerifier.selectByKid(methods, "did:key:" + ED25519_MULTIKEY + "#key-456"));
+    }
+
+    // ------------------------------------------------------------------- bounded work (R-03)
+
+    /**
+     * R-03. One method with one bad key and hundreds of revoked and expiration values used to come back
+     * from the query as their cross product, with the bad key decoded again on every row: a 36 KiB
+     * document took 271 seconds. Now each method is read once — and two values for one property make
+     * it unusable, so the bad method is not even decoded.
+     */
+    @Test
+    void rdfReadsEachMethodOnceWhateverItsValues() {
+        Model model = ModelFactory.createDefaultModel();
+        Resource subject = model.createResource(SUB);
+        Resource noisy = method(model, SUB + "#noisy", SsiCidConstants.MULTIKEY_TYPE);
+        noisy.addProperty(model.createProperty(SsiCidConstants.SEC_PUBLIC_KEY_MULTIBASE), "z" + "2".repeat(200));
+        for (int i = 0; i < 300; i++) {
+            noisy.addProperty(model.createProperty(SsiCidConstants.SEC_REVOKED),
+                    model.createTypedLiteral("2999-01-01T00:00:" + String.format("%02d", i % 60) + "." + i + "Z",
+                            XSDDatatype.XSDdateTime));
+            noisy.addProperty(model.createProperty(SsiCidConstants.SEC_EXPIRATION),
+                    model.createTypedLiteral("2999-02-01T00:00:" + String.format("%02d", i % 60) + "." + i + "Z",
+                            XSDDatatype.XSDdateTime));
+        }
+        subject.addProperty(model.createProperty(SsiCidConstants.SEC_AUTHENTICATION), noisy);
+        Resource good = method(model, SUB + "#good", SsiCidConstants.JSON_WEB_KEY_TYPE);
+        good.addProperty(model.createProperty(SsiCidConstants.SEC_PUBLIC_KEY_JWK), model.createLiteral(P256_JWK));
+        subject.addProperty(model.createProperty(SsiCidConstants.SEC_AUTHENTICATION), good);
+
+        List<VerificationMethod> methods = assertTimeoutPreemptively(Duration.ofSeconds(2),
+                () -> SelfSignedCidVerifier.collectFromRdf(model, SUB));
+        assertEquals(1, methods.size());
+        assertEquals(SUB + "#good", methods.get(0).id());
+    }
+
+    /**
+     * Two expiration dates leave it undecided whether the key has expired. The reader used to take
+     * whichever the query returned first — so a key could stay usable past an expiry it published.
+     */
+    @Test
+    void rdfAMethodWithTwoValuesForOnePropertyIsNotUsable() {
+        for (String property : new String[]{SsiCidConstants.SEC_EXPIRATION, SsiCidConstants.SEC_REVOKED}) {
+            Model model = ModelFactory.createDefaultModel();
+            Resource multikey = method(model, SUB + "#k1", SsiCidConstants.MULTIKEY_TYPE);
+            multikey.addProperty(model.createProperty(SsiCidConstants.SEC_PUBLIC_KEY_MULTIBASE), ED25519_MULTIKEY);
+            multikey.addProperty(model.createProperty(property),
+                    model.createTypedLiteral("2000-01-01T00:00:00Z", XSDDatatype.XSDdateTime));
+            multikey.addProperty(model.createProperty(property),
+                    model.createTypedLiteral("2999-01-01T00:00:00Z", XSDDatatype.XSDdateTime));
+            model.createResource(SUB).addProperty(model.createProperty(SsiCidConstants.SEC_AUTHENTICATION), multikey);
+            assertTrue(SelfSignedCidVerifier.collectFromRdf(model, SUB).isEmpty(), property);
+        }
+
+        Model model = ModelFactory.createDefaultModel();
+        Resource jwk = method(model, SUB + "#k1", SsiCidConstants.JSON_WEB_KEY_TYPE);
+        jwk.addProperty(model.createProperty(SsiCidConstants.SEC_PUBLIC_KEY_JWK), model.createLiteral(P256_JWK));
+        jwk.addProperty(model.createProperty(SsiCidConstants.SEC_PUBLIC_KEY_JWK),
+                model.createLiteral(P256_JWK.replace("}", ",\"kid\":\"other\"}")));
+        model.createResource(SUB).addProperty(model.createProperty(SsiCidConstants.SEC_AUTHENTICATION), jwk);
+        assertTrue(SelfSignedCidVerifier.collectFromRdf(model, SUB).isEmpty(), "two keys on one method");
+    }
+
+    /** A revocation that is not a literal is not "no revocation". */
+    @Test
+    void rdfANonLiteralRevocationIsNotUsable() {
+        Model model = ModelFactory.createDefaultModel();
+        Resource multikey = method(model, SUB + "#k1", SsiCidConstants.MULTIKEY_TYPE);
+        multikey.addProperty(model.createProperty(SsiCidConstants.SEC_PUBLIC_KEY_MULTIBASE), ED25519_MULTIKEY);
+        multikey.addProperty(model.createProperty(SsiCidConstants.SEC_REVOKED), model.createResource(SUB + "#when"));
+        model.createResource(SUB).addProperty(model.createProperty(SsiCidConstants.SEC_AUTHENTICATION), multikey);
+        assertTrue(SelfSignedCidVerifier.collectFromRdf(model, SUB).isEmpty());
+    }
+
+    /**
+     * R-03. Each reference in {@code authentication} used to search the whole document again; 8 000
+     * that resolve to nothing, in a 163 KiB document, took 30 seconds. They are now looked up in an index
+     * built once.
+     */
+    @Test
+    void manyUnresolvableReferencesAreCheap() throws Exception {
+        StringBuilder doc = new StringBuilder("{\"id\":\"" + SUB + "\",\"verificationMethod\":[")
+                .append(multikey(SUB + "#key-456", SUB, "")).append("],\"authentication\":[");
+        for (int i = 0; i < 8_000; i++) {
+            doc.append("\"#missing-").append(i).append("\",");
+        }
+        doc.append("\"#key-456\"],\"padding\":[");
+        for (int i = 0; i < 2_000; i++) {
+            doc.append(i == 0 ? "" : ",").append("{\"id\":\"#pad-").append(i).append("\",\"x\":[[[1]]]}");
+        }
+        doc.append("]}");
+        List<VerificationMethod> methods = assertTimeoutPreemptively(Duration.ofSeconds(2), () -> json(doc.toString()));
+        assertEquals(1, methods.size());
+        assertEquals(SUB + "#key-456", methods.get(0).id());
+    }
+
+    /** A reference resolves to the first map in document order with that id, as a search from the top did. */
+    @Test
+    void aReferenceResolvesToTheFirstMapWithThatId() throws Exception {
+        String usable = multikey(SUB + "#k", SUB, "");
+        String foreign = multikey(SUB + "#k", "https://someone-else.example/", "");
+        String first = "{\"id\":\"" + SUB + "\",\"verificationMethod\":[" + usable + "," + foreign + "],"
+                + "\"authentication\":[\"#k\"]}";
+        String second = "{\"id\":\"" + SUB + "\",\"verificationMethod\":[" + foreign + "," + usable + "],"
+                + "\"authentication\":[\"#k\"]}";
+        assertEquals(1, json(first).size());
+        assertTrue(json(second).isEmpty(), "the first map with the id is the method; a later one is not consulted");
     }
 }

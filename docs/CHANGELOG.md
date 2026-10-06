@@ -70,6 +70,15 @@ realm under the default `bearer` access mode, before any signature is checked.
   `OutboundHttp.fetch`, counts only failures no path can produce (unresolvable, connection refused or
   timed out, TLS handshake failed — not a pool wait, which is this server's load), keys on scheme, host
   and port rather than host alone, and once open closes on schedule.
+- **Reading keys out of a hostile document costs time linear in its size** (R-03). Three things were
+  quadratic, all before any signature is checked: base58 decoding of an unbounded `publicKeyMultibase`
+  (250 000 characters took 18 s); the RDF key query, which returned the cross product of every value of
+  every optional property and re-decoded a failing key on every row (a 36 KiB document took 271 s); and
+  reference resolution, which searched the whole document again for every reference in
+  `authentication` (8 000 of them took 30 s). A multibase value is now refused over 256 characters and a
+  DID over 1 024; the RDF reader reads each method once, a property at a time; references resolve
+  through an index built once. The DID syntax check no longer recurses once per character, which
+  overflowed the stack — a `500` — on a DID of a couple of thousand characters.
 
 ### Added
 
@@ -127,7 +136,9 @@ each may reject a document that used to verify. Check your issuers' documents be
 - **A method's `id` must be in the subject's own document** (CID 1.0 §3.3 takes the document from the
   identifier). Methods written with no `id` are still tolerated and selectable by their JWK's `kid`.
 - **`revoked` and `expires` are honoured** (`verificationMethodActive`), and a value that is not an
-  `xsd:dateTimeStamp` makes the method unusable rather than silently current.
+  `xsd:dateTimeStamp` makes the method unusable rather than silently current. In RDF, so does a value
+  that is not a literal, or **two values for one property** — two expiry dates, two revocations, two
+  `publicKeyJwk`s — where the reader used to take whichever the query returned first (R-03).
 - **A `publicKeyJwk` carrying private members is not a usable verification method** (CID 1.0 §2.2.3).
   This provider already refused to *publish* one (P0-1); it now refuses to *verify* against one too.
 - **`ES256`/`ES384`/`ES512` are pinned to P-256/P-384/P-521** (RFC 7518 §3.4), for every JWT suite. A

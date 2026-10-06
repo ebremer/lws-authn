@@ -32,10 +32,13 @@ import java.security.PublicKey;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -55,9 +58,11 @@ import org.apache.jena.query.QueryExecution;
 import org.apache.jena.query.QueryExecutionFactory;
 import org.apache.jena.query.QuerySolution;
 import org.apache.jena.query.ResultSet;
-import org.apache.jena.rdf.model.Literal;
 import org.apache.jena.rdf.model.Model;
+import org.apache.jena.rdf.model.Property;
 import org.apache.jena.rdf.model.RDFNode;
+import org.apache.jena.rdf.model.Resource;
+import org.apache.jena.rdf.model.StmtIterator;
 import org.keycloak.crypto.KeyType;
 import org.keycloak.crypto.KeyUse;
 import org.keycloak.crypto.KeyWrapper;
@@ -539,11 +544,17 @@ public class SelfSignedCidVerifier {
             return out;
         }
         Set<String> seen = new HashSet<>();
+        Map<String, JsonNode> byId = null;
         for (JsonNode entry : authentication.isArray() ? authentication : List.of(authentication)) {
             JsonNode method = null;
             if (entry.isTextual()) {
                 String reference = resolveReference(entry.asText(), id);
-                method = reference == null ? null : findById(doc, reference, id);
+                if (reference != null) {
+                    if (byId == null) {
+                        byId = indexById(doc, id);
+                    }
+                    method = byId.get(reference);
+                }
             } else if (entry.isObject()) {
                 method = entry;
             }
@@ -631,68 +642,90 @@ public class SelfSignedCidVerifier {
      * that triple is exactly "associated with the relationship by value or by reference".</p>
      */
     public static List<VerificationMethod> collectFromRdf(Model model, String sub) {
+        // Only each method and its type are selected; its values are then read one property at a time.
+        // Selecting them here as OPTIONALs, as this once did, returned the cross product of every value
+        // of every one of them, and a method that failed to decode was decoded again on every row: a
+        // 36 KiB document with one bad key and a few hundred revoked/expiration values took 271 seconds,
+        // growing with the square of the document's size (R-03).
         ParameterizedSparqlString pss = new ParameterizedSparqlString();
-        pss.setCommandText("SELECT ?m ?type ?jwk ?multibase ?revoked ?expires WHERE { "
+        pss.setCommandText("SELECT DISTINCT ?m ?type WHERE { "
                 + "?sub ?authentication ?m . ?m a ?type ; ?controller ?sub . "
-                + "FILTER(?type = ?jsonWebKey || ?type = ?multikey) "
-                + "OPTIONAL { ?m ?publicKeyJwk ?jwk } "
-                + "OPTIONAL { ?m ?publicKeyMultibase ?multibase } "
-                + "OPTIONAL { ?m ?revokedProperty ?revoked } "
-                + "OPTIONAL { ?m ?expirationProperty ?expires } }");
+                + "FILTER(?type = ?jsonWebKey || ?type = ?multikey) }");
         pss.setIri("sub", sub);
         pss.setIri("authentication", SsiCidConstants.SEC_AUTHENTICATION);
         pss.setIri("jsonWebKey", SsiCidConstants.JSON_WEB_KEY_TYPE);
         pss.setIri("multikey", SsiCidConstants.MULTIKEY_TYPE);
         pss.setIri("controller", SsiCidConstants.SEC_CONTROLLER);
-        pss.setIri("publicKeyJwk", SsiCidConstants.SEC_PUBLIC_KEY_JWK);
-        pss.setIri("publicKeyMultibase", SsiCidConstants.SEC_PUBLIC_KEY_MULTIBASE);
-        pss.setIri("revokedProperty", SsiCidConstants.SEC_REVOKED);
-        pss.setIri("expirationProperty", SsiCidConstants.SEC_EXPIRATION);
+        Property publicKeyJwk = model.createProperty(SsiCidConstants.SEC_PUBLIC_KEY_JWK);
+        Property publicKeyMultibase = model.createProperty(SsiCidConstants.SEC_PUBLIC_KEY_MULTIBASE);
+        Property revokedProperty = model.createProperty(SsiCidConstants.SEC_REVOKED);
+        Property expirationProperty = model.createProperty(SsiCidConstants.SEC_EXPIRATION);
+
         List<VerificationMethod> out = new ArrayList<>();
-        Set<String> seen = new HashSet<>();
+        Set<String> accepted = new HashSet<>();
         try (QueryExecution qe = QueryExecutionFactory.create(pss.asQuery(), model)) {
             ResultSet rs = qe.execSelect();
             while (rs.hasNext()) {
                 QuerySolution row = rs.next();
-                RDFNode node = row.get("m");
+                Resource node = row.getResource("m");
                 String key = node.toString();
-                if (seen.contains(key)) {
-                    continue;
+                if (accepted.contains(key)) {
+                    continue; // typed both JsonWebKey and Multikey, and already read as one of them
                 }
-                String methodId = node.isURIResource() ? node.asResource().getURI() : null;
+                String methodId = node.isURIResource() ? node.getURI() : null;
                 if (!inSubjectsDocument(methodId, sub)) {
                     continue;
                 }
-                Instant revoked;
-                Instant expires;
+                Optional<VerificationMethod> method;
                 try {
-                    revoked = dateTimeStamp(lexical(row.get("revoked")));
-                    expires = dateTimeStamp(lexical(row.get("expires")));
-                } catch (DateTimeParseException malformed) {
-                    log.debugf("skipping verification method <%s>: 'revoked'/'expires' is not an xsd:dateTimeStamp", methodId);
+                    Instant revoked = dateTimeStamp(soleLiteral(node, revokedProperty));
+                    Instant expires = dateTimeStamp(soleLiteral(node, expirationProperty));
+                    if (SsiCidConstants.JSON_WEB_KEY_TYPE.equals(row.getResource("type").getURI())) {
+                        String jwk = soleLiteral(node, publicKeyJwk);
+                        method = jwk == null ? Optional.empty()
+                                : fromJwk(methodId, JsonSerialization.mapper.readTree(jwk), revoked, expires);
+                    } else {
+                        method = fromMultibase(methodId, soleLiteral(node, publicKeyMultibase), revoked, expires);
+                    }
+                } catch (IOException | RuntimeException unusable) {
+                    // An unreadable revocation date is not evidence that the key was never revoked, and
+                    // two values for one property leave it undecided which applies — including a
+                    // revocation and an expiry the reader would otherwise have picked one of at random.
+                    log.debugf("skipping verification method <%s>: %s", methodId, unusable.getMessage());
                     continue;
                 }
-                String type = row.getResource("type").getURI();
-                Optional<VerificationMethod> method = Optional.empty();
-                if (SsiCidConstants.JSON_WEB_KEY_TYPE.equals(type)) {
-                    String jwkLexical = lexical(row.get("jwk"));
-                    if (jwkLexical != null) {
-                        try {
-                            method = fromJwk(methodId, JsonSerialization.mapper.readTree(jwkLexical), revoked, expires);
-                        } catch (Exception notJson) {
-                            // skip non-JSON literals
-                        }
-                    }
-                } else {
-                    method = fromMultibase(methodId, lexical(row.get("multibase")), revoked, expires);
-                }
                 if (method.isPresent()) {
-                    seen.add(key);
+                    accepted.add(key);
                     out.add(method.get());
                 }
             }
         }
         return out;
+    }
+
+    /**
+     * The lexical form of {@code method}'s one value for {@code property}, or {@code null} if it has
+     * none.
+     *
+     * @throws IllegalArgumentException if it has more than one, or one that is not a literal
+     */
+    private static String soleLiteral(Resource method, Property property) {
+        StmtIterator values = method.listProperties(property);
+        try {
+            if (!values.hasNext()) {
+                return null;
+            }
+            RDFNode value = values.next().getObject();
+            if (values.hasNext()) {
+                throw new IllegalArgumentException("more than one value for <" + property.getURI() + ">");
+            }
+            if (!value.isLiteral()) {
+                throw new IllegalArgumentException("<" + property.getURI() + "> is not a literal");
+            }
+            return value.asLiteral().getLexicalForm();
+        } finally {
+            values.close();
+        }
     }
 
     /**
@@ -807,26 +840,37 @@ public class SelfSignedCidVerifier {
         return hash >= 0 ? identifier.substring(0, hash) : identifier;
     }
 
-    /** The first map anywhere in {@code node} whose {@code id} resolves to {@code reference}. */
-    private static JsonNode findById(JsonNode node, String reference, String base) {
-        if (node == null) {
-            return null;
-        }
-        if (node.isObject()) {
-            String id = firstText(node, "id", "@id");
-            if (id != null && reference.equals(resolveReference(id, base))) {
-                return node;
+    /**
+     * Every map in {@code document} that has an {@code id}, by that id resolved against {@code base}; the
+     * first in document order wins, as a search from the top would find it.
+     *
+     * <p>Built once per document. Searching the whole document again for every reference in
+     * {@code authentication} made resolution cost the number of references times the size of the
+     * document: a 163&nbsp;KiB DID document of 8&nbsp;000 references that resolve to nothing took 30
+     * seconds (R-03). The walk keeps its own stack rather than recursing, so nesting depth costs no
+     * thread stack either.</p>
+     */
+    private static Map<String, JsonNode> indexById(JsonNode document, String base) {
+        Map<String, JsonNode> byId = new HashMap<>();
+        Deque<JsonNode> pending = new ArrayDeque<>();
+        pending.push(document);
+        while (!pending.isEmpty()) {
+            JsonNode node = pending.pop();
+            if (node.isObject()) {
+                String resolved = resolveReference(firstText(node, "id", "@id"), base);
+                if (resolved != null) {
+                    byId.putIfAbsent(resolved, node);
+                }
             }
-        }
-        if (node.isObject() || node.isArray()) {
-            for (Iterator<JsonNode> children = node.elements(); children.hasNext(); ) {
-                JsonNode found = findById(children.next(), reference, base);
-                if (found != null) {
-                    return found;
+            if (node.isContainerNode() && node.size() > 0) {
+                List<JsonNode> children = new ArrayList<>(node.size());
+                node.elements().forEachRemaining(children::add);
+                for (int i = children.size() - 1; i >= 0; i--) {
+                    pending.push(children.get(i)); // reversed, so the first child is visited first
                 }
             }
         }
-        return null;
+        return byId;
     }
 
     /** The first of {@code names} present on {@code node} as a string, or {@code null}. */
@@ -843,10 +887,6 @@ public class SelfSignedCidVerifier {
     /** An {@code xsd:dateTimeStamp} (a date-time with a time zone), or {@code null} if absent. */
     private static Instant dateTimeStamp(String value) {
         return value == null ? null : OffsetDateTime.parse(value.trim()).toInstant();
-    }
-
-    private static String lexical(RDFNode node) {
-        return node != null && node.isLiteral() ? ((Literal) node).getLexicalForm() : null;
     }
 
     private static String asString(Object value) {

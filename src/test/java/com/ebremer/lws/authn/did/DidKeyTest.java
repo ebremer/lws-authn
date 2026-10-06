@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigInteger;
@@ -19,6 +20,7 @@ import java.security.SecureRandom;
 import java.security.interfaces.ECPublicKey;
 import java.security.spec.ECPoint;
 import java.security.spec.ECPublicKeySpec;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Map;
@@ -133,5 +135,19 @@ class DidKeyTest {
         assertEquals("z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
                 DidKey.multibaseValue("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK#z6Mkha"));
         assertThrows(IllegalArgumentException.class, () -> DidKey.multibaseValue("did:web:example.com"));
+    }
+
+    /**
+     * R-03. Base58 decoding is quadratic in its input, and a {@code publicKeyMultibase} is
+     * attacker-supplied: unbounded, a 250 000-character value took 18 seconds to refuse.
+     */
+    @Test
+    void refusesAMultibaseLongerThanAnySupportedKeyBeforeDecodingIt() {
+        String huge = "z" + "2".repeat(250_000);
+        IllegalArgumentException refused = assertTimeoutPreemptively(Duration.ofMillis(500),
+                () -> assertThrows(IllegalArgumentException.class, () -> DidKey.decodeMultibase(huge)));
+        assertTrue(refused.getMessage().contains("longer than any supported public key"), refused.getMessage());
+        assertThrows(IllegalArgumentException.class,
+                () -> DidKey.decodeMultibase("z" + "2".repeat(DidKey.MAX_MULTIBASE_LENGTH)));
     }
 }

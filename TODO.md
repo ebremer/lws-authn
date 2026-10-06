@@ -219,7 +219,7 @@ is needed.
   runs on a test clock (refusals and late failures do not extend; per-origin keys; the classification),
   and `OutboundHttpClientTest` shows ten 404s leave the origin open and a refused port trips it.
 
-- [ ] **R-03 · Quadratic CPU in DID/CID key handling: one request can burn minutes.**
+- [x] **R-03 · Quadratic CPU in DID/CID key handling: one request can burn minutes.**
   `High` · security/DoS · `M` · *demonstrated*
   - `did/DidKey.java:343-362` — `base58Decode` is O(n²) `BigInteger` arithmetic with no length cap;
     `decodeMultibase` (`:144`) is reached for any `publicKeyMultibase` and any `did:key`. A
@@ -234,6 +234,17 @@ is needed.
   length; mark a method `seen` whether accepted or rejected; select optional values per method and
   refuse a method with more than one; resolve references through one id→node index; overall work budget
   per verification.
+  **Done.** `DidKey.decodeMultibase` refuses a value over `MAX_MULTIBASE_LENGTH` (256 characters; the
+  longest supported key is 95) before decoding, and `base58Decode` says it must be bounded by its caller.
+  `Dids.methodOf` refuses a DID over `MAX_DID_LENGTH` (1 024), and its syntax check is now a character
+  class plus a scan of each `%` — the repeated alternation recursed once per character and overflowed
+  the stack, so this also closes R-09's DID case. `collectFromRdf` selects `DISTINCT ?m ?type` only and
+  reads each method's values one property at a time; a method with two values for a property, or a
+  non-literal one, is unusable — which is also R-06's RDF half (R-06's JSON half is still open).
+  `collectFromJson` resolves references through an id index built once by an iterative walk (first map
+  in document order wins, as before). Six regression tests (`DidKeyTest`, `DidsTest`,
+  `VerificationMethodRulesTest`), each confirmed to fail against the previous code — one by taking
+  22 s. Not done: an overall work budget per verification; the caps make it unnecessary for now.
 
 - [ ] **R-04 · The RDF parser accepts any syntax Jena knows, including binary RDF-Thrift: 8 bytes → 95 MB.**
   `High` · security/DoS · `S` · *demonstrated*
@@ -274,6 +285,9 @@ is needed.
   was never revoked."
   **Do:** a present `revoked`/`expires` that is not exactly one parseable date-time string or literal
   makes the method unusable, on both paths. Tests for each shape.
+  **Partly done with R-03:** the RDF path now refuses a method with two values for one property or a
+  non-literal value (`rdfAMethodWithTwoValuesForOnePropertyIsNotUsable`,
+  `rdfANonLiteralRevocationIsNotUsable`). The JSON path's `firstText` is still open.
 
 - [ ] **R-07 · Plain `http` is accepted for every key-bearing fetch.**
   `Medium` · security/spec-conformance · `S` · *verified*
@@ -309,7 +323,7 @@ is needed.
   - RDF: 12 000 levels of `[<p>` in Turtle (168 KB) or deeply nested JSON-LD under the size cap
     (`RdfParsing.java:174-187` catches only `RuntimeException`).
   - DIDs: the `(?:[…]|%XX)*` alternation in `did/Dids.java:65` recurses per character; a ~2 000-char DID
-    overflows.
+    overflows. *(Fixed with R-03: length cap and a non-recursive check.)*
   **Do:** set `jdk.xml.maxElementDepth` (e.g. 64) on the SAML `DocumentBuilderFactory`; pre-scan RDF and
   JSON for nesting depth; cap DID length and use possessive quantifiers or a hand scanner; cap the
   `credential` form parameter's length; catch `StackOverflowError` around parsing as a last resort.
