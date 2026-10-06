@@ -27,7 +27,7 @@ IdP's signing certificate; LWS adds no discovery mechanism on top of SAML.
 
 ## Prerequisites
 
-- Keycloak **26.7.4** with the `lws-authn` provider deployed — see [Build and deploy](build.md).
+- Keycloak **26.7.5** or a later 26.7 release, with the `lws-authn` provider deployed — see [Build and deploy](build.md).
 - `curl`, `jq`, `openssl`.
 - For a quick local run: `docker compose up --build --wait` in a checkout — see
   [Run with Docker](build.md#run-with-docker) — which serves `http://localhost:8080` with admin/admin

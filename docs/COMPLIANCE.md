@@ -253,7 +253,7 @@ can mint credentials for an identity they should not control. `INSTALL.md` step 
 
 ## Verification
 
-`mvn clean verify` — 208 unit tests plus 25 in `LwsAuthIT` against a real Keycloak 26.7.4 container.
+`mvn clean verify` — 208 unit tests plus 25 in `LwsAuthIT` against a real Keycloak 26.7.5 container.
 Roughly half the integration tests assert a *rejection*, including a full third-party OpenID Provider
 fixture broken one document at a time, because a verifier that wrongly rejects gets reported by its
 users and one that wrongly accepts does not.

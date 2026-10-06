@@ -5,7 +5,7 @@ nav_order: 1
 
 # lws-authn — Keycloak providers for LWS authentication suites
 
-A [Keycloak](https://www.keycloak.org/) **26.7.4** extension implementing the authentication suites of
+A [Keycloak](https://www.keycloak.org/) **26.7** extension implementing the authentication suites of
 the W3C [Linked Web Storage (LWS)](https://www.w3.org/TR/lws10-core/) 1.0 protocol, in which a **signed
 token bound to an identity** is used as an authentication credential — all three of its suites:
 

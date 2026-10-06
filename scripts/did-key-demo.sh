@@ -11,7 +11,7 @@
 # endpoint. So this verifies at /lws-ssi-cid/verify, with a 'kid' naming the verification method the
 # did:key's DID document lists (<did>#<multibase>) — that suite requires one.
 #
-# Requirements: curl, jq, node, and a running Keycloak 26.7.4 with the lws-authn provider deployed.
+# Requirements: curl, jq, node, and a running Keycloak 26.7 (26.7.5 or later) with the lws-authn provider deployed.
 # Defaults target `kc.sh start-dev` on http://localhost:8080, realm `master` (any realm works —
 # the verifier is realm-agnostic).
 #

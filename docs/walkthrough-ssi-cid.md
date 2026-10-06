@@ -43,7 +43,7 @@ for some other purpose, or has marked `revoked` or let `expire`. The JWT must al
 
 ## Prerequisites
 
-- Keycloak **26.7.4** with the `lws-authn` provider deployed — see [Build and deploy](build.md).
+- Keycloak **26.7.5** or a later 26.7 release, with the `lws-authn` provider deployed — see [Build and deploy](build.md).
 - `curl`, `jq`, and `openssl`.
 - For a quick local run: `docker compose up --build --wait` in a checkout — see
   [Run with Docker](build.md#run-with-docker) — which serves `http://localhost:8080` with admin/admin

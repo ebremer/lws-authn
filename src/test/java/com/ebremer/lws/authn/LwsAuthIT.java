@@ -95,7 +95,7 @@ class LwsAuthIT {
     private static final HttpClient HTTP = HttpClient.newHttpClient();
     private static final String REALM = "lws-demo";
     /** The Keycloak image: Failsafe passes the POM's {@code keycloak.version}; the default is for IDE runs. */
-    private static final String IMAGE = System.getProperty("lws.authn.keycloakImage", "quay.io/keycloak/keycloak:26.7.4");
+    private static final String IMAGE = System.getProperty("lws.authn.keycloakImage", "quay.io/keycloak/keycloak:26.7.5");
     /**
      * The shaded provider JAR under test. Failsafe passes its exact path (see the POM); run from an IDE,
      * the newest shaded JAR in {@code target/} is used, so no version number is written down here.

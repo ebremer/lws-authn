@@ -479,7 +479,7 @@ is needed.
   with `redirectUris: ["*"]` — and §14 lists "Demo realm gone". Not run against Keycloak here: the
   realm import with `bruteForceProtected` and without redirect URIs (R-43).
 
-- [ ] **R-14 · Upgrade Keycloak: 26.7.4 is missing 14 security fixes.**
+- [x] **R-14 · Upgrade Keycloak: 26.7.4 is missing 14 security fixes.**
   `Medium` · dependency · `S` · *verified*
   Keycloak **26.7.5** (30 September 2026) fixes 14 security issues, including CVE-2026-18217 (SAML
   Redirect Binding parameter pollution), CVE-2026-89298 and CVE-2026-88770; **26.8.0** followed on 1
@@ -489,6 +489,18 @@ is needed.
   **Do:** move to 26.7.5 now (re-run the POM's provided/relocated-library check, as S-17 did); evaluate
   26.8.0 separately; reword to "same 26.x minor; apply patch releases"; put the version in one place
   (it is hard-coded in 17 files).
+  **Done.** `keycloak.version` 26.7.5; `mvn clean verify` green on it (232 unit tests; enforcer and
+  shade as before; `LwsAuthIT` not run — no Docker, R-43). The library check, done as S-17 did it — by
+  listing the JARs of both server distributions from Maven Central and diffing them: of the libraries
+  the provider marks `provided` or relocates, only Caffeine changed (3.2.3 → 3.2.4, which is what the
+  provider bundles), and both releases take Infinispan 16.0.14, so the "Keycloak POMs" column stands;
+  the POM's table and its reasoning are updated. One place: the POM is the source, Failsafe already
+  passes it to `LwsAuthIT`, and the two copies that cannot read it — the `Dockerfile` default and
+  `LwsAuthIT`'s fallback — are checked against it by a new `KeycloakVersionPinsTest` (it fails on a
+  mismatch; tried). The docs no longer track every patch release: prerequisites say "26.7.5 or a later
+  26.7 release", README and the docs index say "Keycloak 26.7", and INSTALL's version matrix now asks
+  for the same minor and tells operators to apply patch releases rather than "must match".
+  26.8.0 stays with W-5.
 
 - [ ] **R-15 · The live deployment still runs pre-P0 code** (carried forward from **P0-10**).
   `High` · operations · `M` · *not re-verified from here*
