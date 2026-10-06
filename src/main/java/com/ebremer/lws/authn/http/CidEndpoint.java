@@ -49,6 +49,14 @@ import com.ebremer.lws.authn.verify.VerifyAccess;
  *       it off.</li>
  * </ul>
  *
+ * <h2>Readable from a browser</h2>
+ *
+ * <p>Every answer carries {@code Access-Control-Allow-Origin: *}, and a preflight is answered (R-36), so
+ * a verifier running in a web page can read the document. That is safe because the document is public
+ * and the request carries no credential: CORS protects what a browser's cookies or authorization would
+ * unlock, and there is nothing here to unlock. {@code ETag} is exposed so such a verifier can revalidate
+ * its copy. The {@code verify} endpoints, which do take a credential, carry no CORS headers.</p>
+ *
  * @author Erich Bremer
  */
 public final class CidEndpoint {
@@ -76,6 +84,33 @@ public final class CidEndpoint {
     public static Response serve(KeycloakSession session, EndpointSettings settings, String cidPath,
                                  String userId, String accept, String ifNoneMatch,
                                  DocumentRenderer renderer) {
+        return readableAnywhere(answer(session, settings, cidPath, userId, accept, ifNoneMatch, renderer));
+    }
+
+    /**
+     * The answer to a CORS preflight for a document: any origin, {@code GET} or {@code HEAD}, with the
+     * two request headers a verifier sends — {@code Accept}, safelisted anyway, and {@code If-None-Match},
+     * which is not — cached for a day.
+     */
+    public static Response preflight() {
+        return Response.noContent()
+                .header("Access-Control-Allow-Origin", "*")
+                .header("Access-Control-Allow-Methods", "GET, HEAD")
+                .header("Access-Control-Allow-Headers", "Accept, If-None-Match")
+                .header("Access-Control-Max-Age", "86400")
+                .build();
+    }
+
+    private static Response readableAnywhere(Response response) {
+        return Response.fromResponse(response)
+                .header("Access-Control-Allow-Origin", "*")
+                .header("Access-Control-Expose-Headers", "ETag")
+                .build();
+    }
+
+    private static Response answer(KeycloakSession session, EndpointSettings settings, String cidPath,
+                                   String userId, String accept, String ifNoneMatch,
+                                   DocumentRenderer renderer) {
         RealmModel realm = session.getContext().getRealm();
         if (!settings.isEnabled(realm)) {
             return JsonResponses.notEnabled();
@@ -87,9 +122,10 @@ public final class CidEndpoint {
             return JsonResponses.notAcceptable(RdfContentNegotiation.SUPPORTED);
         }
         RateLimiter limiter = settings.getCidLimiter();
-        if (limiter != null && !limiter.tryAcquire(VerifyAccess.callerKey(session))) {
-            return JsonResponses.error(Response.Status.TOO_MANY_REQUESTS, "slow_down",
-                    "too many requests for identity documents; retry shortly");
+        String caller = VerifyAccess.callerKey(session);
+        if (limiter != null && !limiter.tryAcquire(caller)) {
+            return JsonResponses.tooManyRequests("too many requests for identity documents; retry shortly",
+                    limiter.retryAfterSeconds(caller));
         }
         UserModel user = session.users().getUserById(realm, userId);
         if (user == null) {

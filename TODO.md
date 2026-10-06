@@ -996,7 +996,7 @@ is needed.
   considered and not done: through a proxy the proxy resolves the name, so the resolver this guard
   relies on never sees the address.
 
-- [ ] **R-36 · HTTP details.** `Low` · spec-conformance · `S` · *verified*
+- [x] **R-36 · HTTP details.** `Low` · spec-conformance · `S` · *verified*
   `VerifyAccess.java:216-219` always sends `error="invalid_token"`, even when no `Authorization` header
   was sent (RFC 6750 §3.1: SHOULD NOT include an error code then), and RFC 6750 §3 forbids `"` and `\` in
   `error_description`, so a configured role name could make the header non-compliant. `429`s carry no
@@ -1005,6 +1005,16 @@ is needed.
   `Access-Control-Expose-Headers: ETag` is safe for a credential-free document (leave the verify
   endpoints without CORS). `RateLimiter` uses the wall clock (`:57, 69-73`): a backwards clock step keeps
   an empty bucket empty until the clock catches up — use `System.nanoTime()`.
+  **Done.** `VerifyAccess.challenge` omits `error`/`error_description` when no credential was presented
+  (no bearer value in bearer mode, none in secret mode) and maps anything outside `%x20-21 / %x23-5B /
+  %x5D-7E` in the description to `?`; the JSON body is unchanged. `JsonResponses.tooManyRequests` sets
+  `Retry-After` from `RateLimiter.retryAfterSeconds`, used by both verify buckets and the CID endpoint.
+  `CidEndpoint.serve` adds `Access-Control-Allow-Origin: *` and `Access-Control-Expose-Headers: ETag` to
+  every answer, and both providers answer `OPTIONS cid/{userId}` with `CidEndpoint.preflight()`
+  (`GET, HEAD`; `Accept, If-None-Match`; max-age a day). `RateLimiter` runs on `System.nanoTime()`; so
+  do `OutboundHttp`'s breaker and cache, which had the same flaw. Tests: `VerifyAccessTest`,
+  `RateLimiterTest`, `JsonResponsesTest`; `LwsAuthIT.theDocumentIsReadableFromABrowserAndVerifyIsNot`
+  (unrun here) covers the real routing, including whether Keycloak lets the `OPTIONS` method through.
 
 - [ ] **R-37 · `did:web` edge cases.** `Info` · robustness · `S` · *verified*
   `Dids.java:213-218` accepts `.`, `..` and `%2F` path segments

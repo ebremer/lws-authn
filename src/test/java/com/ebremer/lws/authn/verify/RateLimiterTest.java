@@ -5,6 +5,7 @@
  */
 package com.ebremer.lws.authn.verify;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -56,5 +57,23 @@ class RateLimiterTest {
     void rejectsANonsenseRate() {
         assertThrows(IllegalArgumentException.class, () -> new RateLimiter(0));
         assertThrows(IllegalArgumentException.class, () -> new RateLimiter(-5));
+    }
+
+    /** R-36. A refused caller is told when to come back: when its bucket holds a permit again. */
+    @Test
+    void saysWhenThereIsAPermitAgain() {
+        RateLimiter perSecond = new RateLimiter(60);
+        long t0 = 1_000_000L;
+        for (int i = 0; i < 60; i++) {
+            perSecond.tryAcquire("10.0.0.1", t0);
+        }
+        assertEquals(1, perSecond.retryAfterSeconds("10.0.0.1", t0));
+
+        RateLimiter perMinute = new RateLimiter(2);
+        perMinute.tryAcquire("10.0.0.1", t0);
+        perMinute.tryAcquire("10.0.0.1", t0);
+        assertEquals(30, perMinute.retryAfterSeconds("10.0.0.1", t0));
+        assertEquals(20, perMinute.retryAfterSeconds("10.0.0.1", t0 + 10_000));
+        assertEquals(1, perMinute.retryAfterSeconds("never-seen", t0));
     }
 }

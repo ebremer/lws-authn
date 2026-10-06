@@ -102,6 +102,15 @@ behaviours are covered by tests — `mvn test` for the unit tests, `mvn verify` 
   document, `404`, `406`, `429` — is the same media type with the same body shape so nothing but the
   status distinguishes them, and a rate limit (`cid-rate-limit`, default 600/minute per caller) makes
   scraping slow. Set `serve=false` for a deployment that does not want to host identifiers at all.
+- **The documents are readable from any origin; the verify endpoints are not.** Every `cid/{userId}`
+  answer carries `Access-Control-Allow-Origin: *` and exposes `ETag`, and a preflight is answered, so a
+  verifier running in a web page can read a document. That is safe because the document is public and
+  is fetched with no credential: CORS guards what a browser's cookies or `Authorization` would unlock,
+  and nothing here is unlocked by either. The `verify` endpoints take a credential and carry no CORS
+  headers, so a page on another origin cannot read their answers.
+- **Rate limits run on a monotonic clock** and a refused caller is told when to retry (`Retry-After`).
+  A wall-clock step backwards used to keep an emptied bucket empty until the clock caught up; the
+  outbound circuit breaker and document cache now use the same monotonic clock.
 - **Only the syntaxes asked for are read.** A dereferenced document is read only as one of the syntaxes
   the verifiers request — Turtle, JSON-LD, `application/cid`, N-Triples, RDF/XML — or as `application/json`. Anything else
   is rejected by name rather than handed to a parser: not only HTML or PDF, which once failed as a

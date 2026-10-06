@@ -78,6 +78,19 @@ public final class JsonResponses {
         return body;
     }
 
+    /**
+     * {@code 429}, with {@code Retry-After} (RFC 9110 §10.2.3, which RFC 6585 §4 says a {@code 429} "MAY"
+     * carry): when the caller's bucket holds a permit again, so a well-behaved client need not guess
+     * (R-36).
+     */
+    public static Response tooManyRequests(String description, long retryAfterSeconds) {
+        return Response.status(Response.Status.TOO_MANY_REQUESTS)
+                .entity(json(errorBody("slow_down", description)))
+                .type(MediaType.APPLICATION_JSON)
+                .header("Retry-After", Math.max(1, retryAfterSeconds))
+                .build();
+    }
+
     /** {@code 400} — the request itself is malformed, independently of any credential in it. */
     public static Response badRequest(String description) {
         return error(Response.Status.BAD_REQUEST, "invalid_request", description);

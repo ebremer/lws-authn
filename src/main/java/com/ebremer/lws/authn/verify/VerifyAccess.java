@@ -188,9 +188,10 @@ public final class VerifyAccess {
      * @return {@code null} when the caller is allowed, otherwise the response to return unchanged
      */
     public Response check(KeycloakSession session, String authorization) {
-        if (limiter != null && !limiter.tryAcquire(callerKey(session))) {
-            return error(Response.Status.TOO_MANY_REQUESTS, "slow_down",
-                    "too many verification requests; retry shortly", session, false);
+        String callerKey = callerKey(session);
+        if (limiter != null && !limiter.tryAcquire(callerKey)) {
+            return JsonResponses.tooManyRequests("too many verification requests; retry shortly",
+                    limiter.retryAfterSeconds(callerKey));
         }
         switch (mode) {
             case PUBLIC:
@@ -200,7 +201,7 @@ public final class VerifyAccess {
                 byte[] offered = presented == null ? new byte[0] : presented.getBytes(StandardCharsets.UTF_8);
                 if (secret == null || !MessageDigest.isEqual(secret, offered)) {
                     return error(Response.Status.UNAUTHORIZED, "invalid_token",
-                            "a valid shared secret is required", session, true);
+                            "a valid shared secret is required", session, true, presented != null);
                 }
                 return null;
             }
@@ -210,18 +211,19 @@ public final class VerifyAccess {
                         new AppAuthManager.BearerTokenAuthenticator(session).authenticate();
                 if (auth == null) {
                     return error(Response.Status.UNAUTHORIZED, "invalid_token",
-                            "a valid access token for this realm is required", session, true);
+                            "a valid access token for this realm is required", session, true,
+                            bearerToken(authorization) != null);
                 }
                 // The address bucket above is only as good as the address, and behind a proxy that
                 // trusts a client's X-Forwarded-For, every request can claim a new one (R-10). The
                 // authenticated user cannot be spoofed by any header, so it has a bucket of its own.
                 if (limiter != null && auth.user() != null && !limiter.tryAcquire(principalKey(auth.user().getId()))) {
-                    return error(Response.Status.TOO_MANY_REQUESTS, "slow_down",
-                            "too many verification requests; retry shortly", session, false);
+                    return JsonResponses.tooManyRequests("too many verification requests; retry shortly",
+                            limiter.retryAfterSeconds(principalKey(auth.user().getId())));
                 }
                 if (requiredRole != null && !holdsRole(auth.user(), realmRole(session, requiredRole))) {
                     return error(Response.Status.FORBIDDEN, "insufficient_scope",
-                            "the '" + requiredRole + "' realm role is required", session, true);
+                            "the '" + requiredRole + "' realm role is required", session, true, true);
                 }
                 return null;
             }
@@ -295,16 +297,35 @@ public final class VerifyAccess {
      * means the credential under test was rejected — that is a {@code 200} carrying
      * {@code "valid": false}, because the request was authorized and answered.</p>
      */
+    /**
+     * @param presented whether the request carried a credential at all. Without one, RFC 6750 §3.1 says
+     *                  the challenge "SHOULD NOT include an error code or other error information"
+     *                  (R-36); the body still says what is missing.
+     */
     private Response error(Response.Status status, String code, String description,
-                           KeycloakSession session, boolean challenge) {
+                           KeycloakSession session, boolean challenge, boolean presented) {
         Response.ResponseBuilder response = Response.status(status)
                 .entity(JsonResponses.json(JsonResponses.errorBody(code, description)))
                 .type(MediaType.APPLICATION_JSON);
         if (challenge) {
-            response.header("WWW-Authenticate", "Bearer realm=\"" + quoted(realmName(session))
-                    + "\", error=\"" + quoted(code) + "\", error_description=\"" + quoted(description) + "\"");
+            response.header("WWW-Authenticate", challenge(realmName(session), presented ? code : null, description));
         }
         return response.build();
+    }
+
+    /**
+     * The {@code WWW-Authenticate} value. RFC 6750 §3 limits {@code error_description} to
+     * {@code %x20-21 / %x23-5B / %x5D-7E} — no {@code "}, no {@code \}, nothing outside ASCII — and the
+     * description can carry a configured role name, so anything else becomes {@code ?} (R-36).
+     */
+    static String challenge(String realm, String code, String description) {
+        String value = "Bearer realm=\"" + quoted(realm) + "\"";
+        if (code == null) {
+            return value;
+        }
+        StringBuilder safe = new StringBuilder(description.length());
+        description.chars().forEach(c -> safe.append(c >= 0x20 && c <= 0x7e && c != '"' && c != '\\' ? (char) c : '?'));
+        return value + ", error=\"" + code + "\", error_description=\"" + safe + "\"";
     }
 
     /**

@@ -69,9 +69,9 @@ is in the body:
 |---|---|
 | `200` | The request was answered. Read `valid` — `true` or `false`. |
 | `400` | The request could not be read: a missing or unparseable parameter, or a `credential` over 256 KiB (262 144 characters). |
-| `401` / `403` | **You** may not use this endpoint. Carries a `WWW-Authenticate` challenge (RFC 9110 §15.5.2). |
+| `401` / `403` | **You** may not use this endpoint. Carries a `WWW-Authenticate` challenge (RFC 9110 §15.5.2) — with an `error` code only when the request carried a credential, as RFC 6750 §3.1 asks. |
 | `404` | This suite is not enabled on this realm. |
-| `429` | Rate limited; retry shortly. |
+| `429` | Rate limited; `Retry-After` says in how many seconds a request will be admitted. |
 
 > **A rejected credential is a `200` with `"valid": false`.** Until this release it was a bare `401`
 > with no challenge — which RFC 9110 §15.5.2 forbids, and which said the wrong thing anyway: the

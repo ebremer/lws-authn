@@ -554,8 +554,14 @@ public final class OutboundHttp {
         }
     };
 
-    /** Test seam: the breaker's clock. */
-    private static volatile LongSupplier clock = System::currentTimeMillis;
+    /**
+     * The breaker's and the cache's clock, in milliseconds: monotonic, since neither means a time of day
+     * and a wall-clock step backwards would hold a circuit open, or a document fresh, for that much
+     * longer (R-36). A test seam.
+     */
+    private static final LongSupplier MONOTONIC = () -> System.nanoTime() / 1_000_000L;
+
+    private static volatile LongSupplier clock = MONOTONIC;
 
     private static final class Circuit {
         private int failures;
@@ -635,10 +641,10 @@ public final class OutboundHttp {
         synchronized (CIRCUITS) {
             CIRCUITS.clear();
         }
-        clock = System::currentTimeMillis;
+        clock = MONOTONIC;
     }
 
-    /** Test seam: run the breaker on {@code millis} instead of the wall clock. */
+    /** Test seam: run the breaker and the cache on {@code millis} instead of the monotonic clock. */
     static void useClock(LongSupplier millis) {
         clock = millis;
     }

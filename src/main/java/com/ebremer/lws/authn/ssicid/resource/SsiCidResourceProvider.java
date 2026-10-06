@@ -19,6 +19,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.FormParam;
 import jakarta.ws.rs.GET;
+import jakarta.ws.rs.OPTIONS;
 import jakarta.ws.rs.HeaderParam;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
@@ -77,6 +78,13 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
      *
      * <p>See {@link CidEndpoint} for why this endpoint is unauthenticated and what bounds that.</p>
      */
+    /** The CORS preflight for the document (R-36); see {@link CidEndpoint}. */
+    @OPTIONS
+    @Path(SsiCidConstants.CID_PATH + "/{userId}")
+    public Response preflightControlledIdentifierDocument() {
+        return CidEndpoint.preflight();
+    }
+
     @GET
     @Path(SsiCidConstants.CID_PATH + "/{userId}")
     @Produces({SsiCidConstants.JSON_LD, SsiCidConstants.TURTLE, SsiCidConstants.N_TRIPLES, SsiCidConstants.RDF_XML})

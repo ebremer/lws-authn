@@ -200,6 +200,10 @@ realm under the default `bearer` access mode, before any signature is checked.
   request vetted as the first is — the SSRF guard, the https rule, the origin's breaker — the chain
   shares the one fetch deadline, and the document must still have the original subject as its `id`.
   OpenID discovery, the JWK set and `did:web` documents still follow no redirect.
+- **A controlled identifier document can be read from a web page** (R-36). Every `cid/{userId}` answer
+  carries `Access-Control-Allow-Origin: *` and exposes `ETag`, and an `OPTIONS` preflight is answered,
+  so a browser-based verifier can fetch and revalidate one. The documents are public and fetched without
+  credentials, so this unlocks nothing; the `verify` endpoints still carry no CORS headers.
 - **Replay protection a caller can turn on** (R-34). `POST /lws-ssi-cid/verify` with `single_use=true`
   holds the credential to one use: it must carry a `jti`, and the next request about it with
   `single_use=true` is refused (`notReplayed`). Uses are recorded in Keycloak's single-use object store —
@@ -423,6 +427,12 @@ each may reject a document that used to verify. Check your issuers' documents be
   `LWS_AUTHN_ENABLED` and `lws.authn.enabled` are unchanged. And `http-mode` (`LWS_AUTHN_HTTP_MODE`,
   `lws.authn.http.mode`) is now a documented setting read like the others and logged at startup:
   `session` is the way to fetch through an egress proxy, at the cost of the rebinding-safe resolver.
+- **HTTP details** (R-36). Every `429` carries `Retry-After`, the seconds until the caller's bucket holds
+  a permit. A `401` for a request with no credential at all carries a bare `Bearer realm="…"` challenge,
+  without an `error` code (RFC 6750 §3.1), and an `error_description` in a challenge never carries `"`,
+  `\` or non-ASCII characters (RFC 6750 §3) — a configured role name could have put them there. Rate
+  limits, the circuit breaker and the document cache run on a monotonic clock, so a wall-clock step
+  backwards no longer locks a caller out or keeps a document fresh for longer.
 - **Userinfo's `sub` follows the ID Token's** (R-30). The mapper's *Add to userinfo* switch is gone — one
   saved with a mapper is ignored — and *Add to ID token and userinfo* sets both, because OIDC Core
   §5.3.2 requires userinfo's `sub` to match the ID Token's exactly: with the ID Token on and userinfo

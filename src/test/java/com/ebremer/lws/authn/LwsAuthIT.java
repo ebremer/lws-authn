@@ -373,6 +373,41 @@ class LwsAuthIT {
                 "an Accept naming nothing on offer used to be answered with JSON-LD anyway");
     }
 
+    /**
+     * R-36. The public document is readable from any origin, with its {@code ETag}, and a preflight is
+     * answered; a verify endpoint, which takes a credential, says nothing about CORS.
+     */
+    @Test
+    void theDocumentIsReadableFromABrowserAndVerifyIsNot() throws Exception {
+        String sub = claim(idToken(), "sub");
+        HttpResponse<String> document = HTTP.send(HttpRequest.newBuilder(URI.create(sub))
+                .header("Accept", "text/turtle").header("Origin", "https://app.example").GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, document.statusCode());
+        assertEquals("*", document.headers().firstValue("Access-Control-Allow-Origin").orElse(null));
+        assertTrue(document.headers().firstValue("Access-Control-Expose-Headers").orElse("").contains("ETag"));
+
+        HttpResponse<String> preflight = HTTP.send(HttpRequest.newBuilder(URI.create(sub))
+                .header("Origin", "https://app.example").header("Access-Control-Request-Method", "GET")
+                .header("Access-Control-Request-Headers", "if-none-match")
+                .method("OPTIONS", HttpRequest.BodyPublishers.noBody()).build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertTrue(preflight.statusCode() == 200 || preflight.statusCode() == 204, preflight.toString());
+        assertEquals("*", preflight.headers().firstValue("Access-Control-Allow-Origin").orElse(null));
+
+        HttpResponse<String> verify = HTTP.send(HttpRequest.newBuilder(
+                        URI.create(base + "/realms/" + REALM + "/lws/verify"))
+                .header("Origin", "https://app.example")
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .POST(HttpRequest.BodyPublishers.ofString("credential=x")).build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertTrue(verify.headers().firstValue("Access-Control-Allow-Origin").isEmpty(), verify.headers().map().toString());
+        // No credential at all: the challenge carries no error code (RFC 6750 §3.1).
+        assertEquals(401, verify.statusCode());
+        assertFalse(verify.headers().firstValue("WWW-Authenticate").orElse("").contains("error="),
+                verify.headers().map().toString());
+    }
+
     /** The self-signed CID endpoint mounts and serves a controlled identifier document. */
     @Test
     void ssiCidEndpointServes() throws Exception {

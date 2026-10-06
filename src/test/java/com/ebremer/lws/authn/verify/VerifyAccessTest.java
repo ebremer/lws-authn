@@ -167,4 +167,17 @@ class VerifyAccessTest {
                     default -> throw new UnsupportedOperationException(method.getName());
                 });
     }
+
+    /**
+     * R-36. RFC 6750 §3.1: with no credential in the request, the challenge "SHOULD NOT include an error
+     * code or other error information"; and §3 limits {@code error_description} to printable ASCII
+     * without {@code "} or {@code \\}, which a configured role name need not be.
+     */
+    @Test
+    void theChallengeSaysOnlyWhatRfc6750Allows() {
+        assertEquals("Bearer realm=\"demo\"", VerifyAccess.challenge("demo", null, "a token is required"));
+        assertEquals("Bearer realm=\"de\\\"mo\", error=\"insufficient_scope\", "
+                        + "error_description=\"the '?quoted??' r?le is required\"",
+                VerifyAccess.challenge("de\"mo", "insufficient_scope", "the '\"quoted\\\"' r\u00f4le is required"));
+    }
 }

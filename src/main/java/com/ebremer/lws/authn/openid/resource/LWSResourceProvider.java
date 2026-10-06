@@ -13,6 +13,7 @@ package com.ebremer.lws.authn.openid.resource;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.FormParam;
 import jakarta.ws.rs.GET;
+import jakarta.ws.rs.OPTIONS;
 import jakarta.ws.rs.HeaderParam;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
@@ -66,6 +67,13 @@ public class LWSResourceProvider implements RealmResourceProvider {
      * <p>Content negotiated: JSON-LD (default), Turtle, N-Triples, RDF/XML. See {@link CidEndpoint}
      * for why it is unauthenticated and what bounds that.</p>
      */
+    /** The CORS preflight for the document (R-36); see {@link CidEndpoint}. */
+    @OPTIONS
+    @Path(LWSConstants.CID_PATH + "/{userId}")
+    public Response preflightControlledIdentifierDocument() {
+        return CidEndpoint.preflight();
+    }
+
     @GET
     @Path(LWSConstants.CID_PATH + "/{userId}")
     @Produces({LWSConstants.JSON_LD, LWSConstants.TURTLE, LWSConstants.N_TRIPLES, LWSConstants.RDF_XML})
