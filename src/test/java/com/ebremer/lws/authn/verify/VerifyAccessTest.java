@@ -94,4 +94,26 @@ class VerifyAccessTest {
         assertNull(VerifyAccess.refuseOversized(null));
         assertEquals(400, VerifyAccess.refuseOversized("x".repeat(VerifyAccess.MAX_CREDENTIAL_LENGTH + 1)).getStatus());
     }
+
+    /** R-10. One subscriber is routinely given a whole /64; it is one caller, not 2^64 of them. */
+    @Test
+    void bucketsAnIpv6CallerByItsSlash64() {
+        assertEquals("2001:db8:1:2:0:0:0:0/64", VerifyAccess.addressKey("2001:db8:1:2:aaaa:bbbb:cccc:dddd"));
+        assertEquals(VerifyAccess.addressKey("2001:db8:1:2::1"), VerifyAccess.addressKey("[2001:db8:1:2:ffff::9]"));
+        assertEquals(VerifyAccess.addressKey("fe80::1"), VerifyAccess.addressKey("fe80::2%eth0"));
+        assertFalse(VerifyAccess.addressKey("2001:db8:1:2::1").equals(VerifyAccess.addressKey("2001:db8:1:3::1")));
+    }
+
+    @Test
+    void keepsIpv4AndAnythingElseAsItIs() {
+        assertEquals("203.0.113.7", VerifyAccess.addressKey("203.0.113.7"));
+        assertEquals("203.0.113.7", VerifyAccess.addressKey("::ffff:203.0.113.7"), "an IPv4-mapped address is its IPv4 address");
+        assertEquals("evil.example:80", VerifyAccess.addressKey("evil.example:80"), "not a literal: kept, never resolved");
+        assertEquals("not-an-address", VerifyAccess.addressKey("not-an-address"));
+    }
+
+    @Test
+    void aUsersBucketIsApartFromEveryAddresss() {
+        assertFalse(VerifyAccess.principalKey("203.0.113.7").equals(VerifyAccess.addressKey("203.0.113.7")));
+    }
 }

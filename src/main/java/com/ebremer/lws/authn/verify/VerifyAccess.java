@@ -7,8 +7,11 @@
  */
 package com.ebremer.lws.authn.verify;
 
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.Arrays;
 import java.util.Locale;
 
 import jakarta.ws.rs.core.MediaType;
@@ -176,6 +179,13 @@ public final class VerifyAccess {
                     return error(Response.Status.UNAUTHORIZED, "invalid_token",
                             "a valid access token for this realm is required", session, true);
                 }
+                // The address bucket above is only as good as the address, and behind a proxy that
+                // trusts a client's X-Forwarded-For, every request can claim a new one (R-10). The
+                // authenticated user cannot be spoofed by any header, so it has a bucket of its own.
+                if (limiter != null && auth.user() != null && !limiter.tryAcquire(principalKey(auth.user().getId()))) {
+                    return error(Response.Status.TOO_MANY_REQUESTS, "slow_down",
+                            "too many verification requests; retry shortly", session, false);
+                }
                 if (requiredRole != null && !hasRealmRole(auth.token(), requiredRole)) {
                     return error(Response.Status.FORBIDDEN, "insufficient_scope",
                             "the '" + requiredRole + "' realm role is required", session, true);
@@ -257,18 +267,60 @@ public final class VerifyAccess {
     }
 
     /**
-     * The key a rate limiter buckets a request under: the caller's remote address, or {@code unknown}
-     * when the connection cannot be read. Shared with the {@code cid/{userId}} endpoints so one client
-     * is one bucket however it arrives.
+     * The key a rate limiter buckets a request under: the caller's remote address — an IPv6 address by
+     * its {@code /64}, see {@link #addressKey} — or {@code unknown} when the connection cannot be read.
+     * Shared with the {@code cid/{userId}} endpoints, and with {@code OutboundHttp}'s in-flight limit, so
+     * one client is one bucket however it arrives.
+     *
+     * <p>The address is whatever Keycloak reports, which behind a reverse proxy is whatever the proxy
+     * headers say. A proxy that passes on a client's own {@code X-Forwarded-For} lets every request
+     * claim a fresh address; {@code docs/INSTALL.md} configures it to overwrite the header instead, and
+     * {@code bearer} mode adds a bucket per user, which no header can change.</p>
      */
     public static String callerKey(KeycloakSession session) {
         try {
             String remote = session.getContext().getConnection() == null
                     ? null : session.getContext().getConnection().getRemoteAddr();
-            return remote == null || remote.isBlank() ? "unknown" : remote;
+            return remote == null || remote.isBlank() ? "unknown" : addressKey(remote.trim());
         } catch (RuntimeException e) {
             return "unknown";
         }
+    }
+
+    /**
+     * An IPv4 address as itself, an IPv6 address as its {@code /64} (R-10). A subscriber is routinely
+     * given a whole {@code /64}, and every address in it is theirs to use, so a key on the full address
+     * gave one caller 2<sup>64</sup> buckets. An IPv4-mapped address is its IPv4 address; anything that
+     * is not an address literal is kept as it is, and is never looked up.
+     */
+    static String addressKey(String remote) {
+        String literal = remote;
+        if (literal.length() > 1 && literal.charAt(0) == '[' && literal.charAt(literal.length() - 1) == ']') {
+            literal = literal.substring(1, literal.length() - 1);
+        }
+        int zone = literal.indexOf('%');
+        if (zone >= 0) {
+            literal = literal.substring(0, zone);
+        }
+        if (literal.indexOf(':') < 0) {
+            return remote;
+        }
+        try {
+            // Bracketed, so a string that is not an IPv6 literal is refused rather than resolved.
+            byte[] address = InetAddress.getByName("[" + literal + "]").getAddress();
+            if (address.length == 4) {
+                return InetAddress.getByAddress(address).getHostAddress();
+            }
+            Arrays.fill(address, 8, 16, (byte) 0);
+            return InetAddress.getByAddress(address).getHostAddress() + "/64";
+        } catch (UnknownHostException notALiteral) {
+            return remote;
+        }
+    }
+
+    /** The bucket of an authenticated user, apart from any address's. */
+    static String principalKey(String userId) {
+        return "user:" + userId;
     }
 
     private static String blankToNull(String value) {

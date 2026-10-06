@@ -120,6 +120,13 @@ realm under the default `bearer` access mode, before any signature is checked.
   A fetched Turtle or JSON-LD document may now nest 64 levels, counted before parsing; the SAML parser
   sets its own limit of 100; each catches a `StackOverflowError` as a last resort. A `credential` over
   256 KiB is refused with a `400`.
+- **The verify rate limit cannot be dodged by naming a new address** (R-10). It bucketed callers by the
+  address Keycloak reported, and the documented nginx configuration appended to the client's own
+  `X-Forwarded-For`, so a client could claim a fresh address on every request; an IPv6 caller had a
+  bucket per address, and so one per address in its `/64`. In `bearer` mode each authenticated user now
+  has a bucket too, which no header can change; IPv6 addresses are bucketed by `/64`; and INSTALL's
+  nginx block overwrites `X-Forwarded-For`, with `proxy-trusted-addresses` set in `keycloak.conf`.
+  **Existing installs following INSTALL step 12 should make the same two changes.**
 
 ### Added
 

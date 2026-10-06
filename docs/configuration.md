@@ -36,7 +36,16 @@ amplification, a network-probe oracle and a cheap denial of service.
 > set the mode to `public` explicitly.
 
 Rate limiting applies in every mode, including `public`, and is enforced before the caller is
-authenticated. Set `rate-limit` to `0` to turn it off.
+authenticated, per caller **address** — an IPv6 address by its `/64`, since one subscriber is routinely
+given a whole one. In `bearer` mode each authenticated **user** has a bucket of the same size as well,
+which no header can spoof. Set `rate-limit` to `0` to turn both off.
+
+> **Behind a reverse proxy, the address is whatever the proxy says.** If it passes on the client's own
+> `X-Forwarded-For` (nginx's `$proxy_add_x_forwarded_for` appends to it), every request can name a
+> fresh address and the address bucket is no limit at all. Have the proxy overwrite the header
+> (`proxy_set_header X-Forwarded-For $remote_addr;`) and tell Keycloak to believe only the proxy
+> (`proxy-trusted-addresses=127.0.0.1`); [INSTALL step 12](INSTALL.md#12-terminate-tls-with-nginx--certbot)
+> does both.
 
 Set the mode with either `kc.sh build --spi-realm-restapi-extension--lws--access=public` (repeat per
 provider id: `lws`, `lws-ssi-cid`, `lws-saml`) or, with no rebuild, the environment

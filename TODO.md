@@ -388,7 +388,7 @@ is needed.
   (sets the system property to `0`; overflowed before), three in `RdfParsingTest` (Turtle, JSON-LD,
   and brackets in strings, IRIs and comments that must not count), one in `VerifyAccessTest`.
 
-- [ ] **R-10 · The rate-limit key is spoofable behind the documented reverse proxy.**
+- [x] **R-10 · The rate-limit key is spoofable behind the documented reverse proxy.**
   `Medium` · security/docs · `S` · *plausible (Quarkus forwarded-header parsing not run)*
   `verify/VerifyAccess.java:246-254` keys buckets on `ClientConnection.getRemoteAddr()`. `INSTALL.md:564`
   configures nginx with `$proxy_add_x_forwarded_for`, which *appends* to a client-supplied header; with
@@ -398,6 +398,17 @@ is needed.
   this limit the main thing standing between a realm user and an outage.
   **Do:** document `proxy_set_header X-Forwarded-For $remote_addr;` plus `proxy-trusted-addresses`;
   bucket IPv6 by /64; add a per-*authenticated-principal* limit in `bearer` mode, which no header can spoof.
+  **Done.** `VerifyAccess.callerKey` keys an IPv6 address by its `/64` (`addressKey`: an IPv4-mapped
+  address is its IPv4 address; a string that is not an address literal is kept as it is and, being
+  bracketed before parsing, never resolved). That key also bounds the CID endpoints and
+  `OutboundHttp`'s in-flight limit. In `bearer` mode, once the token is authenticated, the same limiter
+  takes a second permit under `user:<id>`, so rotating addresses no longer helps a realm user.
+  `INSTALL.md` step 12 now overwrites `X-Forwarded-For` with `$remote_addr` and says why, step 9b sets
+  `proxy-trusted-addresses=127.0.0.1,::1`, and `configuration.md` explains both; the CHANGELOG tells
+  existing installs to make the same change. `VerifyAccessTest` covers the keys. Still *plausible*
+  rather than demonstrated: which `X-Forwarded-For` entry Quarkus reports was not run, and with the
+  header overwritten it no longer matters. `secret` mode still has only the address bucket: its callers
+  share one secret, so a bucket per secret would throttle them all together.
 
 - [ ] **R-11 · Default access mode admits every realm user, and the role check reads stale claims.**
   `Medium` · security/decision · `S` · *verified*

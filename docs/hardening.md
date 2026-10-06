@@ -50,6 +50,11 @@ behaviours are covered by tests — `mvn test` for the unit tests, `mvn verify` 
   up front when its declared length does, and the connection is aborted rather than read to the end;
   and one caller may have at most `http-max-concurrent-per-caller` (4) fetches in flight, so a single
   caller cannot occupy the connection pool every verifier shares.
+- **Rate limits.** Each verify endpoint admits `rate-limit` requests a minute (60) per caller address —
+  an IPv6 address by its `/64` — and, in `bearer` mode, per authenticated user, which no header can
+  spoof. Behind a reverse proxy the address is what the proxy forwards, so the proxy must overwrite
+  `X-Forwarded-For` rather than append to it and Keycloak must trust only the proxy
+  (`proxy-trusted-addresses`); see [configuration](configuration.md).
 - **Bounded nesting.** Parsers that recurse once per level can be run out of stack by a document that
   nests deeply enough, and a `StackOverflowError` is not an exception any handler catches. A fetched
   Turtle or JSON-LD document may nest at most 64 levels (`RdfParsing.MAX_NESTING_DEPTH`), counted in one

@@ -276,6 +276,8 @@ hostname=https://id.example.com
 # ---- Reverse-proxy TLS termination (see step 12) ----
 # Keycloak serves plain HTTP on 8080; nginx terminates HTTPS in front of it.
 proxy-headers=xforwarded
+# Believe X-Forwarded-* only from nginx itself; the rate limits key on the address it forwards.
+proxy-trusted-addresses=127.0.0.1,::1
 http-enabled=true
 
 # ---- Health endpoints (build-time option; used by systemd/monitoring) ----
@@ -565,13 +567,20 @@ server {
         proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host              $host;
         proxy_set_header X-Real-IP         $remote_addr;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For   $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-Host  $host;
         proxy_set_header X-Forwarded-Port  $server_port;
     }
 }
 ```
+
+`X-Forwarded-For` is **overwritten** with the address nginx sees, not appended to with
+`$proxy_add_x_forwarded_for`. Appending keeps whatever the client sent at the front of the list, and
+that is the entry Keycloak reports as the caller's address — the one the verify and CID rate limits
+bucket on. A client could then name a fresh address on every request. (If another proxy or a load
+balancer sits in front of nginx, use its `real_ip` module to recover the client address instead, and
+list that hop in `proxy-trusted-addresses` too.)
 
 Enable it and obtain a certificate (certbot rewrites the block for HTTPS and adds an HTTP→HTTPS
 redirect):
@@ -721,7 +730,7 @@ If `subjectDereferenced` is `false`, the server couldn't fetch its own WebID —
 | `/verify` → `200` with `"valid": false` | The request was fine; the **credential** did not verify. Read `checks` and `errors` in the body, and the server log at `DEBUG` under the response's `traceId`. This used to be a `401` — see step 9d. |
 | `/verify` or `/cid/{userId}` → `404` with `{"error":"not_found"}` | Either that user id does not exist, or the suite is disabled — check `LWS_AUTHN_ENABLED` and the realm attribute `lws.authn.<providerId>.enabled` (step 9e). |
 | `/cid/{userId}` → `429` with `{"error":"slow_down"}` | The caller exceeded `LWS_AUTHN_CID_RATE_LIMIT` (default 600/minute, per source address). Raise it, or set it to `0` to disable. |
-| `/verify` → `429` with `{"error":"slow_down"}` | The caller exceeded `LWS_AUTHN_VERIFY_RATE_LIMIT` (default 60/minute, per source address). Raise it, or set it to `0` to disable rate limiting. |
+| `/verify` → `429` with `{"error":"slow_down"}` | The caller exceeded `LWS_AUTHN_VERIFY_RATE_LIMIT` (default 60/minute, per source address — IPv6 by `/64` — and in `bearer` mode per user as well). Raise it, or set it to `0` to disable rate limiting. If every caller is limited together, Keycloak is seeing the proxy's address: check `proxy-headers` and `proxy-trusted-addresses` (steps 9b and 12). |
 | `directAccessGrantsEnabled`/token request returns `invalid_client` | The client isn't public or Direct Access Grants is off. For the demo client, enable both. |
 
 Useful commands:
