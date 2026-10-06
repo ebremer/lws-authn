@@ -14,11 +14,15 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.PublicKey;
 import java.security.spec.ECGenParameterSpec;
+import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.keycloak.jose.jws.JWSInput;
+import org.keycloak.representations.JsonWebToken;
+
+import com.ebremer.lws.authn.config.ServerSettings;
 
 /**
  * The checks both JWT suites share. Getting these wrong once is getting them wrong twice, which is
@@ -323,6 +327,73 @@ class JwsChecksTest {
             signer.update(input.getBytes(java.nio.charset.StandardCharsets.US_ASCII));
             org.keycloak.jose.jws.JWSInput jws = new org.keycloak.jose.jws.JWSInput(input + "." + b64u(signer.sign()));
             assertTrue(JwsSignatures.verify("EdDSA", pair.getPublic(), jws), curve);
+        }
+    }
+
+    // ----------------------------------------------------------------- the validity window (R-44)
+
+    private static JsonWebToken token(Long exp, Long nbf) {
+        JsonWebToken token = new JsonWebToken();
+        token.exp(exp);
+        token.nbf(nbf);
+        return token;
+    }
+
+    private static long now() {
+        return Instant.now().getEpochSecond();
+    }
+
+    /**
+     * R-44. Both JWT suites refuse an expired credential, allowing the configured skew and no more: from
+     * {@code exp + skew} on it is refused, at the boundary included. A missing or zero {@code exp} is
+     * refused too, where Keycloak's own {@code isActive()} would read it as "never expires".
+     */
+    @Test
+    void expiryIsEnforcedToTheSkewAndNoFurther() {
+        long skew = JwsChecks.clockSkewSeconds();
+        long now = now();
+        assertTrue(JwsChecks.withinValidityWindow(token(now + 300, null)));
+        assertTrue(JwsChecks.withinValidityWindow(token(now - skew + 5, null)), "expired, but within the skew");
+        assertFalse(JwsChecks.withinValidityWindow(token(now - skew, null)), "expired by exactly the skew");
+        assertFalse(JwsChecks.withinValidityWindow(token(now - 3600, null)));
+        assertFalse(JwsChecks.withinValidityWindow(token(null, null)), "no exp is not 'never expires'");
+        assertFalse(JwsChecks.withinValidityWindow(token(0L, null)), "nor is an exp of 0");
+        assertFalse(JwsChecks.withinValidityWindow(null));
+    }
+
+    /**
+     * R-44. A credential is not valid before its {@code nbf}, allowing the skew: from {@code nbf − skew}
+     * on it is, the boundary included. An absent or zero {@code nbf} imposes nothing.
+     */
+    @Test
+    void notBeforeIsEnforcedToTheSkewAndNoFurther() {
+        long skew = JwsChecks.clockSkewSeconds();
+        long now = now();
+        long exp = now + 3600;
+        assertTrue(JwsChecks.withinValidityWindow(token(exp, now - 10)));
+        assertTrue(JwsChecks.withinValidityWindow(token(exp, now + skew)), "not yet valid, but by exactly the skew");
+        assertFalse(JwsChecks.withinValidityWindow(token(exp, now + skew + 5)), "not yet valid, beyond the skew");
+        assertTrue(JwsChecks.withinValidityWindow(token(exp, null)));
+        assertTrue(JwsChecks.withinValidityWindow(token(exp, 0L)));
+    }
+
+    /**
+     * R-44. The skew is the configured {@code clock-skew-seconds}, not a constant: at {@code 0}, a
+     * credential is refused from the second it expires and until the second it becomes valid.
+     */
+    @Test
+    void theSkewIsTheConfiguredOne() {
+        System.setProperty("lws.authn.clockSkewSeconds", "0");
+        try {
+            ServerSettings.contribute("test", null);
+            assertEquals(0, JwsChecks.clockSkewSeconds());
+            long now = now();
+            assertFalse(JwsChecks.withinValidityWindow(token(now, null)));
+            assertTrue(JwsChecks.withinValidityWindow(token(now + 5, null)));
+            assertFalse(JwsChecks.withinValidityWindow(token(now + 3600, now + 5)));
+        } finally {
+            System.clearProperty("lws.authn.clockSkewSeconds");
+            ServerSettings.reset();
         }
     }
 }

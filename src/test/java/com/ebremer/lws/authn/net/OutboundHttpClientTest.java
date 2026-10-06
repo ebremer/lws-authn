@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.lang.reflect.Proxy;
 import java.net.ConnectException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -26,12 +27,16 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import org.apache.http.conn.ConnectionPoolTimeoutException;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
+import org.keycloak.common.ClientConnection;
+import org.keycloak.models.KeycloakContext;
+import org.keycloak.models.KeycloakSession;
 
 import com.ebremer.lws.authn.config.ServerSettings;
 
@@ -55,6 +60,7 @@ class OutboundHttpClientTest {
     private static final String ALLOWLIST_PROPERTY = "lws.authn.allowedInternalHosts";
     private static final String DEADLINE_PROPERTY = "lws.authn.http.deadlineMillis";
     private static final String PER_CALLER_PROPERTY = "lws.authn.http.maxConcurrentPerCaller";
+    private static final String TIMEOUT_PROPERTY = "lws.authn.http.timeoutMillis";
     private static final long DEADLINE_MILLIS = 1_500;
 
     private HttpServer server;
@@ -62,6 +68,8 @@ class OutboundHttpClientTest {
     private int port;
     private String previousAllowlist;
     private final AtomicLong endlessBytesSent = new AtomicLong();
+    private final java.util.concurrent.atomic.AtomicInteger dripsStarted = new java.util.concurrent.atomic.AtomicInteger();
+    private volatile boolean dripsReleased;
     /** Requests each counted path has had. */
     private final java.util.Map<String, java.util.concurrent.atomic.AtomicInteger> hits =
             new java.util.concurrent.ConcurrentHashMap<>();
@@ -116,6 +124,21 @@ class OutboundHttpClientTest {
                     out.write('x');
                     out.flush();
                     Thread.sleep(200);
+                }
+            } catch (IOException | InterruptedException clientGaveUp) {
+                // expected: the fetch aborts
+            }
+        });
+        // One byte every 50 ms for ten seconds, or until released: holds a pooled connection, every read
+        // inside any timeout.
+        server.createContext("/drip", exchange -> {
+            dripsStarted.incrementAndGet();
+            exchange.sendResponseHeaders(200, 0);
+            try (OutputStream out = exchange.getResponseBody()) {
+                for (int i = 0; i < 200 && !dripsReleased; i++) {
+                    out.write('x');
+                    out.flush();
+                    Thread.sleep(50);
                 }
             } catch (IOException | InterruptedException clientGaveUp) {
                 // expected: the fetch aborts
@@ -374,6 +397,79 @@ class OutboundHttpClientTest {
         assertThrows(OutboundHttp.HostUnavailableException.class, () -> OutboundHttp.fetch(unreachable, null, null));
         assertEquals(200, OutboundHttp.fetch(url("/cid"), null, null).status(),
                 "another port on the same host is another origin");
+    }
+
+    /**
+     * R-44. The shared pool holds four connections per origin. A fetch that finds all four busy waits for
+     * one no longer than the connection-request timeout and is then refused, rather than queueing until
+     * its deadline; and since waiting for the pool is this server's load, not the origin's failure
+     * (R-02), however often it happens it never trips the origin's breaker.
+     */
+    @Test
+    void anExhaustedPoolIsWaitedForBrieflyAndNeverTripsTheBreaker() throws Exception {
+        System.setProperty(TIMEOUT_PROPERTY, "300");
+        System.setProperty(DEADLINE_PROPERTY, "5000");
+        ServerSettings.contribute("test", null);
+        ExecutorService holders = Executors.newFixedThreadPool(4);
+        dripsStarted.set(0);
+        dripsReleased = false;
+        try {
+            java.util.List<Future<?>> held = new java.util.ArrayList<>();
+            for (int i = 0; i < 4; i++) {
+                // Two callers with two fetches each: the per-caller bound is two, the per-origin pool four.
+                KeycloakSession caller = callerAt("203.0.113." + (20 + i / 2));
+                held.add(holders.submit(() -> swallow(() -> OutboundHttp.fetch(url("/drip"), null, caller))));
+            }
+            // Until the server has all four, each holding a pooled connection (a cold JVM is slow to start them).
+            long waitUntil = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (dripsStarted.get() < 4 && System.nanoTime() < waitUntil) {
+                Thread.sleep(10);
+            }
+            assertEquals(4, dripsStarted.get(), "the four holding fetches never all reached the server");
+
+            // Six waits while the four still hold: had the first five counted against the origin, the sixth
+            // would be refused by its open breaker instead of waiting for the pool. (Checking after the four
+            // finish would prove nothing — an answer from the origin closes its breaker.)
+            KeycloakSession third = callerAt("203.0.113.30");
+            for (int i = 0; i < 6; i++) {
+                long started = System.nanoTime();
+                assertThrows(ConnectionPoolTimeoutException.class, () -> OutboundHttp.fetch(url("/cid"), null, third));
+                long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+                assertTrue(elapsedMillis < 1_000,
+                        "the wait for a pooled connection is the 300 ms timeout, not the deadline (took "
+                                + elapsedMillis + " ms)");
+            }
+            dripsReleased = true;
+            for (Future<?> holder : held) {
+                holder.get(10, TimeUnit.SECONDS);
+            }
+            assertEquals(200, OutboundHttp.fetch(url("/cid"), null, third).status(),
+                    "the pool and the callers' slots are free again once the four finish");
+        } finally {
+            dripsReleased = true;
+            holders.shutdownNow();
+            System.clearProperty(TIMEOUT_PROPERTY);
+            System.setProperty(DEADLINE_PROPERTY, String.valueOf(DEADLINE_MILLIS));
+            ServerSettings.contribute("test", null);
+        }
+    }
+
+    /** A session whose caller is at {@code address}; it offers no providers, so the guarded client is used. */
+    private static KeycloakSession callerAt(String address) {
+        ClientConnection connection = (ClientConnection) Proxy.newProxyInstance(
+                ClientConnection.class.getClassLoader(), new Class<?>[]{ClientConnection.class},
+                (proxy, method, args) -> "getRemoteAddr".equals(method.getName()) ? address : null);
+        KeycloakContext context = (KeycloakContext) Proxy.newProxyInstance(
+                KeycloakContext.class.getClassLoader(), new Class<?>[]{KeycloakContext.class},
+                (proxy, method, args) -> "getConnection".equals(method.getName()) ? connection : null);
+        return (KeycloakSession) Proxy.newProxyInstance(
+                KeycloakSession.class.getClassLoader(), new Class<?>[]{KeycloakSession.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "getContext" -> context;
+                    case "hashCode" -> System.identityHashCode(proxy);
+                    case "equals" -> proxy == args[0];
+                    default -> null; // getProvider: no truststore, no session client
+                });
     }
 
     private void assertAbortedAtTheDeadline(String path) {

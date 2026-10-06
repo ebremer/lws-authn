@@ -298,4 +298,30 @@ class RdfParsingTest {
         assertNull(RdfParsing.topmostId("{\"id\":[\"" + SUBJECT + "\"]}", SUBJECT), "not one string");
         assertThrows(java.io.IOException.class, () -> RdfParsing.topmostId("not json", SUBJECT));
     }
+
+    /**
+     * R-44. The nesting limit is exact: {@link RdfParsing#MAX_NESTING_DEPTH} levels are read and one more
+     * is refused, in JSON as in Turtle. And a document served as {@code application/cid} (R-19), which
+     * came after the limit (R-09), is held to it like any other JSON-LD.
+     *
+     * <p>RDF/XML has no such count and needs none: Jena reads it without recursing — 6 000 levels parse
+     * on a 128 KB stack — and the JDK's XML parser has a depth limit of its own.</p>
+     */
+    @Test
+    void theNestingLimitIsExact() {
+        int max = RdfParsing.MAX_NESTING_DEPTH;
+        String json = "{\"a\":" + "[".repeat(max - 1) + "]".repeat(max - 1) + "}";
+        assertDoesNotThrow(() -> RdfParsing.requireShallow(json, true), "the topmost map and max − 1 arrays");
+        String deeperJson = "{\"a\":" + "[".repeat(max) + "]".repeat(max) + "}";
+        assertThrows(RdfParsing.TooDeeplyNestedException.class, () -> RdfParsing.requireShallow(deeperJson, true));
+
+        String deeperTurtle = "<" + SUBJECT + "> <" + SUBJECT + "#p> " + ("[<" + SUBJECT + "#p> ").repeat(max + 1)
+                + "1" + "]".repeat(max + 1) + " .";
+        assertThrows(RdfParsing.TooDeeplyNestedException.class,
+                () -> RdfParsing.parse(deeperTurtle, "text/turtle", SUBJECT));
+
+        String deeperCid = "{\"id\":\"" + SUBJECT + "\",\"x\":" + "[".repeat(max) + "]".repeat(max) + "}";
+        assertThrows(RdfParsing.TooDeeplyNestedException.class,
+                () -> RdfParsing.parse(deeperCid, "application/cid", SUBJECT));
+    }
 }

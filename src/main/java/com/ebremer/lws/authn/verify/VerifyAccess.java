@@ -214,20 +214,31 @@ public final class VerifyAccess {
                             "a valid access token for this realm is required", session, true,
                             bearerToken(authorization) != null);
                 }
-                // The address bucket above is only as good as the address, and behind a proxy that
-                // trusts a client's X-Forwarded-For, every request can claim a new one (R-10). The
-                // authenticated user cannot be spoofed by any header, so it has a bucket of its own.
-                if (limiter != null && auth.user() != null && !limiter.tryAcquire(principalKey(auth.user().getId()))) {
-                    return JsonResponses.tooManyRequests("too many verification requests; retry shortly",
-                            limiter.retryAfterSeconds(principalKey(auth.user().getId())));
-                }
-                if (requiredRole != null && !holdsRole(auth.user(), realmRole(session, requiredRole))) {
-                    return error(Response.Status.FORBIDDEN, "insufficient_scope",
-                            "the '" + requiredRole + "' realm role is required", session, true, true);
-                }
-                return null;
+                return checkAuthenticated(session, auth.user());
             }
         }
+    }
+
+    /**
+     * The {@code bearer}-mode decision once the access token has been accepted: the user's own rate-limit
+     * bucket, then the role. Apart from {@link #check} so it can be tested without the Keycloak runtime
+     * that authenticating a token needs (R-44).
+     *
+     * @return {@code null} when the user may proceed, otherwise the response to return unchanged
+     */
+    Response checkAuthenticated(KeycloakSession session, UserModel user) {
+        // The address bucket in check() is only as good as the address, and behind a proxy that trusts a
+        // client's X-Forwarded-For, every request can claim a new one (R-10). The authenticated user
+        // cannot be spoofed by any header, so it has a bucket of its own.
+        if (limiter != null && user != null && !limiter.tryAcquire(principalKey(user.getId()))) {
+            return JsonResponses.tooManyRequests("too many verification requests; retry shortly",
+                    limiter.retryAfterSeconds(principalKey(user.getId())));
+        }
+        if (requiredRole != null && !holdsRole(user, realmRole(session, requiredRole))) {
+            return error(Response.Status.FORBIDDEN, "insufficient_scope",
+                    "the '" + requiredRole + "' realm role is required", session, true, true);
+        }
+        return null;
     }
 
     /**
