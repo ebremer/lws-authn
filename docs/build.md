@@ -118,7 +118,13 @@ exactly one of the three, asserting *which* check fails rather than merely that 
 refused.
 
 CI (`.github/workflows/ci.yml`) runs that on JDK 21, builds again on JDK 25 and asserts the class files
-are still Java 21, and runs CodeQL. Actions are pinned by commit SHA; Dependabot proposes the bumps.
+are still Java 21, and runs CodeQL — for every pull request and every push to `master`; push any other
+branch through a pull request, or run the workflow by hand. On a pull request it also reviews dependency
+changes for advisories, and on `master` it submits the resolved Maven dependency graph to GitHub, so that
+Jena's transitive libraries are in the graph the review and Dependabot read. Both need the repository's
+dependency graph enabled (Settings → Advanced Security); while it is off they warn instead of failing.
+Actions and the runner image (`ubuntu-24.04`) are pinned; Dependabot proposes the action bumps, and is
+told to leave alone the versions that follow Keycloak or Jena (`.github/dependabot.yml`).
 
 ## Deploy
 

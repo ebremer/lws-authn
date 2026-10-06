@@ -492,6 +492,18 @@ each may reject a document that used to verify. Check your issuers' documents be
 - The multibase/did:key codec moved from `ssididkey` to a new `did` package, since the self-signed CID
   suite now depends on it; JDK signature verification moved to `jose.JwsSignatures`.
 
+### Build and CI
+
+- **CI** (R-40). Pull-request runs no longer fail on dependency review while the repository's
+  dependency graph is off: the job checks for the graph and warns instead. The resolved Maven graph is
+  submitted on every push to `master`, so Jena's transitive libraries reach the graph that dependency
+  review and Dependabot read. The pinned actions are updated (checkout v7, setup-java v6,
+  upload-artifact v7, CodeQL v4, dependency-review v5; all on Node 24), the runner is pinned to
+  `ubuntu-24.04`, every job has a timeout, a newer push to a pull request cancels the older run, and
+  pushes build `master` only, so a branch with a pull request is no longer built twice.
+- **Dependabot leaves deliberate pins alone** (R-41): the APIs Keycloak supplies, and minor or major
+  updates of the libraries bundled at Jena's version, are ignored, as are JUnit majors.
+
 ### Tests
 
 179 unit tests (was 144), 24 in `LwsAuthIT` (was 23). New: DID syntax, the did:web URL mapping against

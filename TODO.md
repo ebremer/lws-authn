@@ -1057,7 +1057,7 @@ is needed.
 
 ## P3 — Tests, build, CI, packaging and documentation
 
-- [ ] **R-40 · CI: the dependency-review job fails every pull request; updates are stuck.**
+- [x] **R-40 · CI: the dependency-review job fails every pull request; updates are stuck.**
   `Medium` · ci · `S` · *verified (Actions API)*
   `.github/workflows/ci.yml:126-136` fails with "Dependency review is not supported on this repository.
   Please ensure that Dependency graph is enabled" on every `pull_request` run (e.g. 36915126459,
@@ -1068,12 +1068,30 @@ is needed.
   `maven-dependency-submission-action` — static POM parsing does not see Jena's transitive libraries) or
   make the job non-blocking until it is; merge the action updates; pin `ubuntu-24.04`; add `concurrency`
   and `timeout-minutes`; don't run both `push` and `pull_request` for the same branch.
+  **Done**, except what only the repository's owner can do. The dependency graph is a repository setting
+  (Settings → Advanced Security → Dependency graph) — **turn it on**. Until it is, the review job asks
+  the API first (`GET /repos/…/dependency-graph/sbom`) and warns instead of failing; once it is on, the
+  review runs and blocks on `high` as before, with no workflow change. A new `dependency-submission` job
+  submits the resolved Maven graph on every push to `master` (`maven-dependency-submission-action`
+  v6.0.1, `contents: write` for that job only). The actions are bumped to the SHAs Dependabot's PR #5
+  proposed, each checked against its release tag: checkout v7.0.1, setup-java v6.0.1, upload-artifact
+  v7.0.1, codeql-action v4.38.2, dependency-review-action v5.0.0 — all Node 24, none with an input
+  change this workflow uses. `ubuntu-24.04`; `timeout-minutes` on every job; `concurrency` cancels a
+  pull request's superseded run but never one on `master`; `push` runs on `master` only, so a branch
+  with a pull request is built once. PR #5 is superseded by this — close it, or let Dependabot.
 
-- [ ] **R-41 · Dependabot proposes bumps that break deliberate pins.** `Low` · dependency · `S` · *verified*
+- [x] **R-41 · Dependabot proposes bumps that break deliberate pins.** `Low` · dependency · `S` · *verified*
   PR #3 moves `jakarta.ws.rs-api` 3.1.0 → 4.0.0 (an API Keycloak 26 does not provide); PR #4 moves JUnit to
   6.x (a separate migration, per P4-4); PR #8 moves caffeine to 3.3.0 and jspecify to 1.0.1, breaking the
   POM's "Jena's version" / "Keycloak's version" rules. **Do:** `ignore` rules for provided APIs and
   Jena-pinned versions; close #3 and #4 or schedule them deliberately.
+  **Done** in `.github/dependabot.yml`: every `provided` API that follows Keycloak (`jakarta.ws.rs-api`,
+  `httpclient`, `jboss-logging`, `jakarta.json`, `jspecify`, `org.slf4j:*`) is ignored outright; the
+  libraries bundled at Jena's version (Titanium, Caffeine, `org.apache.commons:*`, commons-codec,
+  commons-io, Gson, Error Prone) are ignored for minor and major updates but still get patches; JUnit
+  majors are ignored (P4-4). Of PR #8, the plugin, bcpkix, jboss-logging (3.6.3 is what 26.8.0 ships)
+  and commons-codec 1.22.1 updates are made by hand under R-49. **Left for you:** close PRs #3, #4 and
+  #8 on GitHub — Dependabot will not reopen what its configuration now ignores.
 
 - [ ] **R-42 · The shaded JAR bundles four libraries Keycloak also ships, unrelocated.**
   `Medium` · packaging · `S` · *verified (JAR contents)*

@@ -1,9 +1,18 @@
 name: CI
 
+# A push to a branch with an open pull request used to run every job twice, once for each event (R-40).
+# Pushes now build master only; any other branch is built through its pull request, or by hand.
 on:
   push:
+    branches: [master]
   pull_request:
   workflow_dispatch:
+
+# One run per pull request (or branch) at a time: a new push to a pull request cancels the run it
+# supersedes. Runs on master are never cancelled, so every commit there keeps its result.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Least privilege by default: every job below that needs more says so itself. Without this block a
 # workflow inherits whatever the repository default is, which for an older repository is often
@@ -16,16 +25,20 @@ permissions:
 # repository can move `v4` to any commit at any time, and every workflow that referenced it runs the
 # new code on the next build with no review and no signal. The trailing comment records which release
 # each SHA was, so the pin can be read and bumped deliberately.
+#
+# Runners are pinned too: `ubuntu-latest` moves to a new Ubuntu on GitHub's schedule, not this
+# repository's (R-40). Move `ubuntu-24.04` on purpose.
 
 jobs:
   build-and-integration-test:
     name: Build + integration test (JDK 21)
-    runs-on: ubuntu-latest   # GitHub-hosted runners include Docker, which the integration test needs
+    runs-on: ubuntu-24.04   # GitHub-hosted runners include Docker, which the integration test needs
+    timeout-minutes: 40
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up JDK 21
-        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '21'
@@ -54,7 +67,7 @@ jobs:
       # The reports, pass or fail, so what ran — and what did not — can be seen from outside (R-43).
       - name: Upload test reports
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: lws-authn-test-reports
           path: |
@@ -64,7 +77,7 @@ jobs:
 
       - name: Upload provider JAR
         if: success()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: lws-authn-jar
           path: target/lws-authn-*.jar
@@ -74,7 +87,7 @@ jobs:
       # rebuild this commit.
       - name: Upload SBOM
         if: success()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: lws-authn-sbom
           path: target/bom.*
@@ -85,12 +98,13 @@ jobs:
   # is exactly the kind of regression that only shows up as a LinkageError inside Keycloak.
   build-on-jdk-25:
     name: Build on JDK 25, targeting 21
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up JDK 25
-        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '25'
@@ -118,22 +132,23 @@ jobs:
   # is explicit rather than autobuild so it does not re-run the tests.
   codeql:
     name: CodeQL
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: read
       security-events: write   # to upload the SARIF results
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up JDK 21
-        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '21'
           cache: maven
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@3c3833e0f8c1c83d449a7478aa59c036a9165498 # v3.29.11
+        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           languages: java-kotlin
           queries: security-and-quality
@@ -142,20 +157,72 @@ jobs:
         run: mvn -B -ntp compile -DskipTests
 
       - name: Analyze
-        uses: github/codeql-action/analyze@3c3833e0f8c1c83d449a7478aa59c036a9165498 # v3.29.11
+        uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
 
   # Blocks a pull request that introduces a dependency with a known advisory. Pull requests only —
   # it diffs the dependency graph against the base branch, so there is nothing for it to do on a push.
   # Continuous alerts for dependencies already on the default branch come from Dependabot instead
   # (.github/dependabot.yml).
+  #
+  # It needs the repository's dependency graph (Settings → Advanced Security → Dependency graph). With
+  # the graph off, the action fails every pull request — "Dependency review is not supported on this
+  # repository" — which is how every Dependabot update came to sit red (R-40). So the job asks first,
+  # and while the graph is off it says so with a warning instead of failing; once the graph is on, the
+  # review runs and blocks as intended, with no change here.
   dependency-review:
     name: Dependency review
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Check that the dependency graph is enabled
+        id: graph
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          status=$(curl -sS -o /dev/null -w '%{http_code}' \
+                     -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+                     "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/dependency-graph/sbom" || true)
+          if [ "$status" = "200" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Dependency review skipped: the dependency graph is not enabled for this" \
+                 "repository (HTTP $status). Enable it under Settings → Advanced Security."
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.graph.outputs.enabled == 'true'
 
       - name: Review dependency changes
-        uses: actions/dependency-review-action@da24556b548a50705dd671f47852072ea4c105d9 # v4.7.1
+        if: steps.graph.outputs.enabled == 'true'
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: high
+
+  # The dependency graph GitHub builds from pom.xml alone is the declared dependencies, not what Maven
+  # resolves: Jena's transitive libraries — most of what the shaded JAR contains — are not in it, so
+  # neither Dependabot alerts nor the review above could see an advisory against them (R-40). This
+  # submits the resolved graph for every commit on master. Like the review, it needs the dependency
+  # graph enabled; until it is, the submission is refused and the job says so without failing the run.
+  dependency-submission:
+    name: Submit the resolved dependency graph
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write   # the dependency submission API writes to the repository's dependency graph
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Submit the Maven dependency graph
+        continue-on-error: true
+        uses: advanced-security/maven-dependency-submission-action@a64327a7329c9939cf675e458452febe1894a70c # v6.0.1
