@@ -498,8 +498,9 @@ sudo tee /etc/keycloak/keycloak.env >/dev/null <<'EOF'
 # Database password (maps to db-password)
 KC_DB_PASSWORD=CHANGE_ME_DB
 
-# LWS SSRF allow-list — see step 9c. Leave empty unless the server must
-# dereference its own documents over a loopback/internal address.
+# LWS SSRF allow-list — see step 9c. Leave empty unless verifying needs a
+# document on a loopback/internal address. A realm's own documents and keys
+# are read without fetching; another realm's on this server are not.
 LWS_AUTHN_ALLOWED_INTERNAL_HOSTS=
 
 # Who may call the LWS /verify endpoints — see step 9d. 'bearer' (the default)
@@ -734,8 +735,9 @@ If `subjectDereferenced` is `false`, the server couldn't fetch its own WebID —
 - **Database** — PostgreSQL, not H2; the DB password lives only in the root-only env file.
 - **Bootstrap admin removed** — a permanent admin exists; `KC_BOOTSTRAP_ADMIN_*` deleted from the env
   file.
-- **SSRF allow-list** — empty unless the server must dereference its own documents over an internal
-  address, in which case it lists exactly those hosts.
+- **SSRF allow-list** — empty unless verifying needs documents at an internal address (another realm
+  on this server, say; a realm's own are read without fetching), in which case it lists exactly those
+  hosts.
 - **`/verify` access** — left at `bearer`, or set to `public` only behind a network restriction that
   makes it unreachable from the internet ([step 9d](#9d-decide-who-may-call-verify)). In `bearer` mode
   the `lws-verifier` role exists and is held only by the services that verify credentials.

@@ -29,6 +29,7 @@ import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 
@@ -61,6 +62,9 @@ class OutboundHttpClientTest {
     private int port;
     private String previousAllowlist;
     private final AtomicLong endlessBytesSent = new AtomicLong();
+    /** Requests each counted path has had. */
+    private final java.util.Map<String, java.util.concurrent.atomic.AtomicInteger> hits =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     @BeforeAll
     void startServer() throws Exception {
@@ -80,6 +84,17 @@ class OutboundHttpClientTest {
             exchange.getResponseHeaders().add("Location", "http://localhost:" + port + "/elsewhere");
             respond(exchange, 302, "");
         });
+        // Each answers 200 and counts its requests; the path says what Cache-Control it sends.
+        for (String[] counted : new String[][]{{"/counted", null}, {"/no-store", "no-store"},
+                {"/max-age-5", "public, max-age=5"}, {"/missing-counted", null}}) {
+            server.createContext(counted[0], exchange -> {
+                hits.computeIfAbsent(counted[0], p -> new java.util.concurrent.atomic.AtomicInteger()).incrementAndGet();
+                if (counted[1] != null) {
+                    exchange.getResponseHeaders().add("Cache-Control", counted[1]);
+                }
+                respond(exchange, counted[0].startsWith("/missing") ? 404 : 200, "document " + counted[0]);
+            });
+        }
         server.createContext("/see-other", exchange -> {
             exchange.getResponseHeaders().add("Location", "/cid#fragment-dropped");
             respond(exchange, 303, "");
@@ -163,9 +178,17 @@ class OutboundHttpClientTest {
         OutboundHttp.resetCircuits();
     }
 
+    /** These test the network path, which a cached document skips. */
+    @BeforeEach
+    void emptyTheCache() {
+        OutboundHttp.clearCache();
+        hits.clear();
+    }
+
     @AfterEach
     void forgetFailures() {
         OutboundHttp.resetCircuits();
+        OutboundHttp.clearCache();
     }
 
     private static void respond(HttpExchange exchange, int status, String body) throws IOException {
@@ -376,5 +399,102 @@ class OutboundHttpClientTest {
 
     private String url(String path) {
         return "http://localhost:" + port + path;
+    }
+
+    private int hitsOn(String path) {
+        java.util.concurrent.atomic.AtomicInteger count = hits.get(path);
+        return count == null ? 0 : count.get();
+    }
+
+    // ------------------------------------------------------------------------ the cache (R-26)
+
+    /**
+     * R-26. "Verifiers are encouraged to cache controlled identifier documents to reduce unnecessary
+     * network requests and the associated metadata leakage." A fresh copy is used without asking again.
+     */
+    @Test
+    void aDocumentIsFetchedOnceWhileItIsFresh() throws Exception {
+        OutboundHttp.Fetched first = OutboundHttp.fetch(url("/counted"), "text/turtle", null);
+        OutboundHttp.Fetched second = OutboundHttp.fetch(url("/counted"), "text/turtle", null);
+        assertEquals(1, hitsOn("/counted"));
+        assertFalse(first.cached());
+        assertTrue(second.cached());
+        assertEquals(first.body(), second.body());
+
+        OutboundHttp.fetch(url("/counted"), "application/ld+json", null);
+        assertEquals(2, hitsOn("/counted"), "another Accept may get another document");
+        OutboundHttp.dereference(url("/counted"), "text/turtle", null);
+        assertEquals(3, hitsOn("/counted"), "following redirects may get another document too");
+    }
+
+    /** What the server says about caching is honoured, and failures are always asked again. */
+    @Test
+    void theServerSaysHowLongAndFailuresAreNotKept() throws Exception {
+        OutboundHttp.fetch(url("/no-store"), null, null);
+        OutboundHttp.fetch(url("/no-store"), null, null);
+        assertEquals(2, hitsOn("/no-store"));
+
+        OutboundHttp.fetch(url("/missing-counted"), null, null);
+        OutboundHttp.fetch(url("/missing-counted"), null, null);
+        assertEquals(2, hitsOn("/missing-counted"));
+
+        long[] now = {System.currentTimeMillis()};
+        OutboundHttp.useClock(() -> now[0]);
+        try {
+            OutboundHttp.fetch(url("/max-age-5"), null, null);
+            now[0] += 4_000;
+            OutboundHttp.fetch(url("/max-age-5"), null, null);
+            assertEquals(1, hitsOn("/max-age-5"));
+            now[0] += 2_000;
+            OutboundHttp.fetch(url("/max-age-5"), null, null);
+            assertEquals(2, hitsOn("/max-age-5"), "max-age=5 is five seconds, not the five-minute ceiling");
+        } finally {
+            OutboundHttp.resetCircuits();
+        }
+    }
+
+    /** {@code http-cache-seconds=0} turns caching off. */
+    @Test
+    void cachingCanBeTurnedOff() throws Exception {
+        System.setProperty("lws.authn.http.cacheSeconds", "0");
+        try {
+            ServerSettings.contribute("test", null);
+            int before = hitsOn("/counted");
+            OutboundHttp.fetch(url("/counted"), "text/plain", null);
+            OutboundHttp.fetch(url("/counted"), "text/plain", null);
+            assertEquals(before + 2, hitsOn("/counted"));
+        } finally {
+            System.clearProperty("lws.authn.http.cacheSeconds");
+            System.setProperty("lws.authn.http.cacheSeconds", "300");
+            ServerSettings.contribute("test", null);
+            System.clearProperty("lws.authn.http.cacheSeconds");
+        }
+    }
+
+    /**
+     * R-26. A JWT naming a key the cached JWK set lacks may mean the issuer has just rotated, so the
+     * verifier may ask again — but not more than once in thirty seconds, or made-up kids would make every
+     * token cost a fetch.
+     */
+    @Test
+    void aRefetchIsRateLimited() throws Exception {
+        long[] now = {System.currentTimeMillis()};
+        OutboundHttp.useClock(() -> now[0]);
+        try {
+            OutboundHttp.fetch(url("/counted"), "application/json", null);
+            int fetched = hitsOn("/counted");
+            assertNull(OutboundHttp.refetch(url("/counted"), "application/json", null),
+                    "the copy is seconds old: there is nothing new to find");
+            now[0] += OutboundHttp.REFETCH_INTERVAL_MS + 1;
+            OutboundHttp.Fetched fresh = OutboundHttp.refetch(url("/counted"), "application/json", null);
+            assertEquals(200, fresh.status());
+            assertFalse(fresh.cached());
+            assertEquals(fetched + 1, hitsOn("/counted"));
+            assertNull(OutboundHttp.refetch(url("/counted"), "application/json", null));
+            assertTrue(OutboundHttp.fetch(url("/counted"), "application/json", null).cached(),
+                    "what a refetch brings back is cached");
+        } finally {
+            OutboundHttp.resetCircuits();
+        }
     }
 }

@@ -36,6 +36,7 @@ import org.keycloak.util.JsonSerialization;
 
 import com.ebremer.lws.authn.config.EndpointSettings;
 import com.ebremer.lws.authn.http.CidEndpoint;
+import com.ebremer.lws.authn.http.ThisRealm;
 import com.ebremer.lws.authn.http.JsonResponses;
 import com.ebremer.lws.authn.jose.PublicJwk;
 import com.ebremer.lws.authn.ssicid.SsiCidConstants;
@@ -81,18 +82,22 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
     public Response getControlledIdentifierDocument(@PathParam("userId") String userId,
                                                     @HeaderParam("Accept") String accept,
                                                     @HeaderParam("If-None-Match") String ifNoneMatch) {
-        return CidEndpoint.serve(session, settings, SsiCidConstants.CID_PATH, userId, accept, ifNoneMatch,
-                (user, issuer, webId, contentType) -> {
-                    SelfSignedControlledIdentifierDocument cid =
-                            new SelfSignedControlledIdentifierDocument(webId, publishableJwks(user));
-                    return switch (contentType) {
-                        case SsiCidConstants.TURTLE -> cid.toRdf(RDFFormat.TURTLE);
-                        case SsiCidConstants.N_TRIPLES -> cid.toRdf(RDFFormat.NTRIPLES);
-                        case SsiCidConstants.RDF_XML -> cid.toRdf(RDFFormat.RDFXML);
-                        default -> cid.toJsonLd(); // JSON-LD, and application/cid, which is the same body
-                    };
-                });
+        return CidEndpoint.serve(session, settings, SsiCidConstants.CID_PATH, userId, accept, ifNoneMatch, DOCUMENTS);
     }
+
+    /**
+     * How a user's controlled identifier document is rendered: for the endpoint, and for the verifier
+     * reading one of this realm's own without fetching it (R-26), so the two cannot disagree.
+     */
+    public static final CidEndpoint.DocumentRenderer DOCUMENTS = (user, issuer, webId, contentType) -> {
+        SelfSignedControlledIdentifierDocument cid = new SelfSignedControlledIdentifierDocument(webId, publishableJwks(user));
+        return switch (contentType) {
+            case SsiCidConstants.TURTLE -> cid.toRdf(RDFFormat.TURTLE);
+            case SsiCidConstants.N_TRIPLES -> cid.toRdf(RDFFormat.NTRIPLES);
+            case SsiCidConstants.RDF_XML -> cid.toRdf(RDFFormat.RDFXML);
+            default -> cid.toJsonLd(); // JSON-LD, and application/cid, which is the same body
+        };
+    };
 
     /**
      * The user's registered JWKs, filtered to the ones that may be published.
@@ -169,7 +174,9 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
                     + "the target authorization server, so the verifier must be told which one that is");
         }
 
-        SsiCidVerificationResult result = new SelfSignedCidVerifier(session).verify(token, audience);
+        SsiCidVerificationResult result = new SelfSignedCidVerifier(session)
+                .localTo(ThisRealm.of(session), DOCUMENTS)
+                .verify(token, audience);
         return JsonResponses.of(Response.Status.OK, result);
     }
 }

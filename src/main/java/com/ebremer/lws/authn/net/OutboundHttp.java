@@ -146,9 +146,35 @@ public final class OutboundHttp {
      * @param contentType the {@code Content-Type} the server declared, or {@code null}
      * @param body        the decoded body for a {@code 200}; {@code null} for any other status, whose
      *                    body is not read at all
+     * @param cached      whether this came from the cache rather than the network just now
      */
-    public record Fetched(int status, String contentType, String body) {
+    public record Fetched(int status, String contentType, String body, boolean cached) {
+
+        /** A response from the network. */
+        public Fetched(int status, String contentType, String body) {
+            this(status, contentType, body, false);
+        }
     }
+
+    /** Documents fetched recently, for as long as their servers and {@code http-cache-seconds} allow (R-26). */
+    private static final DocumentCache CACHE = new DocumentCache();
+
+    /**
+     * How soon a document may be fetched again past its cached copy — when a JWT names a key the cached
+     * JWK set does not have, say, because the issuer has just rotated. Without a floor, a caller sending
+     * tokens with made-up {@code kid}s could make every one of them cost a fetch.
+     */
+    static final long REFETCH_INTERVAL_MS = 30_000L;
+
+    /** Upper bound on the number of URLs whose last refetch is remembered. */
+    private static final int MAX_TRACKED_REFETCHES = 1024;
+
+    private static final Map<String, Long> REFETCHED = new LinkedHashMap<>(64, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, Long> eldest) {
+            return size() > MAX_TRACKED_REFETCHES;
+        }
+    };
 
     private static volatile CloseableHttpClient guardedClient;
 
@@ -192,7 +218,7 @@ public final class OutboundHttp {
      * @throws IOException                 if the fetch fails or overruns its deadline
      */
     public static Fetched fetch(String url, String accept, KeycloakSession session) throws IOException {
-        return get(url, accept, session, 0);
+        return get(url, accept, session, 0, true);
     }
 
     /**
@@ -211,15 +237,62 @@ public final class OutboundHttp {
      * @see #fetch for the other exceptions
      */
     public static Fetched dereference(String url, String accept, KeycloakSession session) throws IOException {
-        return get(url, accept, session, MAX_REDIRECTS);
+        return get(url, accept, session, MAX_REDIRECTS, true);
     }
 
-    /** One response, with where it redirects to if it does. */
-    private record Hop(Fetched fetched, String location) {
+    /**
+     * Fetches {@code url} as {@link #fetch} does but past the cache, and caches what comes back — unless
+     * it was fetched in the last {@link #REFETCH_INTERVAL_MS}, from the cache's copy or by an earlier
+     * refetch, in which case nothing is fetched and {@code null} is returned.
+     */
+    public static Fetched refetch(String url, String accept, KeycloakSession session) throws IOException {
+        long now = clock.getAsLong();
+        long fetchedAt = CACHE.fetchedAt(cacheKey(url, accept, 0));
+        synchronized (REFETCHED) {
+            Long last = REFETCHED.get(url);
+            if ((last != null && now - last < REFETCH_INTERVAL_MS)
+                    || (fetchedAt >= 0 && now - fetchedAt < REFETCH_INTERVAL_MS)) {
+                return null;
+            }
+            REFETCHED.put(url, now);
+        }
+        return get(url, accept, session, 0, false);
     }
 
-    private static Fetched get(String url, String accept, KeycloakSession session, int maxRedirects)
-            throws IOException {
+    /** Test seam: forget every cached document and refetch. */
+    public static void clearCache() {
+        CACHE.clear();
+        synchronized (REFETCHED) {
+            REFETCHED.clear();
+        }
+    }
+
+    /** Test seam: how many documents are cached. */
+    static int cachedDocuments() {
+        return CACHE.size();
+    }
+
+    private static String cacheKey(String url, String accept, int maxRedirects) {
+        // Following redirects or not can give different answers for one URL, and so can the Accept.
+        return (maxRedirects > 0 ? "follow " : "exact ") + url + " " + accept;
+    }
+
+    /** One response, with where it redirects to if it does, and how long it may be cached. */
+    private record Hop(Fetched fetched, String location, String cacheControl) {
+    }
+
+    private static Fetched get(String url, String accept, KeycloakSession session, int maxRedirects,
+                               boolean fromCache) throws IOException {
+        // A fresh copy is used without asking the network anything — not even DNS, which would tell the
+        // subject's name server what the cache exists to keep quiet. It was vetted when it was fetched.
+        long cacheSeconds = ServerSettings.httpCacheSeconds();
+        String key = cacheKey(url, accept, maxRedirects);
+        if (fromCache && cacheSeconds > 0) {
+            Fetched cached = CACHE.get(key, clock.getAsLong());
+            if (cached != null) {
+                return cached;
+            }
+        }
         // The breaker comes first: its whole purpose is to stop paying for an origin that cannot be
         // reached, and resolving the name before consulting it would pay part of that cost anyway.
         String origin = originOf(url);
@@ -247,7 +320,13 @@ public final class OutboundHttp {
                     throw e;
                 }
                 if (hop >= maxRedirects || answer.location() == null) {
-                    return answer.fetched();
+                    Fetched fetched = answer.fetched();
+                    if (fetched.status() == 200 && cacheSeconds > 0) {
+                        long seconds = DocumentCache.freshnessSeconds(answer.cacheControl(), cacheSeconds);
+                        CACHE.put(key, new Fetched(200, fetched.contentType(), fetched.body(), true),
+                                clock.getAsLong(), TimeUnit.SECONDS.toMillis(seconds));
+                    }
+                    return fetched;
                 }
                 current = resolve(current, answer.location());
             }
@@ -330,9 +409,15 @@ public final class OutboundHttp {
                 request.abort();
                 Header location = isRedirect(status) ? response.getFirstHeader("Location") : null;
                 return new Hop(new Fetched(status, contentType, null),
-                        location == null || location.getValue().isBlank() ? null : location.getValue());
+                        location == null || location.getValue().isBlank() ? null : location.getValue(), null);
             }
-            return new Hop(new Fetched(status, contentType, readBody(response.getEntity(), request)), null);
+            // Several Cache-Control fields are one list (RFC 9110 §5.3).
+            StringBuilder cacheControl = new StringBuilder();
+            for (Header field : response.getHeaders("Cache-Control")) {
+                cacheControl.append(cacheControl.length() == 0 ? "" : ",").append(field.getValue());
+            }
+            return new Hop(new Fetched(status, contentType, readBody(response.getEntity(), request)), null,
+                    cacheControl.length() == 0 ? null : cacheControl.toString());
         } finally {
             deadline.cancel(false);
         }

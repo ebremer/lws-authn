@@ -37,9 +37,18 @@ behaviours are covered by tests — `mvn test` for the unit tests, `mvn verify` 
     fetch must be `https`, and the OpenID `iss` must be an https URL with no query or fragment (OpenID
     Connect Core §2; `jwks_uri` too, Discovery 1.0 §3). Plain `http` is accepted only to an allow-listed
     host — the one place a deployment vouches for the path, such as its own Keycloak on loopback.
-  - **Important:** if this Keycloak hosts its own controlled identifier documents on a loopback or
-    internal address — so the OpenID verifier dereferences *itself* — you **must** allow-list that
-    host, or OpenID `/verify` is blocked.
+  - **This realm is not fetched from itself.** A token whose `iss` is the realm the request came to,
+    and a subject that is one of that realm's own `cid/{userId}` documents, are verified from the realm
+    directly — its key store, and the code its endpoint renders documents with — so a server whose own
+    address is internal no longer needs it on the allow-list for that. It still does for another realm
+    on the same server, for a hostname other than the one the request used, and for a plain-`http`
+    issuer, which `issuerWellFormed` accepts only from an allow-listed host.
+  - **Documents are cached** — controlled identifier, DID, OpenID configuration and JWK set — for up to
+    `http-cache-seconds` (default 300), less if the document's `Cache-Control` says so, and not at all
+    under `no-store`, `no-cache` or `private`. A fresh copy is used without any network request, not even
+    DNS. The cost is that a key removed from a document can still verify for up to that long, as it
+    can for any verifier that caches; a JWT naming a key the cached JWK set lacks makes the verifier ask
+    again, at most every 30 seconds.
   - An origin (scheme, host and port) that **cannot be reached** five times in quick succession — the
     name does not resolve, the connection is refused or times out, the TLS handshake fails — is refused
     without a fetch for ten seconds, so a dead target does not cost every caller a connect timeout.

@@ -97,6 +97,7 @@ class CidDocumentReadingTest {
             System.setProperty(ALLOWLIST_PROPERTY, previousAllowlist);
         }
         OutboundHttp.resetCircuits();
+        OutboundHttp.clearCache();
     }
 
     /** Serves {@code document} — with {@code SUB} replaced by its own URL — and returns that URL. */

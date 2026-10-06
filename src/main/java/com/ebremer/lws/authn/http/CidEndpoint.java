@@ -13,8 +13,6 @@ import jakarta.ws.rs.core.Response;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
-import org.keycloak.services.Urls;
-import org.keycloak.urls.UrlType;
 
 import com.ebremer.lws.authn.config.EndpointSettings;
 import com.ebremer.lws.authn.rdf.RdfContentNegotiation;
@@ -98,7 +96,7 @@ public final class CidEndpoint {
             return JsonResponses.notFound("no controlled identifier document for that identifier");
         }
 
-        String issuer = Urls.realmIssuer(session.getContext().getUri(UrlType.FRONTEND).getBaseUri(), realm.getName());
+        String issuer = ThisRealm.issuerOf(session, realm);
         String webId = issuer + "/" + settings.getProviderId() + "/" + cidPath + "/" + user.getId();
 
         String body = renderer.render(user, issuer, webId, contentType);

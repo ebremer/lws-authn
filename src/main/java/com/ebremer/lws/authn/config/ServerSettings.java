@@ -42,6 +42,7 @@ import org.keycloak.Config;
  *   <tr><td>{@code http-deadline-millis}</td><td>{@code lws.authn.http.deadlineMillis}</td><td>{@code LWS_AUTHN_HTTP_DEADLINE_MILLIS}</td><td>{@code 10000}</td></tr>
  *   <tr><td>{@code http-max-concurrent-per-caller}</td><td>{@code lws.authn.http.maxConcurrentPerCaller}</td><td>{@code LWS_AUTHN_HTTP_MAX_CONCURRENT_PER_CALLER}</td><td>{@code 4}</td></tr>
  *   <tr><td>{@code clock-skew-seconds}</td><td>{@code lws.authn.clockSkewSeconds}</td><td>{@code LWS_AUTHN_CLOCK_SKEW_SECONDS}</td><td>{@code 60}</td></tr>
+ *   <tr><td>{@code http-cache-seconds}</td><td>{@code lws.authn.http.cacheSeconds}</td><td>{@code LWS_AUTHN_HTTP_CACHE_SECONDS}</td><td>{@code 300}</td></tr>
  *   <tr><td>{@code max-credential-lifetime-seconds}</td><td>{@code lws.authn.maxCredentialLifetimeSeconds}</td><td>{@code LWS_AUTHN_MAX_CREDENTIAL_LIFETIME_SECONDS}</td><td>{@code 0} (no limit)</td></tr>
  * </table>
  *
@@ -89,6 +90,16 @@ public final class ServerSettings {
     private static final long MAX_CLOCK_SKEW_SECONDS = 600;
 
     /**
+     * How long a fetched document — a controlled identifier document, a DID document, an OpenID
+     * configuration or JWK set — may be reused, at most, in seconds; {@code 0} turns the cache off. A
+     * document's own {@code Cache-Control} can shorten it or forbid caching, never lengthen it. Both JWT
+     * suites encourage verifiers "to cache controlled identifier documents to reduce unnecessary network
+     * requests and the associated metadata leakage" (R-26); five minutes is how long this provider tells
+     * others to cache its own.
+     */
+    public static final long DEFAULT_HTTP_CACHE_SECONDS = 300;
+
+    /**
      * The longest a JWT credential may be valid for — {@code exp} minus {@code iat} — or {@code 0} for no
      * limit, the default. Neither suite bounds a credential's lifetime, so a self-issued token with
      * {@code exp} in the year 9999 is valid until then; a deployment that wants stolen credentials to
@@ -106,6 +117,7 @@ public final class ServerSettings {
     private static volatile int httpMaxConcurrentPerCaller = DEFAULT_HTTP_MAX_CONCURRENT_PER_CALLER;
     private static volatile long clockSkewSeconds = DEFAULT_CLOCK_SKEW_SECONDS;
     private static volatile long maxCredentialLifetimeSeconds = DEFAULT_MAX_CREDENTIAL_LIFETIME_SECONDS;
+    private static volatile long httpCacheSeconds = DEFAULT_HTTP_CACHE_SECONDS;
 
     /** Which settings some provider has already contributed, so only a real disagreement is logged. */
     private static final Set<String> contributed = new LinkedHashSet<>();
@@ -164,6 +176,14 @@ public final class ServerSettings {
             warnOnConflict(providerId, "clock-skew-seconds", clockSkewSeconds, skew);
             clockSkewSeconds = skew;
         }
+        if (Settings.isSet(scope, "http-cache-seconds",
+                "lws.authn.http.cacheSeconds", "LWS_AUTHN_HTTP_CACHE_SECONDS")) {
+            long seconds = clamp(Settings.getLong(scope, "http-cache-seconds",
+                    "lws.authn.http.cacheSeconds", "LWS_AUTHN_HTTP_CACHE_SECONDS",
+                    DEFAULT_HTTP_CACHE_SECONDS), 0, 86_400);
+            warnOnConflict(providerId, "http-cache-seconds", httpCacheSeconds, seconds);
+            httpCacheSeconds = seconds;
+        }
         if (Settings.isSet(scope, "max-credential-lifetime-seconds",
                 "lws.authn.maxCredentialLifetimeSeconds", "LWS_AUTHN_MAX_CREDENTIAL_LIFETIME_SECONDS")) {
             long lifetime = clamp(Settings.getLong(scope, "max-credential-lifetime-seconds",
@@ -215,6 +235,11 @@ public final class ServerSettings {
         return clockSkewSeconds;
     }
 
+    /** The longest a fetched document may be reused, in seconds; {@code 0} when nothing is cached. */
+    public static long httpCacheSeconds() {
+        return httpCacheSeconds;
+    }
+
     /** The longest {@code exp − iat} a JWT credential may have, in seconds; {@code 0} for no limit. */
     public static long maxCredentialLifetimeSeconds() {
         return maxCredentialLifetimeSeconds;
@@ -231,6 +256,7 @@ public final class ServerSettings {
                 + ", http-deadline-millis=" + httpDeadlineMillis
                 + ", http-max-response-bytes=" + maxResponseBytes
                 + ", http-max-concurrent-per-caller=" + httpMaxConcurrentPerCaller
+                + ", http-cache-seconds=" + httpCacheSeconds
                 + ", clock-skew-seconds=" + clockSkewSeconds
                 + ", max-credential-lifetime-seconds="
                 + (maxCredentialLifetimeSeconds == 0 ? "(no limit)" : maxCredentialLifetimeSeconds);
@@ -256,6 +282,7 @@ public final class ServerSettings {
         httpMaxConcurrentPerCaller = DEFAULT_HTTP_MAX_CONCURRENT_PER_CALLER;
         clockSkewSeconds = DEFAULT_CLOCK_SKEW_SECONDS;
         maxCredentialLifetimeSeconds = DEFAULT_MAX_CREDENTIAL_LIFETIME_SECONDS;
+        httpCacheSeconds = DEFAULT_HTTP_CACHE_SECONDS;
     }
 
     private static Set<String> parseHosts(String value) {

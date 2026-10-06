@@ -44,9 +44,9 @@ KC_PORT=8081 docker compose up --build --wait
 KC_URL=http://localhost:8081 bash scripts/lws-demo.sh
 ```
 
-Keycloak then listens on that port inside the container too, and it has to. The OpenID verifier
-dereferences the credential's own issuer, `http://localhost:<port>/realms/lws-demo`, and inside the
-container `localhost` is Keycloak itself. So the issuer URL works only if Keycloak listens on the
+Keycloak then listens on that port inside the container too, and it has to. Tokens name their issuer
+`http://localhost:<port>/realms/lws-demo`, and inside the container `localhost` is Keycloak itself, so
+that URL means the same server on both sides of the container boundary only if Keycloak listens on the
 port the host sees.
 
 **This is a development setup**, and differs from a deployment in ways that matter:
@@ -54,8 +54,9 @@ port the host sees.
 - `start-dev` serves plain HTTP and takes its hostname from each request.
 - The database lives in the container. `docker compose stop` keeps it; `down` discards it.
 - `LWS_AUTHN_ALLOWED_INTERNAL_HOSTS=localhost,127.0.0.1` opens the SSRF guard to loopback, which the
-  self-dereference above needs. On a server anyone else can reach, that setting lets a credential
-  point the verifier at the server's own internal services.
+  plain-`http` issuer above needs: an `http` issuer is accepted only from an allow-listed host. On a
+  server anyone else can reach, that setting lets a credential point the verifier at the server's own
+  internal services.
 - The admin and `alice` have well-known passwords, and `lws-app` allows the password grant.
 
 For a real server, follow the [install guide](INSTALL.md).

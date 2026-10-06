@@ -790,7 +790,7 @@ is needed.
 
 ## P2 — Hardening, interoperability and SHOULD-level
 
-- [ ] **R-26 · Cache discovery, JWKS and CID documents; stop calling ourselves over HTTP.**
+- [x] **R-26 · Cache discovery, JWKS and CID documents; stop calling ourselves over HTTP.**
   `Medium` · performance/privacy · `M` · *verified*
   Every OpenID verification makes three fetches and every HTTPS self-signed one makes one, with no cache
   (`LWSCredentialVerifier.java:262-324, 425-485`). Both suites' privacy sections: "Verifiers are
@@ -800,6 +800,25 @@ is needed.
   **Do:** bounded, TTL-limited caches for discovery and JWKS (refresh on an unknown `kid`, rate-limited)
   and for CIDs (honour `Cache-Control`); short-circuit `iss` equal to this realm's issuer to the local key
   store and user lookup.
+  **Done.** One cache under `OutboundHttp` (`net/DocumentCache`) for every fetch — CID, DID, discovery,
+  JWKS — keyed by URL, `Accept` and whether redirects were followed; only `200`s; LRU, at most 1 024
+  entries and 16 Mi characters. Lifetime: `Cache-Control` read as a shared cache would (`s-maxage` over
+  `max-age`; `no-store`, `no-cache`, `private` or an unreadable value forbid it), capped by the new
+  server-wide `http-cache-seconds` (default 300, the lifetime this provider gives its own documents;
+  `0` disables). A hit skips the breaker, the SSRF check and DNS. `OutboundHttp.refetch` bypasses the
+  cache at most every 30 s per URL, and not within 30 s of the cached copy; the OpenID verifier uses it
+  when a `kid` is missing from a cached JWK set. `http/ThisRealm` holds the request's realm — issuer as
+  Keycloak writes it (frontend URL), user lookup, key stream — and `ThisRealm.document` answers for the
+  realm's own `cid/{userId}` URLs with what the endpoint would (a `404` for no such user; the document
+  in the negotiated syntax, from the endpoint's own `DOCUMENTS` renderer, now shared), deferring to the
+  fetch for anything unusual or for plain `http` that is not allow-listed (so R-07 still refuses it).
+  Both verifiers take it through `localTo(...)`, set by their resource providers; the OpenID one also
+  takes an `iss` equal to the realm's issuer to the realm's enabled `sig` keys for the token's `alg`.
+  Tests: `DocumentCacheTest`; cache, `no-store`, `max-age`, failures, turned off, and refetch rate in
+  `OutboundHttpClientTest`; `ThisRealmVerificationTest` verifies a self-signed credential and an ID Token
+  of a realm at an unresolvable host — the whole OpenID algorithm with no fetch — plus a missing user and
+  a plain-http identifier. These test new code, so none was run against the previous code; the existing
+  `LwsAuthIT` OpenID and self-signed tests now go through the local path.
 
 - [x] **R-27 · Key selection and key strength.** `Low` · security-hardening · `S` · *verified*
   - OpenID JWKS selection (`LWSCredentialVerifier.java:456-475`) ignores `use`/`key_ops` (verifies with a

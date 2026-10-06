@@ -45,6 +45,8 @@ import java.util.Set;
 import com.ebremer.lws.authn.did.DidKey;
 import com.ebremer.lws.authn.did.Dids;
 import com.ebremer.lws.authn.config.ServerSettings;
+import com.ebremer.lws.authn.http.CidEndpoint;
+import com.ebremer.lws.authn.http.ThisRealm;
 import com.ebremer.lws.authn.jose.JwsChecks;
 import com.ebremer.lws.authn.jose.JwsSignatures;
 import com.ebremer.lws.authn.jose.KeyIdFragment;
@@ -110,6 +112,22 @@ public class SelfSignedCidVerifier {
     public SelfSignedCidVerifier(KeycloakSession session, ReplayCache replayCache) {
         this.session = session;
         this.replayCache = replayCache;
+    }
+
+    private ThisRealm thisRealm;
+    private CidEndpoint.DocumentRenderer ownDocuments;
+
+    /**
+     * Reads a subject whose document {@code realm} hosts — one of its {@code lws-ssi-cid/cid/{userId}}
+     * documents — as {@code documents} renders it, rather than fetching it from this server (R-26).
+     *
+     * @param realm     the request's realm, or {@code null} to fetch everything
+     * @param documents how the realm's {@code lws-ssi-cid/cid} endpoint renders a document
+     */
+    public SelfSignedCidVerifier localTo(ThisRealm realm, CidEndpoint.DocumentRenderer documents) {
+        this.thisRealm = realm;
+        this.ownDocuments = documents;
+        return this;
     }
 
     public SsiCidVerificationResult verify(String credential) {
@@ -385,7 +403,11 @@ public class SelfSignedCidVerifier {
             // redirects, each vetted the same way (R-29). It keeps the breaker's books itself: what
             // happens here after the fetch — a 404, the wrong media type, a document that does not parse
             // — says nothing about the host's health (R-02). The document must still be about sub.
-            OutboundHttp.Fetched response = OutboundHttp.dereference(sub, RdfParsing.ACCEPT, session);
+            OutboundHttp.Fetched response = thisRealm == null || ownDocuments == null ? null
+                    : thisRealm.document(sub, SsiCidConstants.RESOURCE_PROVIDER_ID, SsiCidConstants.CID_PATH, ownDocuments);
+            if (response == null) {
+                response = OutboundHttp.dereference(sub, RdfParsing.ACCEPT, session);
+            }
             if (response.status() != 200) {
                 log.debugf("[%s] dereferencing sub <%s> returned HTTP %d", result.getTraceId(), sub,
                         response.status());

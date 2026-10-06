@@ -119,6 +119,11 @@ claims OpenID Connect Core §2 makes REQUIRED in an ID Token are required whatev
 `max-credential-lifetime-seconds` configured, `exp − iat` must be within it (`lifetimeWithinLimit`);
 neither suite bounds a credential's lifetime, so by default nothing does.
 
+For a token from the realm the request came to — `iss` is its issuer as this request sees it — the
+keys are the realm's own enabled signing keys rather than discovery's, and a subject that is one of the
+realm's own `lws/cid/{userId}` documents is read from the realm, rendered by the code its endpoint uses;
+nothing is fetched. Every other document is fetched and may be cached (divergence 10).
+
 **Enforced when the caller asks.** OpenID Connect Core §3.1.3.7 steps 3–5, which the suite
 incorporates by reference: pass `client_id` and `aud` must list it (`audienceContainsClient`) and `azp`
 must equal it (`authorizedPartyMatchesClient`); pass `audience` and the credential must be restricted
@@ -316,6 +321,7 @@ Each is a decision, not an oversight; each names where the reasoning lives.
 | 7 | **Only `did:key` and `did:web` are resolved** | The self-signed CID suite mandates no DID method. These two need no ledger and no third-party resolver; any other is refused by name rather than resolved through a service this provider would have to trust (**S-2**). |
 | 8 | **DID documents are read as JSON, not processed as JSON-LD** | DID 1.1 is a Candidate Recommendation and its JSON-LD context is not published at a stable URL, so there is no definition to bundle, and contexts are never fetched (see *Supported formats*). The structure the verifier reads — `id`, `authentication`, `verificationMethod`, `type`, `controller`, key material — is fixed by DID 1.1 and CID 1.0 rather than by the context (**S-3**). |
 | 9 | **No `subject_identifier_types_supported`** | Core defines it as LWS *authorization server* metadata. `lws-authn` is not an authorization server and publishes no such metadata; it belongs to `lws-server`, which would list `https`, `did:key` and `did:web` for subjects this provider verifies (**S-5**). |
+| 10 | **Fetched documents are cached** | Both JWT suites encourage verifiers "to cache controlled identifier documents to reduce unnecessary network requests and the associated metadata leakage". Documents are reused for up to `http-cache-seconds` (default 300), less if their `Cache-Control` says so, never under `no-store`/`no-cache`/`private`; so a key removed from a document may verify for up to that long. A `kid` missing from a cached JWK set is asked for again, at most every 30 s (**R-26**). |
 
 ## Security posture
 

@@ -106,7 +106,7 @@ settings one more:
 
 ```
 lws-authn provider 'lws' settings in force: enabled=true, access=bearer, role=lws-verifier, rate-limit=60/min, audience=(none), cid-cache-seconds=300, cid-rate-limit=600/min
-lws-authn server-wide settings in force: allowed-internal-hosts=[], http-timeout-millis=5000, http-deadline-millis=10000, http-max-response-bytes=262144, http-max-concurrent-per-caller=4, clock-skew-seconds=60, max-credential-lifetime-seconds=(no limit)
+lws-authn server-wide settings in force: allowed-internal-hosts=[], http-timeout-millis=5000, http-deadline-millis=10000, http-max-response-bytes=262144, http-max-concurrent-per-caller=4, http-cache-seconds=300, clock-skew-seconds=60, max-credential-lifetime-seconds=(no limit)
 ```
 
 A shared secret is shown only as `secret=(set)`.
@@ -133,11 +133,12 @@ setting leaves it alone):
 | Outbound response cap (bytes) | `http-max-response-bytes` | `lws.authn.http.maxResponseBytes` | `LWS_AUTHN_HTTP_MAX_RESPONSE_BYTES` | `262144` |
 | Outbound fetch deadline, whole exchange (ms) | `http-deadline-millis` | `lws.authn.http.deadlineMillis` | `LWS_AUTHN_HTTP_DEADLINE_MILLIS` | `10000` |
 | Outbound fetches one caller may have in flight | `http-max-concurrent-per-caller` | `lws.authn.http.maxConcurrentPerCaller` | `LWS_AUTHN_HTTP_MAX_CONCURRENT_PER_CALLER` | `4` |
+| Longest a fetched document is reused (s), less if its `Cache-Control` says so; `0` turns caching off | `http-cache-seconds` | `lws.authn.http.cacheSeconds` | `LWS_AUTHN_HTTP_CACHE_SECONDS` | `300` |
 | Clock skew allowed on `exp`/`nbf`/`<Conditions>` (s) | `clock-skew-seconds` | `lws.authn.clockSkewSeconds` | `LWS_AUTHN_CLOCK_SKEW_SECONDS` | `60` |
 | Longest a JWT credential may be valid for, `exp − iat` (s); `0` for no limit | `max-credential-lifetime-seconds` | `lws.authn.maxCredentialLifetimeSeconds` | `LWS_AUTHN_MAX_CREDENTIAL_LIFETIME_SECONDS` | `0` |
 
 Out-of-range values are clamped rather than honoured (timeout 100 ms–60 s, response cap 1 KiB–16 MiB,
-deadline 100 ms–120 s, fetches in flight 1–64, skew 0–600 s, lifetime 0–10 years), and a value that will not parse falls back
+deadline 100 ms–120 s, fetches in flight 1–64, cache 0–86 400 s, skew 0–600 s, lifetime 0–10 years), and a value that will not parse falls back
 to the default.
 
 The **timeout** bounds each step of a fetch — waiting for a pooled connection, connecting, each read —

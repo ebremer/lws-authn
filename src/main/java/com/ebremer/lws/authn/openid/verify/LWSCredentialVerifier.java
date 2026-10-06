@@ -30,6 +30,8 @@ import java.util.List;
 import java.util.Set;
 
 import com.ebremer.lws.authn.config.ServerSettings;
+import com.ebremer.lws.authn.http.CidEndpoint;
+import com.ebremer.lws.authn.http.ThisRealm;
 import com.ebremer.lws.authn.jose.JwsChecks;
 import com.ebremer.lws.authn.net.OutboundHttp;
 import com.ebremer.lws.authn.net.SsrfGuard;
@@ -68,9 +70,26 @@ public class LWSCredentialVerifier {
     private static final Logger log = Logger.getLogger(LWSCredentialVerifier.class);
 
     private final KeycloakSession session;
+    private ThisRealm thisRealm;
+    private CidEndpoint.DocumentRenderer ownDocuments;
 
     public LWSCredentialVerifier(KeycloakSession session) {
         this.session = session;
+    }
+
+    /**
+     * Verifies what {@code realm} issued, and the documents it hosts, without fetching them from itself
+     * (R-26): an {@code iss} that is {@code realm}'s issuer takes its keys from the realm's key store,
+     * and a {@code sub} that is one of its {@code lws/cid/{userId}} documents is rendered by
+     * {@code documents}, as the endpoint would serve it. Anything else is fetched as before.
+     *
+     * @param realm     the request's realm, or {@code null} to fetch everything
+     * @param documents how the realm's {@code lws/cid} endpoint renders a document
+     */
+    public LWSCredentialVerifier localTo(ThisRealm realm, CidEndpoint.DocumentRenderer documents) {
+        this.thisRealm = realm;
+        this.ownDocuments = documents;
+        return this;
     }
 
     public VerificationResult verify(String credential) {
@@ -369,7 +388,11 @@ public class LWSCredentialVerifier {
             // redirects, each vetted the same way (R-29). It keeps the breaker's books itself: what
             // happens here after the fetch — a 404, the wrong media type, a document that does not parse
             // — says nothing about the host's health (R-02). The document must still be about sub.
-            OutboundHttp.Fetched response = OutboundHttp.dereference(sub, RdfParsing.ACCEPT, session);
+            OutboundHttp.Fetched response = thisRealm == null || ownDocuments == null ? null
+                    : thisRealm.document(sub, LWSConstants.RESOURCE_PROVIDER_ID, LWSConstants.CID_PATH, ownDocuments);
+            if (response == null) {
+                response = OutboundHttp.dereference(sub, RdfParsing.ACCEPT, session);
+            }
             if (response.status() != 200) {
                 log.debugf("[%s] dereferencing sub <%s> returned HTTP %d", result.getTraceId(), sub,
                         response.status());
@@ -530,6 +553,9 @@ public class LWSCredentialVerifier {
      * token, or {@code null} after recording why there are none.
      */
     private List<SigningKey> resolveSigningKeys(String iss, JWSHeader header, VerificationResult result) {
+        if (thisRealm != null && iss.equals(thisRealm.issuer())) {
+            return localSigningKeys(header, result);
+        }
         try {
             String base = iss.endsWith("/") ? iss.substring(0, iss.length() - 1) : iss;
             String discoveryUrl = base + "/.well-known/openid-configuration";
@@ -583,6 +609,15 @@ public class LWSCredentialVerifier {
             }
             String kid = header.getKeyId();
             List<SigningKey> candidates = candidateKeys(JsonSerialization.mapper.readTree(jwks.body()), kid, alg);
+            if (candidates.isEmpty() && kid != null && jwks.cached()) {
+                // A kid the cached set does not have may be a key the issuer has just rotated in: ask again,
+                // at most every REFETCH_INTERVAL_MS, so made-up kids cannot make every token cost a fetch.
+                OutboundHttp.Fetched fresh = OutboundHttp.refetch(jwksUri, "application/jwk-set+json, application/json",
+                        session);
+                if (fresh != null && fresh.status() == 200) {
+                    candidates = candidateKeys(JsonSerialization.mapper.readTree(fresh.body()), kid, alg);
+                }
+            }
             result.check("jwksResolved", !candidates.isEmpty());
             if (candidates.isEmpty()) {
                 result.error("No JWK published by <" + iss + "> matched the token (kid=" + kid + ", alg=" + alg + ")");
@@ -602,6 +637,30 @@ public class LWSCredentialVerifier {
             result.error("OpenID Connect Discovery failed for <" + iss + ">");
             return null;
         }
+    }
+
+    /**
+     * This realm's own keys that may have signed one of its ID Tokens: what discovery and its JWK set
+     * would have produced, without the three loopback requests (R-26). The realm is its own issuer, so
+     * there is no configuration whose {@code issuer} could disagree.
+     */
+    private List<SigningKey> localSigningKeys(JWSHeader header, VerificationResult result) {
+        String kid = header.getKeyId();
+        String alg = header.getRawAlgorithm();
+        result.check("issuerDiscoveryMatches", true);
+        List<SigningKey> candidates = thisRealm.keys()
+                .filter(key -> KeyUse.SIG.equals(key.getUse()) && key.getStatus() != null && key.getStatus().isEnabled())
+                .filter(key -> kid == null || kid.equals(key.getKid()))
+                .filter(key -> alg.equals(key.getAlgorithmOrDefault()))
+                .filter(key -> key.getPublicKey() instanceof PublicKey publicKey && JwsChecks.algMatchesKey(alg, publicKey))
+                .map(key -> new SigningKey((PublicKey) key.getPublicKey(), key.getCurve()))
+                .toList();
+        result.check("jwksResolved", !candidates.isEmpty());
+        if (candidates.isEmpty()) {
+            result.error("This realm has no enabled signing key that matched the token (kid=" + kid + ", alg=" + alg + ")");
+            return null;
+        }
+        return candidates;
     }
 
     /**

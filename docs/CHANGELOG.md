@@ -172,6 +172,18 @@ realm under the default `bearer` access mode, before any signature is checked.
 
 ### Added
 
+- **Fetched documents are cached, and a realm is not fetched from itself** (R-26). Both JWT suites
+  encourage verifiers "to cache controlled identifier documents to reduce unnecessary network requests
+  and the associated metadata leakage"; every OpenID verification made three requests and every
+  self-signed one made one. Controlled identifier and DID documents, OpenID configurations and JWK sets
+  are now reused for up to `http-cache-seconds` (default 300; `0` turns it off), less when their
+  `Cache-Control` says so and not at all under `no-store`, `no-cache` or `private`, in a cache bounded
+  in entries and in size. A JWT naming a `kid` the cached JWK set lacks makes the verifier ask again, at
+  most every 30 seconds. And a token this realm issued, or about a subject whose document this realm
+  hosts, is verified from the realm itself — its key store, and the renderer its `cid/{userId}`
+  endpoint uses — where it used to cost up to three loopback requests holding a worker thread each, and
+  the server's own address on the SSRF allow-list. A key removed from a remote document can still
+  verify for up to `http-cache-seconds`, as with any caching verifier.
 - **A subject's document may be behind a redirect** (R-29). Redirects were refused outright, so a WebID
   that answers `303 See Other` with its document — the httpRange-14 pattern — or one that redirects
   http to https failed as "did not return a controlled identifier document". Dereferencing a subject,
