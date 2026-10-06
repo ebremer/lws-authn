@@ -226,21 +226,26 @@ of the SAML message is excluded from the signature" — this one allows none), R
 or ECDSA with SHA-2, and SHA-2 digests (`signatureAlgorithmsAllowed`); all of that is checked before any
 cryptography. Then each validates (`signatureValid`). Claims are read **only from the one assertion**,
 located by precise direct-child navigation rather than a document-wide search an injected element could
-win — the signature-wrapping (XSW) defence. The `<NameID>` must be an absolute URI (`subjectIsUri`; core §4.1:
+win — the signature-wrapping (XSW) defence — and the document may hold no other: an element named
+`Assertion` or `EncryptedAssertion` anywhere else, in `<samlp:Extensions>`, in an `<Advice>` or in any
+namespace, is refused (`singleAssertion`), since a consumer that re-parses the credential could read it
+instead of the one verified (**R-31**). The `<NameID>` must be an absolute URI (`subjectIsUri`; core §4.1:
 the subject "MUST be a URI") — a username, an email address or an opaque handle is refused — and its
 `Format` is reported as `subjectFormat`. `<Issuer>` is required (`issuerPresent`), must be an absolute
 URI and, per SAML Profiles §4.1.4.2, carry no `Format` or the `entity` one (`issuerWellFormed`); a
 Response's `<Issuer>`, if it has one, must be the same (`issuersMatch`). `IssueInstant` on both must be
 readable and not in the future, beyond the clock skew (`issueInstantValid`). The bearer
 `<SubjectConfirmationData>` is checked for method, `Recipient` and `NotOnOrAfter`
-(`bearerSubjectConfirmation`, `recipientPresent`, `subjectConfirmationWithinWindow`). One
+(`bearerSubjectConfirmation`, `recipientPresent`, `subjectConfirmationWithinWindow`); where this is
+narrower than the Web Browser SSO profile, divergence 11 says so. One
 `<Conditions>`, holding only conditions the verifier understands — `<AudienceRestriction>`s of
 non-blank `<Audience>`s, at most one `<OneTimeUse>` and at most one `<ProxyRestriction>`
 (`conditionsUnderstood`): an extension `<Condition>`, or any other element, makes the assertion
 Indeterminate, and SAML Core §2.5.1.1 says "An assertion that is determined to be Invalid or
 Indeterminate MUST be rejected". Its window with clock skew (`withinValidityWindow`), and the audience
 (`audiencePresent`, `audienceMatched`) — named by **every** `<AudienceRestriction>`, which "form a
-conjunction" (§2.5.1.4). A `<OneTimeUse>` assertion is valid and reported as `oneTimeUse: true`: it
+conjunction" (§2.5.1.4) — and, with no audience asked for, an `<AudienceRestriction>` all the same
+(divergence 11). A `<OneTimeUse>` assertion is valid and reported as `oneTimeUse: true`: it
 "MUST NOT be retained for future use" (§2.5.1.5), so a caller that caches verdicts must not cache it.
 XML is parsed with DTDs **disallowed** and external entities disabled, independent of any caller or
 library configuration.
@@ -313,7 +318,7 @@ Each is a decision, not an oversight; each names where the reasoning lives.
 | # | Divergence | Why |
 |---|---|---|
 | 1 | The LWS `client` identifier is required but **not required to be a URI** | Core §4.1 says SHOULD, not MUST. The bundled demo realm uses `lws-app`, a bare id, which is what Keycloak conventionally issues — see **P6-8**, and use a URI in production if your relying party cares. |
-| 2 | **OpenID: audience binding is optional per request** | Core RECOMMENDS an audience restriction naming the authorization server, and OpenID Connect binds an ID Token to a relying party, not to an authorization server: requiring a match would reject conforming ID Tokens. `aud` must be present (OpenID Connect Core §2); matching it is enforced when the request passes `client_id` or `audience`, or the deployment configures `audience` (**P3-6**). The **self-signed CID** suite is different: there "the `aud` claim MUST include the target authorization server", every conforming credential names one, and the match is required — a request with no target is refused (**R-16**). SAML follows the request and the configuration, as OpenID does. |
+| 2 | **OpenID: audience binding is optional per request** | Core RECOMMENDS an audience restriction naming the authorization server, and OpenID Connect binds an ID Token to a relying party, not to an authorization server: requiring a match would reject conforming ID Tokens. `aud` must be present (OpenID Connect Core §2); matching it is enforced when the request passes `client_id` or `audience`, or the deployment configures `audience` (**P3-6**). The **self-signed CID** suite is different: there "the `aud` claim MUST include the target authorization server", every conforming credential names one, and the match is required — a request with no target is refused (**R-16**). SAML matches the audience when the request or the configuration names one, as OpenID does, but always requires an `<AudienceRestriction>` (divergence 11). |
 | 3 | **Replay protection is off by default** | No suite mandates it, and a verify endpoint is legitimately asked about the same live credential repeatedly. Opt in per caller (**P2-8**). |
 | 4 | **`cid/{userId}` is unauthenticated** | A controlled identifier is a URL others dereference; an identity document requiring a credential would not be dereferenceable. Enumeration is bounded — random-UUID ids, a uniform response shape, and a rate limit — not closed (**P3-7**). |
 | 5 | **The SAML verifier can trust a certificate the caller supplies** | SAML trust is out of band, and a relying party may hold it rather than this deployment. By default the realm's SAML identity providers are the trust — each certificate bound to its IdP's entity ID — and a caller may instead supply one; the result names the source and the certificate's fingerprint, and `request-certificates=false` turns the second off (**R-25**). See the suite section above. |
@@ -322,6 +327,7 @@ Each is a decision, not an oversight; each names where the reasoning lives.
 | 8 | **DID documents are read as JSON, not processed as JSON-LD** | DID 1.1 is a Candidate Recommendation and its JSON-LD context is not published at a stable URL, so there is no definition to bundle, and contexts are never fetched (see *Supported formats*). The structure the verifier reads — `id`, `authentication`, `verificationMethod`, `type`, `controller`, key material — is fixed by DID 1.1 and CID 1.0 rather than by the context (**S-3**). |
 | 9 | **No `subject_identifier_types_supported`** | Core defines it as LWS *authorization server* metadata. `lws-authn` is not an authorization server and publishes no such metadata; it belongs to `lws-server`, which would list `https`, `did:key` and `did:web` for subjects this provider verifies (**S-5**). |
 | 10 | **Fetched documents are cached** | Both JWT suites encourage verifiers "to cache controlled identifier documents to reduce unnecessary network requests and the associated metadata leakage". Documents are reused for up to `http-cache-seconds` (default 300), less if their `Cache-Control` says so, never under `no-store`/`no-cache`/`private`; so a key removed from a document may verify for up to that long. A `kid` missing from a cached JWK set is asked for again, at most every 30 s (**R-26**). |
+| 11 | **SAML is read more narrowly than the Web Browser SSO profile** | The suite names no profile; these follow SAML Profiles §4.1.4 where the LWS use of an assertion allows, and are stricter where it does not (**R-32**, **R-39**). **An `<AudienceRestriction>` is always required**, even when no audience is asked for: core makes one RECOMMENDED and the suite contemplates "an authentication credential with no audience restrictions", but Profiles §4.1.4.2 says a bearer assertion "MUST contain an `<AudienceRestriction>`", and without one it is a bearer credential good anywhere. **Exactly one `<SubjectConfirmation>`**, though the profile allows several with "at least one" bearer: its `Recipient` is reported as the LWS client, and with several there would be no single one. A `NotBefore` on `<SubjectConfirmationData>`, which the profile says the bearer one "MUST NOT contain", is **honoured, not refused**. **`InResponseTo` and `Address` are not checked**: the verifier saw no `<AuthnRequest>` and does not see the presenter — a caller that sent the request checks `InResponseTo` itself. **Not supported, and refused:** `<EncryptedAssertion>`, `<EncryptedID>`, an assertion nested in another's `<Advice>`, and the Redirect binding's DEFLATE encoding; base64 must be strict apart from whitespace. |
 
 ## Security posture
 

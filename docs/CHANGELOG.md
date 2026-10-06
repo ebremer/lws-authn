@@ -316,6 +316,16 @@ realm under the default `bearer` access mode, before any signature is checked.
   (`issueInstantValid`), a Response `<Issuer>` other than its assertion's (`issuersMatch`), and **a
   Response holding more than one assertion** whether or not the Response is signed (`singleAssertion`) —
   an unsigned Response with a forged assertion beside the signed one used to verify as the signed one.
+- **A SAML credential may hold no assertion but the one verified** (R-31). One tucked into
+  `<samlp:Extensions>` of an unsigned Response, ahead of the signed one, was never read by the verifier,
+  which answered `valid: true` for the signed one — but a consumer re-parsing the credential and taking
+  the first element named `Assertion` would read the forgery. Any other `Assertion` or
+  `EncryptedAssertion`, anywhere and in any namespace, is now refused (`singleAssertion`); so is an
+  assertion nested in another's `<Advice>`. A base64 credential must be strict base64 apart from
+  whitespace (R-32): characters outside the alphabet used to be skipped. An `<EncryptedID>` is refused by
+  name, as it was in effect already. COMPLIANCE's new divergence 11 lists where the verifier is narrower
+  than the Web Browser SSO profile — including that it always requires an `<AudienceRestriction>`
+  (R-39), which divergence 2 used to imply it did not.
 - **Keys are chosen and checked more carefully** (R-27). An **Ed25519 key of small order** — the
   identity point as a `did:key`, a `Multikey` or a JWK — is refused, and so is a non-canonical one
   (`y ≥ p`): with the identity as the key, a fixed signature that nobody made verifies any message, and

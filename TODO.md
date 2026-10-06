@@ -903,7 +903,7 @@ is needed.
   `LWSSubMapperTest`; `anotherUsersHostedDocumentIsNotASubject` describes what the previous code
   accepted.
 
-- [ ] **R-31 · SAML: a wrapped document is certified.** `Low` · security (defence in depth) · `S` · *demonstrated*
+- [x] **R-31 · SAML: a wrapped document is certified.** `Low` · security (defence in depth) · `S` · *demonstrated*
   `findSignedElement` (`SamlCredentialVerifier.java:322-335`) searches the whole document for a signed
   assertion. An unsigned Response whose direct-child Assertion is forged, with the genuine signed
   assertion moved into `<samlp:Extensions>`, returns `valid: true, subject=<genuine>`. The verifier's own
@@ -912,13 +912,26 @@ is needed.
   (`:99-109`) asserts `valid: true` for a document carrying a forged sibling assertion. `verifiedAssertion` (`:289`) matches `Response` by local name only.
   **Do:** the signed assertion must be the root or a direct child of a root `samlp:Response`; reject any
   other `Assertion`/`EncryptedAssertion` anywhere; check the namespace; flip the test.
+  **Done.** R-22 had already made the assertion positional (root, or the one direct child of a
+  namespace-checked `samlp:Response`), so the forged sibling was refused and the forgery in
+  `<Extensions>` was never read — but the document still verified. `strayAssertion` now refuses any
+  element whose local name is `Assertion` (other than the one) or `EncryptedAssertion`, in any
+  namespace, anywhere — `<Extensions>`, `<Advice>` included — as `singleAssertion`. The test is flipped
+  to `anAssertionOutsideItsPlaceIsRefused` (also a look-alike namespace) and fails against the previous
+  code; `anEncryptedAssertionIsRefused` is new.
 
-- [ ] **R-32 · SAML behaviours that are stricter than the profile, or undocumented.** `Info` · docs · `S`
+- [x] **R-32 · SAML behaviours that are stricter than the profile, or undocumented.** `Info` · docs · `S`
   Exactly one `<SubjectConfirmation>` is required (Profiles allows several, "at least one bearer");
   `NotBefore` on `<SubjectConfirmationData>` is accepted though Profiles says it "MUST NOT" be present;
   `InResponseTo`/`Address` are ignored; `EncryptedAssertion`/`EncryptedID` and DEFLATE input are
   unsupported (fails closed, not in COMPLIANCE); `Base64.getMimeDecoder` (`:356`) silently skips
   characters outside the alphabet. **Do:** document each in COMPLIANCE, or align with the profile.
+  **Done.** Aligned where it was a defect: base64 is decoded strictly after removing whitespace
+  (`base64IsReadStrictly`, which fails against the previous code), and `<EncryptedID>` is refused by
+  name. Documented the rest as COMPLIANCE divergence 11, with Profiles §4.1.4.2/§4.1.4.3 quoted: one
+  `<SubjectConfirmation>` (its `Recipient` is the reported client), `NotBefore` honoured rather than
+  refused, `InResponseTo`/`Address` unchecked (no request state, no presenter), and encrypted
+  assertions/identifiers, `<Advice>` assertions and DEFLATE unsupported.
 
 - [ ] **R-33 · The served self-signed CID can publish duplicate method ids.** `Low` · correctness · `S` · *demonstrated*
   `ssicid/cid/SelfSignedControlledIdentifierDocument.java:184-187`: the positional `#key-<n>` fallback can
@@ -978,13 +991,16 @@ is needed.
   refuse unknown key types explicitly. (Also: `JwsSignatures`, used outside Keycloak, treats EdDSA as
   Ed25519 only while Keycloak also verifies Ed448; a `did:key` is decoded twice per verification.)
 
-- [ ] **R-39 · SAML always requires an `<AudienceRestriction>`** (challenges divergence 2 from the other
+- [x] **R-39 · SAML always requires an `<AudienceRestriction>`** (challenges divergence 2 from the other
   side). `Info` · docs · `S`
   With no `audience` requested, `SamlCredentialVerifier.java:243-249` still rejects an assertion with no
   restriction, although core makes audience RECOMMENDED and the SAML suite explicitly contemplates "an
   authentication credential with no audience restrictions". Defensible (Profiles §4.1.4.2 requires one
   for Web SSO), but it should be stated as a SAML-specific choice in COMPLIANCE, not covered by
   divergence 2's "optional per request".
+  **Done (documented, behaviour kept).** Divergence 2 now says SAML always requires an
+  `<AudienceRestriction>`, and divergence 11 gives the reason: Profiles §4.1.4.2, "The assertion(s)
+  containing a bearer subject confirmation MUST contain an `<AudienceRestriction>`".
 
 ---
 

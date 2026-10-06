@@ -121,21 +121,77 @@ class SamlVerifierTest {
         assertEquals(Boolean.FALSE, r.getChecks().get("singleAssertion"));
     }
 
-    /** The forged assertion tucked somewhere other than beside the signed one is never found at all. */
+    /**
+     * R-31. A forged assertion tucked into {@code <samlp:Extensions>} of an unsigned Response, ahead of the
+     * signed one, was never read here — the verifier found the signed one by position and answered
+     * {@code valid: true} for it. But a consumer that re-parses the credential and takes the first
+     * {@code Assertion} element would read the forgery, so the document is refused. So is one hiding the
+     * forgery under a look-alike namespace, for a consumer matching by local name.
+     */
     @Test
-    void anAssertionOutsideItsPlaceIsNeverRead() throws Exception {
+    void anAssertionOutsideItsPlaceIsRefused() throws Exception {
+        for (String namespace : new String[]{NS, "urn:example:not-saml"}) {
+            Document doc = parse(responseTemplate(ALICE));
+            signAssertion(doc, idpKeyPair.getPrivate());
+            injectForgedAssertion(doc, ATTACKER);
+            Element response = doc.getDocumentElement();
+            Element forged = (Element) response.getFirstChild();
+            if (!NS.equals(namespace)) {
+                forged = (Element) doc.renameNode(forged, namespace, "x:Assertion");
+            }
+            Element extensions = doc.createElementNS("urn:oasis:names:tc:SAML:2.0:protocol", "samlp:Extensions");
+            extensions.appendChild(forged); // the forged assertion, moved inside
+            response.insertBefore(extensions, response.getFirstChild());
+
+            SamlVerificationResult r = new SamlCredentialVerifier().verify(serialize(doc), idpCert, AUDIENCE);
+
+            assertFalse(r.isValid(), namespace);
+            assertEquals(Boolean.FALSE, r.getChecks().get("singleAssertion"), namespace);
+            assertNotEquals(ATTACKER, r.getSubject());
+        }
+    }
+
+    /**
+     * R-32. Base64 as the POST binding sends it — wrapped at 76 characters — is read; a character outside
+     * the alphabet is refused. The MIME decoder this used skipped such characters, so what was verified
+     * was not quite what was sent.
+     */
+    @Test
+    void base64IsReadStrictly() throws Exception {
+        String wrapped = java.util.Base64.getMimeEncoder().encodeToString(
+                signedResponse(ALICE).getBytes(StandardCharsets.UTF_8));
+        assertTrue(wrapped.contains("\r\n"));
+        SamlVerificationResult r = new SamlCredentialVerifier().verify(wrapped, idpCert, AUDIENCE);
+        assertTrue(r.isValid(), () -> r.getErrors().toString());
+
+        String stray = wrapped.substring(0, 40) + "*" + wrapped.substring(40);
+        assertFalse(new SamlCredentialVerifier().verify(stray, idpCert, AUDIENCE).isValid());
+    }
+
+    /** An encrypted identifier is not supported either, and says so. */
+    @Test
+    void anEncryptedIdIsRefused() throws Exception {
+        String xml = responseTemplate(ALICE).replace("<saml:Subject>",
+                "<saml:Subject><saml:EncryptedID/>");
+        Document doc = parse(xml);
+        signAssertion(doc, idpKeyPair.getPrivate());
+        SamlVerificationResult r = new SamlCredentialVerifier().verify(serialize(doc), idpCert, AUDIENCE);
+        assertFalse(r.isValid());
+        assertTrue(r.getErrors().toString().contains("Encrypted identifiers are not supported"), r.getErrors().toString());
+    }
+
+    /** An encrypted assertion is not supported, and is refused rather than passed over. */
+    @Test
+    void anEncryptedAssertionIsRefused() throws Exception {
         Document doc = parse(responseTemplate(ALICE));
         signAssertion(doc, idpKeyPair.getPrivate());
-        injectForgedAssertion(doc, ATTACKER);
         Element response = doc.getDocumentElement();
-        Element extensions = doc.createElementNS("urn:oasis:names:tc:SAML:2.0:protocol", "samlp:Extensions");
-        extensions.appendChild(response.getFirstChild()); // the forged assertion, moved inside
-        response.insertBefore(extensions, response.getFirstChild());
+        response.insertBefore(doc.createElementNS(NS, "saml:EncryptedAssertion"), response.getLastChild());
 
         SamlVerificationResult r = new SamlCredentialVerifier().verify(serialize(doc), idpCert, AUDIENCE);
 
-        assertEquals(ALICE, r.getSubject(), "must read the signed identity");
-        assertTrue(r.isValid(), () -> "the genuine credential should still validate, errors: " + r.getErrors());
+        assertFalse(r.isValid());
+        assertTrue(r.getErrors().toString().contains("Encrypted assertions are not supported"), r.getErrors().toString());
     }
 
     /**

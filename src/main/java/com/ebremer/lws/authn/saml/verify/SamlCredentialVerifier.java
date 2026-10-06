@@ -141,6 +141,17 @@ public class SamlCredentialVerifier {
                 result.error("The credential is neither a SAML Response nor a SAML Assertion");
                 return result.fail();
             }
+            // And no other assertion anywhere: not in <samlp:Extensions>, not in an <Advice>, not under a
+            // look-alike namespace (R-31). This verifier never reads one, but it vouches for the document,
+            // and a consumer that re-parses it — lws-server during a token exchange, say — and takes the
+            // first element named Assertion would read a forged one placed ahead of the signed one. An
+            // encrypted assertion is not supported at all, so it is refused rather than skipped.
+            String stray = strayAssertion(doc, assertion);
+            if (stray != null) {
+                result.check("singleAssertion", false);
+                result.error(stray);
+                return result.fail();
+            }
 
             // SAML Core §4.1.2: a relying party "MUST NOT process any assertion with a major assertion
             // version number not supported by the relying party", and §4.1.3.3 has assertions "appear only
@@ -272,6 +283,10 @@ public class SamlCredentialVerifier {
 
             Element subject = onlyChild(assertion, "Subject", result);
             if (subject == null) {
+                return result.fail();
+            }
+            if (firstChild(subject, NS, "EncryptedID") != null) {
+                result.error("Encrypted identifiers are not supported");
                 return result.fail();
             }
             Element nameId = onlyChild(subject, "NameID", result);
@@ -533,6 +548,27 @@ public class SamlCredentialVerifier {
         return code != null && STATUS_SUCCESS.equals(code.getAttribute("Value"));
     }
 
+    /**
+     * Why the document holds an assertion other than {@code assertion}, or {@code null} if it does not:
+     * any element named {@code Assertion} or {@code EncryptedAssertion}, in any namespace (R-31).
+     */
+    private static String strayAssertion(Document doc, Element assertion) {
+        org.w3c.dom.NodeList all = doc.getElementsByTagName("*");
+        for (int i = 0; i < all.getLength(); i++) {
+            Element element = (Element) all.item(i);
+            String local = element.getLocalName();
+            if ("EncryptedAssertion".equals(local)) {
+                return "Encrypted assertions are not supported";
+            }
+            if ("Assertion".equals(local) && element != assertion) {
+                return "The credential holds an Assertion other than "
+                        + (assertion.getParentNode() == doc ? "the root" : "the Response's own") + ": nested, "
+                        + "in <Extensions> or in another namespace";
+            }
+        }
+        return null;
+    }
+
     private static boolean isElement(Element element, String ns, String local) {
         return element != null && local.equals(element.getLocalName()) && ns.equals(element.getNamespaceURI());
     }
@@ -580,12 +616,18 @@ public class SamlCredentialVerifier {
         return builder.parse(new ByteArrayInputStream(xml));
     }
 
-    private static byte[] toXmlBytes(String credential) {
+    /**
+     * The credential's XML: as given, or base64-decoded (the POST binding's encoding, line breaks and
+     * all). Only whitespace is skipped. The MIME decoder this used skipped <em>any</em> character outside
+     * the alphabet, so a credential with stray characters decoded to something other than what was sent
+     * (R-32); now that is refused. DEFLATE — the Redirect binding's encoding — is not supported.
+     */
+    static byte[] toXmlBytes(String credential) {
         String trimmed = credential == null ? "" : credential.trim();
         if (trimmed.startsWith("<")) {
             return trimmed.getBytes(StandardCharsets.UTF_8);
         }
-        return Base64.getMimeDecoder().decode(trimmed);
+        return Base64.getDecoder().decode(trimmed.replaceAll("[ \\t\\r\\n]", ""));
     }
 
     // ---- precise namespace-aware DOM navigation (direct children only) ----

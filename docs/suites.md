@@ -167,9 +167,9 @@ The verifier additionally requires the Response's `<samlp:StatusCode>` to be
 carries a `Recipient` (the LWS client identifier) and an unexpired `NotOnOrAfter`, and a signing
 certificate that is inside its own validity period and holds an RSA-2048 or P-256 key at least. Every
 signature present must follow SAML Core §5.4 — a single reference to the signed element, no transform
-but enveloped-signature and exclusive canonicalization, SHA-2 — and a Response must hold exactly one
-assertion. Every `<AudienceRestriction>` must name the
-`audience`, and a `<Conditions>` holding anything the verifier does not understand is refused, as SAML
+but enveloped-signature and exclusive canonicalization, SHA-2 — and the credential must hold exactly
+one assertion, with no other anywhere in it; encrypted assertions and identifiers are not supported.
+Every `<AudienceRestriction>` must name the `audience`, and with no `audience` there must still be one; a `<Conditions>` holding anything the verifier does not understand is refused, as SAML
 Core §2.5.1.1 requires; a `<OneTimeUse>` assertion is reported as `oneTimeUse: true`.
 
 Guide: **[SAML 2.0 walkthrough](walkthrough-saml.md)** (there is no shell demo — producing a
