@@ -664,7 +664,7 @@ is needed.
   binds whoever retains it, which this verifier does not. Four tests in `SamlVerifierTest` fail against
   the previous verifier.
 
-- [ ] **R-22 · SAML: SAML Core §5 signature processing is not enforced.**
+- [x] **R-22 · SAML: SAML Core §5 signature processing is not enforced.**
   `Medium` · security/spec-conformance · `M` · *demonstrated*
   The suite: the signature "MUST be validated as described in SAML Core, section 5". `:120` delegates
   to Keycloak's `AssertionUtil.isSignatureValid`, which does not apply §5's profile:
@@ -686,6 +686,23 @@ is needed.
   RSA ≥ 2048, EC ≥ P-256; validate every signature present; require `Version="2.0"`,
   `IssueInstant ≤ now + skew`, equal Issuers. Moving this into the provider also removes the dependency on
   Keycloak internals for the XSW defence (today the real protection is `SAML2Signature.configureIdAttribute`).
+  **Done.** `saml/verify/SamlSignatures` replaces `AssertionUtil.isSignatureValid`. Each direct-child
+  `ds:Signature` of the Response and of the assertion is parsed (without secure validation, which would
+  refuse SHA-1 by exception rather than by reason; nothing is computed), checked —
+  `signatureCoversSignedElement`: one Reference, `URI="#"+ID`; `signatureAlgorithmsAllowed`: transforms
+  ⊆ {enveloped, exc-c14n, exc-c14n#WithComments}, RSA-SHA256/384/512, SHA*-RSA-MGF1 (PSS), ECDSA-SHA2,
+  SHA-2 digests, SignedInfo canonicalized exclusive or inclusive (inclusive leaves nothing unsigned) —
+  then validated with a fresh JSR-105 context, `singletonKeySelector` on the trusted key, the signed
+  element's `ID` as the only registered identifier, secure validation on. `certificateKeyStrong`: RSA ≥
+  2048, EC ≥ 256. `versionSupported` (both elements `2.0`; for a Response §4.1.3.3, since §4.1.3.2
+  binds responders), `issueInstantValid` (both, ≤ now + skew), `issuersMatch` (Profiles §4.1.4.2 as
+  published: a Response `<Issuer>` "MAY be omitted, but if present" must be the IdP's — not required when
+  the Response is signed, which is an erratum's reading). Two choices beyond the item: **a Response must
+  hold exactly one assertion even when unsigned** — the old document-wide search found the signed one
+  among several, which `SamlVerifierTest.signatureWrappingDefeated` asserted; it now asserts a refusal,
+  and `anAssertionOutsideItsPlaceIsNeverRead` keeps the "forged assertion elsewhere is ignored" case;
+  and signatures anywhere else (inside `<Advice>`, say) are not validated, as §5.4 profiles only those
+  "found directly within" an assertion or message. Nine tests fail against the previous verifier.
 
 - [x] **R-23 · Self-signed CID: CID 1.0 verification-method rules are only partly applied.**
   `Low` · spec-conformance · `S` · *demonstrated*

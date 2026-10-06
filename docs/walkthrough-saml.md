@@ -138,8 +138,11 @@ the credential is presented as a bearer token (`Authorization: Bearer …`) with
 - **Out-of-band trust.** This suite adds no discovery — the verifier must already trust the IdP's
   certificate (e.g. pinned, or taken from the realm metadata as above). Rotating the IdP's SAML key
   means re-distributing the certificate.
-- **What is validated.** The XML-DSig signature against the supplied certificate; that the certificate
-  is itself within its validity period; the Response's `<samlp:StatusCode>`; a single bearer
+- **What is validated.** Every XML-DSig signature on the Response or the assertion, against the
+  supplied certificate, under SAML Core §5.4's profile — one reference, to the signed element; only the
+  enveloped-signature and exclusive-canonicalization transforms; SHA-2 — and that the certificate is
+  itself within its validity period, with an RSA-2048 or P-256 key at least; SAML version 2.0, one
+  assertion, and an `IssueInstant` that is not in the future; the Response's `<samlp:StatusCode>`; a single bearer
   `<SubjectConfirmation>` with a `Recipient` and an unexpired `NotOnOrAfter`; the `<Conditions>` —
   understood, and within their time window; and the audience, in every `<AudienceRestriction>`. A
   `<OneTimeUse>` assertion is reported as `oneTimeUse: true`; do not cache the verdict on one. The verifier does not build an X.509 trust chain or fetch metadata — it

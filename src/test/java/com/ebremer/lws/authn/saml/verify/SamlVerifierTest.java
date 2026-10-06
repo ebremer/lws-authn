@@ -20,10 +20,13 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
+import java.security.spec.ECGenParameterSpec;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 
 import javax.xml.crypto.dsig.CanonicalizationMethod;
 import javax.xml.crypto.dsig.DigestMethod;
@@ -35,6 +38,7 @@ import javax.xml.crypto.dsig.XMLSignatureFactory;
 import javax.xml.crypto.dsig.dom.DOMSignContext;
 import javax.xml.crypto.dsig.spec.C14NMethodParameterSpec;
 import javax.xml.crypto.dsig.spec.TransformParameterSpec;
+import javax.xml.crypto.dsig.spec.XPathFilterParameterSpec;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.transform.Transformer;
 import javax.xml.transform.TransformerFactory;
@@ -98,7 +102,8 @@ class SamlVerifierTest {
     /**
      * Signature wrapping: sign an assertion for "alice", then inject a forged, unsigned assertion for
      * "attacker" as the first child of the Response. A naive verifier (first NameID in the document)
-     * would read "attacker"; the hardened verifier reads only the cryptographically-covered assertion.
+     * would read "attacker". This one used to find the signed assertion and verify it; since R-22 a
+     * Response must hold exactly one assertion, as a signed one always had to, so it is refused outright.
      */
     @Test
     void signatureWrappingDefeated() throws Exception {
@@ -108,6 +113,23 @@ class SamlVerifierTest {
         SamlVerificationResult r = new SamlCredentialVerifier().verify(serialize(doc), idpCert, AUDIENCE);
 
         assertNotEquals(ATTACKER, r.getSubject(), "XML signature wrapping succeeded — read the forged identity!");
+        assertFalse(r.isValid(), "a Response with two assertions has no single credential");
+        assertEquals(Boolean.FALSE, r.getChecks().get("singleAssertion"));
+    }
+
+    /** The forged assertion tucked somewhere other than beside the signed one is never found at all. */
+    @Test
+    void anAssertionOutsideItsPlaceIsNeverRead() throws Exception {
+        Document doc = parse(responseTemplate(ALICE));
+        signAssertion(doc, idpKeyPair.getPrivate());
+        injectForgedAssertion(doc, ATTACKER);
+        Element response = doc.getDocumentElement();
+        Element extensions = doc.createElementNS("urn:oasis:names:tc:SAML:2.0:protocol", "samlp:Extensions");
+        extensions.appendChild(response.getFirstChild()); // the forged assertion, moved inside
+        response.insertBefore(extensions, response.getFirstChild());
+
+        SamlVerificationResult r = new SamlCredentialVerifier().verify(serialize(doc), idpCert, AUDIENCE);
+
         assertEquals(ALICE, r.getSubject(), "must read the signed identity");
         assertTrue(r.isValid(), () -> "the genuine credential should still validate, errors: " + r.getErrors());
     }
@@ -281,6 +303,186 @@ class SamlVerifierTest {
         assertTrue(once.isValid(), () -> String.valueOf(once.getErrors()));
         assertEquals(Boolean.TRUE, once.getOneTimeUse());
         assertNull(new SamlCredentialVerifier().verify(signedResponse(ALICE), idpCert, AUDIENCE).getOneTimeUse());
+    }
+
+    // ------------------------------------------------- SAML Core §5 signature processing (R-22)
+
+    private static final String VICTIM = "https://id.example/victim";
+
+    private static Element assertionOf(Document doc) {
+        return (Element) doc.getElementsByTagNameNS(NS, "Assertion").item(0);
+    }
+
+    /** The transforms an IdP uses: enveloped signature, then exclusive canonicalization. */
+    private static List<Transform> standardTransforms() throws Exception {
+        XMLSignatureFactory fac = XMLSignatureFactory.getInstance("DOM");
+        return List.of(fac.newTransform(Transform.ENVELOPED, (TransformParameterSpec) null),
+                fac.newTransform(CanonicalizationMethod.EXCLUSIVE, (C14NMethodParameterSpec) null));
+    }
+
+    /**
+     * Signs {@code target} with an enveloped signature: one reference to its ID with the given digest and
+     * transforms, plus {@code extraWholeDocumentReferences} references to the whole document.
+     */
+    private static void sign(Element target, PrivateKey key, String method, String digest,
+                             List<Transform> transforms, int extraWholeDocumentReferences) throws Exception {
+        target.setIdAttribute("ID", true);
+        XMLSignatureFactory fac = XMLSignatureFactory.getInstance("DOM");
+        List<Reference> references = new ArrayList<>();
+        references.add(fac.newReference("#" + target.getAttribute("ID"), fac.newDigestMethod(digest, null),
+                transforms, null, null));
+        for (int i = 0; i < extraWholeDocumentReferences; i++) {
+            references.add(fac.newReference("", fac.newDigestMethod(digest, null), standardTransforms(), null, null));
+        }
+        SignedInfo si = fac.newSignedInfo(
+                fac.newCanonicalizationMethod(CanonicalizationMethod.EXCLUSIVE, (C14NMethodParameterSpec) null),
+                fac.newSignatureMethod(method, null), references);
+        fac.newXMLSignature(si, null).sign(new DOMSignContext(key, target));
+    }
+
+    private SamlVerificationResult verifySigned(Document doc) throws Exception {
+        return new SamlCredentialVerifier().verify(serialize(doc), idpCert, AUDIENCE);
+    }
+
+    /** SAML Core §5.4.2: "Signatures MUST contain a single {@code <ds:Reference>}". Two used to verify. */
+    @Test
+    void aSignatureMustHaveASingleReference() throws Exception {
+        Document doc = parse(responseTemplate(ALICE));
+        sign(assertionOf(doc), idpKeyPair.getPrivate(), SignatureMethod.RSA_SHA256, DigestMethod.SHA256,
+                standardTransforms(), 1);
+        SamlVerificationResult r = verifySigned(doc);
+        assertFalse(r.isValid());
+        assertEquals(Boolean.FALSE, r.getChecks().get("signatureCoversSignedElement"));
+    }
+
+    /**
+     * SAML Core §5.4.4: a verifier allowing other transforms "MUST ensure that no content of the SAML
+     * message is excluded from the signature". An XPath filter that leaves {@code <Subject>} out lets the
+     * subject be replaced after signing; this used to verify, as the victim.
+     */
+    @Test
+    void aTransformThatLeavesTheSubjectOutIsRejected() throws Exception {
+        Document doc = parse(responseTemplate(ALICE));
+        XMLSignatureFactory fac = XMLSignatureFactory.getInstance("DOM");
+        List<Transform> leaveOutSubject = List.of(
+                fac.newTransform(Transform.ENVELOPED, (TransformParameterSpec) null),
+                fac.newTransform(Transform.XPATH, new XPathFilterParameterSpec(
+                        "not(ancestor-or-self::saml:Subject)", Map.of("saml", NS))),
+                fac.newTransform(CanonicalizationMethod.EXCLUSIVE, (C14NMethodParameterSpec) null));
+        sign(assertionOf(doc), idpKeyPair.getPrivate(), SignatureMethod.RSA_SHA256, DigestMethod.SHA256,
+                leaveOutSubject, 0);
+        doc.getElementsByTagNameNS(NS, "NameID").item(0).setTextContent(VICTIM);
+
+        SamlVerificationResult r = verifySigned(doc);
+
+        assertFalse(r.isValid(), "a subject the signature does not cover was accepted");
+        assertNotEquals(VICTIM, r.getSubject());
+        assertEquals(Boolean.FALSE, r.getChecks().get("signatureAlgorithmsAllowed"));
+    }
+
+    /** SHA-1 digests and signatures are refused whatever the XML-DSig provider allows, and so are small keys. */
+    @Test
+    void weakAlgorithmsAndKeysAreRejected() throws Exception {
+        String[][] weak = {{SignatureMethod.RSA_SHA256, DigestMethod.SHA1}, {SignatureMethod.RSA_SHA1, DigestMethod.SHA256}};
+        for (String[] algorithms : weak) {
+            Document doc = parse(responseTemplate(ALICE));
+            sign(assertionOf(doc), idpKeyPair.getPrivate(), algorithms[0], algorithms[1], standardTransforms(), 0);
+            SamlVerificationResult r = verifySigned(doc);
+            assertFalse(r.isValid(), String.join(" ", algorithms));
+            assertEquals(Boolean.FALSE, r.getChecks().get("signatureAlgorithmsAllowed"), String.join(" ", algorithms));
+        }
+
+        KeyPairGenerator g = KeyPairGenerator.getInstance("RSA");
+        g.initialize(1024);
+        KeyPair small = g.generateKeyPair();
+        Document doc = parse(responseTemplate(ALICE));
+        signAssertion(doc, small.getPrivate());
+        SamlVerificationResult r = new SamlCredentialVerifier().verify(serialize(doc), selfSigned(small), AUDIENCE);
+        assertFalse(r.isValid(), "RSA-1024");
+        assertEquals(Boolean.FALSE, r.getChecks().get("certificateKeyStrong"));
+    }
+
+    /** Controls: an ECDSA P-256 IdP, and a Response signed as well as its assertion, both verify. */
+    @Test
+    void ecdsaAndSignedResponsesVerify() throws Exception {
+        KeyPair ec = ecP256();
+        Document ecDoc = parse(responseTemplate(ALICE));
+        sign(assertionOf(ecDoc), ec.getPrivate(), SignatureMethod.ECDSA_SHA256, DigestMethod.SHA256,
+                standardTransforms(), 0);
+        SamlVerificationResult ecResult = new SamlCredentialVerifier().verify(serialize(ecDoc), selfSigned(ec), AUDIENCE);
+        assertTrue(ecResult.isValid(), () -> String.valueOf(ecResult.getErrors()));
+        assertEquals(Boolean.TRUE, ecResult.getChecks().get("certificateKeyStrong"));
+
+        Document both = parse(responseTemplate(ALICE));
+        signAssertion(both, idpKeyPair.getPrivate());
+        sign(both.getDocumentElement(), idpKeyPair.getPrivate(), SignatureMethod.RSA_SHA256, DigestMethod.SHA256,
+                standardTransforms(), 0);
+        SamlVerificationResult r = verifySigned(both);
+        assertTrue(r.isValid(), () -> String.valueOf(r.getErrors()));
+        assertEquals(Boolean.TRUE, r.getChecks().get("signatureAlgorithmsAllowed"));
+    }
+
+    /**
+     * SAML Profiles §4.1.4.3: "Verify any signatures present on the assertion(s) or the response". With
+     * the Response signed, the assertion's own signature used to go unread — here, one by another key.
+     */
+    @Test
+    void everySignaturePresentIsVerified() throws Exception {
+        Document doc = parse(responseTemplate(ALICE));
+        signAssertion(doc, rsa().getPrivate());
+        sign(doc.getDocumentElement(), idpKeyPair.getPrivate(), SignatureMethod.RSA_SHA256, DigestMethod.SHA256,
+                standardTransforms(), 0);
+        SamlVerificationResult r = verifySigned(doc);
+        assertFalse(r.isValid());
+        assertEquals(Boolean.FALSE, r.getChecks().get("signatureValid"));
+    }
+
+    /** SAML Core §4.1.2: a relying party "MUST NOT process" an assertion of a major version it does not support. */
+    @Test
+    void onlySaml2IsProcessed() throws Exception {
+        String xml = responseTemplate(ALICE);
+        for (String other : new String[]{
+                xml.replace("<saml:Assertion ID=\"a1\" Version=\"2.0\"", "<saml:Assertion ID=\"a1\" Version=\"3.0\""),
+                xml.replace("ID=\"r1\" Version=\"2.0\"", "ID=\"r1\" Version=\"3.0\"")}) {
+            assertNotEquals(xml, other);
+            SamlVerificationResult r = new SamlCredentialVerifier().verify(signed(other), idpCert, AUDIENCE);
+            assertFalse(r.isValid());
+            assertEquals(Boolean.FALSE, r.getChecks().get("versionSupported"));
+        }
+    }
+
+    /** An IssueInstant in the future was not written by a clock keeping time. 2099 used to verify. */
+    @Test
+    void anIssueInstantInTheFutureIsRejected() throws Exception {
+        String xml = responseTemplate(ALICE);
+        String later = " IssueInstant=\"2099-01-01T00:00:00Z\"";
+        for (String other : new String[]{
+                xml.replaceFirst("(<saml:Assertion ID=\"a1\" Version=\"2.0\") IssueInstant=\"[^\"]*\"", "$1" + later),
+                xml.replaceFirst("(ID=\"r1\" Version=\"2.0\") IssueInstant=\"[^\"]*\"", "$1" + later)}) {
+            assertNotEquals(xml, other);
+            SamlVerificationResult r = new SamlCredentialVerifier().verify(signed(other), idpCert, AUDIENCE);
+            assertFalse(r.isValid());
+            assertEquals(Boolean.FALSE, r.getChecks().get("issueInstantValid"));
+        }
+    }
+
+    /**
+     * SAML Profiles §4.1.4.2: a Response's {@code <Issuer>} "MAY be omitted, but if present it MUST
+     * contain the unique identifier of the issuing identity provider" — the assertion's.
+     */
+    @Test
+    void aResponseIssuerMustBeTheAssertionsIssuer() throws Exception {
+        String responseIssuer = "\"><saml:Issuer>https://idp.example</saml:Issuer><samlp:Status>";
+        String xml = responseTemplate(ALICE);
+        assertTrue(xml.contains(responseIssuer));
+        SamlVerificationResult other = new SamlCredentialVerifier().verify(signed(xml.replace(responseIssuer,
+                "\"><saml:Issuer>https://other-idp.example</saml:Issuer><samlp:Status>")), idpCert, AUDIENCE);
+        assertFalse(other.isValid());
+        assertEquals(Boolean.FALSE, other.getChecks().get("issuersMatch"));
+
+        SamlVerificationResult omitted = new SamlCredentialVerifier().verify(signed(xml.replace(responseIssuer,
+                "\"><samlp:Status>")), idpCert, AUDIENCE);
+        assertTrue(omitted.isValid(), () -> String.valueOf(omitted.getErrors()));
     }
 
     /** XXE: a credential containing a DOCTYPE / external entity must be rejected at parse time. */
@@ -534,6 +736,12 @@ class SamlVerifierTest {
         return g.generateKeyPair();
     }
 
+    private static KeyPair ecP256() throws Exception {
+        KeyPairGenerator g = KeyPairGenerator.getInstance("EC");
+        g.initialize(new ECGenParameterSpec("secp256r1"));
+        return g.generateKeyPair();
+    }
+
     private static X509Certificate selfSigned(KeyPair kp) throws Exception {
         return certificate(kp, -1000L, 86_400_000L);
     }
@@ -543,7 +751,8 @@ class SamlVerifierTest {
             throws Exception {
         long now = System.currentTimeMillis();
         X500Name dn = new X500Name("CN=test-idp");
-        ContentSigner signer = new JcaContentSignerBuilder("SHA256withRSA").build(kp.getPrivate());
+        ContentSigner signer = new JcaContentSignerBuilder(
+                "EC".equals(kp.getPublic().getAlgorithm()) ? "SHA256withECDSA" : "SHA256withRSA").build(kp.getPrivate());
         return new JcaX509CertificateConverter().getCertificate(
                 new JcaX509v3CertificateBuilder(dn, BigInteger.valueOf(now),
                         new Date(now + notBeforeOffset), new Date(now + notAfterOffset),

@@ -71,11 +71,14 @@ behaviours are covered by tests — `mvn test` for the unit tests, `mvn verify` 
 - **Private key material.** The self-signed-CID endpoint publishes only the public members of a
   registered JWK, and refuses to publish a value carrying private key material at all (CID 1.0: a
   `publicKeyJwk` map "MUST NOT include any members of the private information class").
-- **SAML signature wrapping (XSW).** The SAML verifier validates the signature and then reads claims
-  **only from the cryptographically-covered assertion**, located by precise direct-child navigation
-  (never a document-wide `getElementsByTagName` an injected element could win). It additionally
-  requires the signature to reference the signed element by its own `ID`, and a signed Response to
-  contain exactly one assertion. An injected, unsigned assertion is ignored.
+- **SAML signature wrapping (XSW).** The SAML verifier reads claims **only from the one assertion**,
+  located by precise direct-child navigation (never a document-wide `getElementsByTagName` an injected
+  element could win): a Response must hold exactly one, so an injected assertion beside the signed one
+  is refused, and one tucked anywhere else is never seen. Every signature on the Response or the
+  assertion must follow SAML Core §5.4 — a single reference, to the signed element's own `ID`, and only
+  the enveloped-signature and exclusive-canonicalization transforms, so no transform can leave part of
+  the assertion unsigned — and is validated with the JDK's XML-DSig API against the trusted key alone,
+  with an allow-list of SHA-2 algorithms and RSA-2048 / P-256 as the smallest keys.
 - **XXE.** SAML XML is parsed with a locally-configured parser that **disallows DTDs** and disables
   external entities, independent of any caller/library parser configuration.
 - **The `cid/{userId}` endpoints are unauthenticated, deliberately.** A controlled identifier is a URL

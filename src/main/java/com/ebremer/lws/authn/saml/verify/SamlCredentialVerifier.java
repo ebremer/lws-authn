@@ -8,13 +8,13 @@
  *
  * Hardening:
  *   - XXE: the XML is parsed with a locally-configured, DTD-disallowing parser (not the caller's).
- *   - XML Signature Wrapping (XSW): the signature is validated AND the signature's Reference must
- *     cover the signed element by its own ID; claims are then read ONLY from within the
- *     cryptographically-covered assertion (a single assertion), by precise direct-child navigation —
+ *   - XML Signature Wrapping (XSW): every signature present follows SAML Core §5.4 — one Reference,
+ *     to the signed element's own ID, and no transform that could leave content out — and is
+ *     validated; claims are then read ONLY from the one assertion, by precise direct-child navigation —
  *     never a document-wide getElementsByTagName that an injected element could win.
  *
- * Trust is out of band (the verifier is given the IdP certificate). Signature validation uses
- * Keycloak's SAML processing library.
+ * Trust is out of band (the verifier is given the IdP certificate). Signatures are validated with the
+ * JDK's XML Digital Signature API (SamlSignatures), against that certificate's key alone.
  */
 package com.ebremer.lws.authn.saml.verify;
 
@@ -27,15 +27,14 @@ import java.util.Base64;
 import java.util.List;
 
 import javax.xml.XMLConstants;
+import javax.xml.crypto.dsig.XMLSignature;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 
 import org.jboss.logging.Logger;
-import org.keycloak.saml.processing.core.saml.v2.util.AssertionUtil;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
-import org.w3c.dom.NodeList;
 
 import com.ebremer.lws.authn.saml.SamlConstants;
 import com.ebremer.lws.authn.verify.Trace;
@@ -54,6 +53,9 @@ public class SamlCredentialVerifier {
     private static final String XMLDSIG_NS = "http://www.w3.org/2000/09/xmldsig#";
     private static final String NS = SamlConstants.SAML_ASSERTION_NS;
     private static final String PROTOCOL_NS = SamlConstants.SAML_PROTOCOL_NS;
+
+    /** The SAML version this verifier implements, and the only one it processes (SAML Core §4.1.2). */
+    private static final String SAML_VERSION = "2.0";
 
     /** The only {@code <samlp:StatusCode>} an authentication credential may carry (SAML Core §3.2.2). */
     private static final String STATUS_SUCCESS = "urn:oasis:names:tc:SAML:2.0:status:Success";
@@ -98,47 +100,117 @@ public class SamlCredentialVerifier {
                 return result.fail();
             }
 
+            // ...and its key one worth trusting: an XML-DSig provider that allows them verifies a 512-bit
+            // RSA signature as readily as any other (R-22).
+            String weakKey = SamlSignatures.keyProblem(idpCertificate.getPublicKey());
+            result.check("certificateKeyStrong", weakKey == null);
+            if (weakKey != null) {
+                result.error("The supplied IdP certificate holds " + weakKey);
+                return result.fail();
+            }
+
             Document doc = parseSecurely(toXmlBytes(credential));
 
-            // --- protocol status ---
-            // A <samlp:Response> that reports a failure is not a credential, however well signed the
-            // assertion it happens to carry is.
+            // --- the Response and its one assertion ---
+            // Located by position, never by a document-wide search an injected element could win: the
+            // document is a Response holding exactly one Assertion, or an Assertion. A second assertion
+            // beside the signed one — the signature-wrapping shape — leaves no single "the" credential.
             Element root = doc.getDocumentElement();
-            if (root != null && "Response".equals(root.getLocalName()) && PROTOCOL_NS.equals(root.getNamespaceURI())) {
-                boolean success = isSuccessStatus(root);
+            Element response = null;
+            Element assertion;
+            if (isElement(root, PROTOCOL_NS, "Response")) {
+                response = root;
+                // A <samlp:Response> that reports a failure is not a credential, however well signed the
+                // assertion it happens to carry is.
+                boolean success = isSuccessStatus(response);
                 result.check("statusSuccess", success);
                 if (!success) {
                     result.error("SAML Response <StatusCode> is not " + STATUS_SUCCESS);
                     return result.fail();
                 }
+                List<Element> assertions = children(response, NS, "Assertion");
+                if (assertions.size() != 1) {
+                    result.check("singleAssertion", false);
+                    result.error("A Response must contain exactly one Assertion, found " + assertions.size());
+                    return result.fail();
+                }
+                assertion = assertions.get(0);
+            } else if (isElement(root, NS, "Assertion")) {
+                assertion = root;
+            } else {
+                result.error("The credential is neither a SAML Response nor a SAML Assertion");
+                return result.fail();
             }
 
-            // --- signature ---
-            Element signed = findSignedElement(doc);
-            result.check("signaturePresent", signed != null);
-            if (signed == null) {
+            // SAML Core §4.1.2: a relying party "MUST NOT process any assertion with a major assertion
+            // version number not supported by the relying party", and §4.1.3.3 has assertions "appear only
+            // in response messages of the same major version". Version="3.0" used to verify (R-22).
+            boolean versionSupported = SAML_VERSION.equals(assertion.getAttribute("Version"))
+                    && (response == null || SAML_VERSION.equals(response.getAttribute("Version")));
+            result.check("versionSupported", versionSupported);
+            if (!versionSupported) {
+                result.error("The credential is not SAML " + SAML_VERSION);
+                return result.fail();
+            }
+
+            // --- signatures (SAML Core §5.4) ---
+            // The profile covers "the <ds:Signature> elements found directly within SAML assertions,
+            // requests, and responses", and Profiles §4.1.4.3 says to "Verify any signatures present on
+            // the assertion(s) or the response". So each one present is checked, and at least one must be:
+            // a signed Response covers the assertion inside it (Core §5.3). Only the Response's signature
+            // used to be checked when it had one, so an assertion signed by some other key went unread.
+            List<Element> signedElements = new ArrayList<>();
+            List<Element> signatures = new ArrayList<>();
+            for (Element element : response == null ? List.of(assertion) : List.of(response, assertion)) {
+                List<Element> own = children(element, XMLDSIG_NS, "Signature");
+                if (own.size() > 1) {
+                    result.check("signatureCoversSignedElement", false);
+                    result.error("<" + element.getLocalName() + "> carries more than one <ds:Signature>");
+                    return result.fail();
+                }
+                if (own.size() == 1) {
+                    signedElements.add(element);
+                    signatures.add(own.get(0));
+                }
+            }
+            result.check("signaturePresent", !signatures.isEmpty());
+            if (signatures.isEmpty()) {
                 result.error("Credential is not signed (no enveloped XML signature on the Response or Assertion)");
                 return result.fail();
             }
-            boolean signatureValid = AssertionUtil.isSignatureValid(signed, idpCertificate.getPublicKey());
+            // The profile first, from the parsed signatures, before any cryptography: one reference, to
+            // the signed element's own ID (§5.4.2), and only the transforms and algorithms allowed. A
+            // signature whose XPath transform left <Subject> out verified — and then the subject could be
+            // replaced (R-22).
+            String coverage = null;
+            String algorithms = null;
+            for (int i = 0; i < signatures.size(); i++) {
+                XMLSignature parsed = SamlSignatures.read(signatures.get(i), signedElements.get(i));
+                coverage = coverage != null ? coverage : SamlSignatures.coverageProblem(parsed, signedElements.get(i));
+                algorithms = algorithms != null ? algorithms : SamlSignatures.algorithmProblem(parsed);
+            }
+            result.check("signatureCoversSignedElement", coverage == null);
+            if (coverage != null) {
+                result.error("Signature does not cover exactly the signed element (SAML Core §5.4.2): " + coverage);
+                return result.fail();
+            }
+            result.check("signatureAlgorithmsAllowed", algorithms == null);
+            if (algorithms != null) {
+                result.error("Signature is outside SAML Core §5.4's profile: " + algorithms);
+                return result.fail();
+            }
+            boolean signatureValid = true;
+            for (int i = 0; i < signatures.size() && signatureValid; i++) {
+                signatureValid = SamlSignatures.validate(signatures.get(i), signedElements.get(i),
+                        idpCertificate.getPublicKey());
+            }
             result.check("signatureValid", signatureValid);
             if (!signatureValid) {
                 result.error("XML signature is not valid for the supplied IdP certificate");
                 return result.fail();
             }
-            // anti-wrapping: the signature must reference the signed element by its own ID
-            boolean coversSignedElement = signatureCoversOwnId(signed);
-            result.check("signatureCoversSignedElement", coversSignedElement);
-            if (!coversSignedElement) {
-                result.error("Signature does not cover the signed element by its ID (possible signature wrapping)");
-                return result.fail();
-            }
 
-            // --- the cryptographically-covered assertion; claims are read ONLY from here ---
-            Element assertion = verifiedAssertion(signed, result);
-            if (assertion == null) {
-                return result.fail();
-            }
+            // --- claims, read only from the covered assertion ---
 
             Element subject = onlyChild(assertion, "Subject", result);
             if (subject == null) {
@@ -180,11 +252,34 @@ public class SamlCredentialVerifier {
             // omitted or have a value of urn:oasis:names:tc:SAML:2.0:nameid-format:entity" — an Issuer
             // in any other format is not naming an entity at all (R-20).
             String issuerFormat = attr(issuer, "Format");
-            boolean issuerWellFormed = isAbsoluteUri(issuerValue)
-                    && (issuerFormat == null || ENTITY_FORMAT.equals(issuerFormat.trim()));
+            boolean issuerWellFormed = isAbsoluteUri(issuerValue) && isEntityFormat(issuerFormat);
             result.check("issuerWellFormed", issuerWellFormed);
             if (!issuerWellFormed) {
                 result.error("The assertion's <Issuer> is not an entity URI");
+                return result.fail();
+            }
+            // SAML Profiles §4.1.4.2: a Response's <Issuer> "MAY be omitted, but if present it MUST
+            // contain the unique identifier of the issuing identity provider" — the one the assertion
+            // names. A Response from one IdP around another's assertion used to verify (R-22).
+            if (response != null) {
+                Element responseIssuer = firstChild(response, NS, "Issuer");
+                boolean issuersMatch = responseIssuer == null
+                        || (issuerValue.equals(responseIssuer.getTextContent().trim())
+                            && isEntityFormat(attr(responseIssuer, "Format")));
+                result.check("issuersMatch", issuersMatch);
+                if (!issuersMatch) {
+                    result.error("The Response's <Issuer> is not the assertion's");
+                    return result.fail();
+                }
+            }
+
+            // IssueInstant is required on both (SAML Core §2.3.3, §3.2.2), and one in the future was not
+            // written by a clock keeping time: an IssueInstant in 2099 used to verify (R-22).
+            boolean issueInstantValid = notInFuture(attr(assertion, "IssueInstant"))
+                    && (response == null || notInFuture(attr(response, "IssueInstant")));
+            result.check("issueInstantValid", issueInstantValid);
+            if (!issueInstantValid) {
+                result.error("IssueInstant is missing, unreadable, or in the future");
                 return result.fail();
             }
 
@@ -335,58 +430,23 @@ public class SamlCredentialVerifier {
         return code != null && STATUS_SUCCESS.equals(code.getAttribute("Value"));
     }
 
-    /** The single assertion inside a signed Response, or the signed Assertion itself. */
-    private static Element verifiedAssertion(Element signed, SamlVerificationResult result) {
-        String localName = signed.getLocalName();
-        if ("Assertion".equals(localName) && NS.equals(signed.getNamespaceURI())) {
-            return signed;
-        }
-        if ("Response".equals(localName)) {
-            List<Element> assertions = children(signed, NS, "Assertion");
-            if (assertions.size() != 1) {
-                result.check("singleAssertion", false);
-                result.error("A signed Response must contain exactly one Assertion, found " + assertions.size());
-                return null;
-            }
-            return assertions.get(0);
-        }
-        result.error("Signed element is neither a SAML Response nor a SAML Assertion");
-        return null;
+    private static boolean isElement(Element element, String ns, String local) {
+        return element != null && local.equals(element.getLocalName()) && ns.equals(element.getNamespaceURI());
     }
 
-    /** True iff the {@code ds:Signature} child of {@code signed} references {@code signed}'s own ID. */
-    private static boolean signatureCoversOwnId(Element signed) {
-        String id = signed.getAttribute("ID");
-        if (id == null || id.isEmpty()) {
-            return false;
-        }
-        Element signature = firstChild(signed, XMLDSIG_NS, "Signature");
-        Element signedInfo = signature == null ? null : firstChild(signature, XMLDSIG_NS, "SignedInfo");
-        if (signedInfo == null) {
-            return false;
-        }
-        for (Element reference : children(signedInfo, XMLDSIG_NS, "Reference")) {
-            if (("#" + id).equals(reference.getAttribute("URI"))) {
-                return true;
-            }
-        }
-        return false;
+    /** True iff an Issuer {@code Format} is absent or the entity format (SAML Profiles §4.1.4.2). */
+    private static boolean isEntityFormat(String format) {
+        return format == null || ENTITY_FORMAT.equals(format.trim());
     }
 
-    /** The Response (if it carries a signature) or the first directly-signed Assertion. */
-    private static Element findSignedElement(Document doc) {
-        Element root = doc.getDocumentElement();
-        if (root != null && firstChild(root, XMLDSIG_NS, "Signature") != null) {
-            return root;
+    /** True iff {@code instant} is a readable UTC time no later than now, with the clock skew allowed. */
+    private static boolean notInFuture(String instant) {
+        try {
+            return instant != null
+                    && !Instant.parse(instant).isAfter(Instant.now().plusSeconds(clockSkewSeconds()));
+        } catch (java.time.format.DateTimeParseException unreadable) {
+            return false;
         }
-        NodeList assertions = doc.getElementsByTagNameNS(NS, "Assertion");
-        for (int i = 0; i < assertions.getLength(); i++) {
-            Element a = (Element) assertions.item(i);
-            if (firstChild(a, XMLDSIG_NS, "Signature") != null) {
-                return a;
-            }
-        }
-        return null;
     }
 
     /**

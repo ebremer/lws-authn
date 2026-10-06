@@ -74,7 +74,8 @@ Not a claim of completeness — context, so a report can say something new. Each
   addresses connected to; redirects disabled independently of Keycloak's setting
 - responses carry no upstream status codes, resolved addresses or exception text — only a `traceId`
 - private key material refused rather than trimmed before publication
-- SAML: XSW-resistant navigation, DTDs disallowed, `<Status>`, certificate validity and bearer
-  `<SubjectConfirmationData>` all checked
+- SAML: XSW-resistant navigation, SAML Core §5.4's signature profile (one reference, no
+  content-excluding transforms, SHA-2, RSA-2048 / P-256 keys), DTDs disallowed, `<Status>`,
+  `<Conditions>`, certificate validity and bearer `<SubjectConfirmationData>` all checked
 - algorithm pinned to the published key on every suite; `alg: none` and unknown `crit` refused
 - JSON-LD contexts resolved from copies bundled in the JAR, never fetched

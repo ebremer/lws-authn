@@ -192,16 +192,28 @@ key material is refused outright and logged, never trimmed and published. Every 
 ## SAML 2.0 suite
 
 **Enforced.** The IdP certificate's own validity window (`certificateValid`; overridable only by an
-explicit `allowExpiredCertificate`, for offline analysis, never a live decision).
-`<samlp:Status>` must be Success (`statusSuccess`). A signature must be present and valid
-(`signaturePresent`, `signatureValid`) and must **reference the signed element by its own `ID`**
-(`signatureCoversSignedElement`); a signed Response must contain exactly one assertion
-(`singleAssertion`). Claims are read **only from the cryptographically covered assertion**, located by
-precise direct-child navigation rather than a document-wide search an injected element could win — the
-signature-wrapping (XSW) defence. The `<NameID>` must be an absolute URI (`subjectIsUri`; core §4.1:
+explicit `allowExpiredCertificate`, for offline analysis, never a live decision), and its key: RSA of at
+least 2048 bits or EC on at least P-256 (`certificateKeyStrong`). The document is a Response holding
+exactly one assertion (`singleAssertion`), or an assertion, of SAML version 2.0 (`versionSupported`;
+SAML Core §4.1.2: a relying party "MUST NOT process any assertion with a major assertion version number
+not supported"). `<samlp:Status>` must be Success (`statusSuccess`).
+
+**Signatures follow SAML Core §5.4**, and are validated with the JDK's XML Digital Signature API
+against the trusted key alone — `<ds:KeyInfo>` is never consulted. Every `<ds:Signature>` directly
+within the Response or the assertion is checked — Profiles §4.1.4.3: "Verify any signatures present" —
+and at least one must be there (`signaturePresent`). Each has **a single `<ds:Reference>`, to the
+signed element's own `ID`** (`signatureCoversSignedElement`; §5.4.2), only the enveloped-signature and
+exclusive-canonicalization transforms (§5.4.4: a verifier allowing others "MUST ensure that no content
+of the SAML message is excluded from the signature" — this one allows none), RSA (PKCS#1 v1.5 or PSS)
+or ECDSA with SHA-2, and SHA-2 digests (`signatureAlgorithmsAllowed`); all of that is checked before any
+cryptography. Then each validates (`signatureValid`). Claims are read **only from the one assertion**,
+located by precise direct-child navigation rather than a document-wide search an injected element could
+win — the signature-wrapping (XSW) defence. The `<NameID>` must be an absolute URI (`subjectIsUri`; core §4.1:
 the subject "MUST be a URI") — a username, an email address or an opaque handle is refused — and its
 `Format` is reported as `subjectFormat`. `<Issuer>` is required (`issuerPresent`), must be an absolute
-URI and, per SAML Profiles §4.1.4.2, carry no `Format` or the `entity` one (`issuerWellFormed`). The bearer
+URI and, per SAML Profiles §4.1.4.2, carry no `Format` or the `entity` one (`issuerWellFormed`); a
+Response's `<Issuer>`, if it has one, must be the same (`issuersMatch`). `IssueInstant` on both must be
+readable and not in the future, beyond the clock skew (`issueInstantValid`). The bearer
 `<SubjectConfirmationData>` is checked for method, `Recipient` and `NotOnOrAfter`
 (`bearerSubjectConfirmation`, `recipientPresent`, `subjectConfirmationWithinWindow`). One
 `<Conditions>`, holding only conditions the verifier understands — `<AudienceRestriction>`s of

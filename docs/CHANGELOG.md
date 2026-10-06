@@ -252,6 +252,21 @@ realm under the default `bearer` access mode, before any signature is checked.
   and a second `<Conditions>`, which used to be ignored, now fail `conditionsUnderstood`: §2.5.1.1 makes
   such an assertion Indeterminate, which "MUST be rejected". A `<OneTimeUse>` assertion still verifies,
   and the result says `oneTimeUse: true`.
+- **SAML signatures follow SAML Core §5.4** (R-22), which the suite says they "MUST be validated as
+  described in". Keycloak's `AssertionUtil.isSignatureValid`, which the verifier called, validates an
+  XML signature but not §5's profile of it: a signature with two references verified, and so did one
+  whose XPath transform left `<Subject>` out of what was signed — after which the `NameID` was changed
+  to someone else's and the result said `valid: true` for them. The verifier now checks each signature
+  itself with the JDK's XML Digital Signature API: a single reference to the signed element's `ID`
+  (`signatureCoversSignedElement`), only the enveloped-signature and exclusive-canonicalization
+  transforms, and RSA or ECDSA with SHA-2 and SHA-2 digests (`signatureAlgorithmsAllowed`) — so
+  `rsa-sha1` and SHA-1 digests are refused whatever the JVM's XML-DSig policy allows — and an IdP key
+  of at least RSA-2048 or P-256 (`certificateKeyStrong`). **Every** signature present is validated: with
+  the Response signed, an assertion signature by some other key was not read at all. Also refused now:
+  a `Version` other than `2.0` (`versionSupported`), an `IssueInstant` in the future
+  (`issueInstantValid`), a Response `<Issuer>` other than its assertion's (`issuersMatch`), and **a
+  Response holding more than one assertion** whether or not the Response is signed (`singleAssertion`) —
+  an unsigned Response with a forged assertion beside the signed one used to verify as the signed one.
 - **An `iat` in the future, or after `exp`, is refused** in both JWT suites (new check
   `issuedAtConsistent`; the clock skew allowance applies). A credential "issued" ten years from now used
   to pass.
