@@ -5,6 +5,26 @@
  */
 package com.ebremer.lws.authn.saml.verify;
 
+import static com.ebremer.lws.authn.saml.verify.SamlFixtures.ALICE;
+import static com.ebremer.lws.authn.saml.verify.SamlFixtures.AUDIENCE;
+import static com.ebremer.lws.authn.saml.verify.SamlFixtures.NS;
+import static com.ebremer.lws.authn.saml.verify.SamlFixtures.STATUS_SUCCESS;
+import static com.ebremer.lws.authn.saml.verify.SamlFixtures.assertionOf;
+import static com.ebremer.lws.authn.saml.verify.SamlFixtures.certificate;
+import static com.ebremer.lws.authn.saml.verify.SamlFixtures.ecP256;
+import static com.ebremer.lws.authn.saml.verify.SamlFixtures.injectForgedAssertion;
+import static com.ebremer.lws.authn.saml.verify.SamlFixtures.iso;
+import static com.ebremer.lws.authn.saml.verify.SamlFixtures.parse;
+import static com.ebremer.lws.authn.saml.verify.SamlFixtures.responseTemplate;
+import static com.ebremer.lws.authn.saml.verify.SamlFixtures.responseTemplateNoExpiry;
+import static com.ebremer.lws.authn.saml.verify.SamlFixtures.rsa;
+import static com.ebremer.lws.authn.saml.verify.SamlFixtures.selfSigned;
+import static com.ebremer.lws.authn.saml.verify.SamlFixtures.serialize;
+import static com.ebremer.lws.authn.saml.verify.SamlFixtures.sign;
+import static com.ebremer.lws.authn.saml.verify.SamlFixtures.signAssertion;
+import static com.ebremer.lws.authn.saml.verify.SamlFixtures.standardTransforms;
+import static com.ebremer.lws.authn.saml.verify.SamlFixtures.status;
+import static com.ebremer.lws.authn.saml.verify.SamlFixtures.withSubjectConfirmationExpiry;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -12,20 +32,12 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.ByteArrayInputStream;
-import java.io.StringWriter;
-import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
-import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
-import java.security.spec.ECGenParameterSpec;
-import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Base64;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -33,26 +45,13 @@ import java.util.stream.Stream;
 
 import javax.xml.crypto.dsig.CanonicalizationMethod;
 import javax.xml.crypto.dsig.DigestMethod;
-import javax.xml.crypto.dsig.Reference;
 import javax.xml.crypto.dsig.SignatureMethod;
-import javax.xml.crypto.dsig.SignedInfo;
 import javax.xml.crypto.dsig.Transform;
 import javax.xml.crypto.dsig.XMLSignatureFactory;
-import javax.xml.crypto.dsig.dom.DOMSignContext;
 import javax.xml.crypto.dsig.spec.C14NMethodParameterSpec;
 import javax.xml.crypto.dsig.spec.TransformParameterSpec;
 import javax.xml.crypto.dsig.spec.XPathFilterParameterSpec;
-import javax.xml.parsers.DocumentBuilderFactory;
-import javax.xml.transform.Transformer;
-import javax.xml.transform.TransformerFactory;
-import javax.xml.transform.dom.DOMSource;
-import javax.xml.transform.stream.StreamResult;
 
-import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
-import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
-import org.bouncycastle.operator.ContentSigner;
-import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
-import org.bouncycastle.asn1.x500.X500Name;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
@@ -63,13 +62,8 @@ import org.w3c.dom.Element;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class SamlVerifierTest {
 
-    private static final String NS = "urn:oasis:names:tc:SAML:2.0:assertion";
-    private static final String AUDIENCE = "https://app.example/SAML";
-    /** LWS core §4.1: a subject "MUST be a URI" (R-20). These used to be bare names. */
-    private static final String ALICE = "https://id.example/alice";
     private static final String ATTACKER = "https://id.example/attacker";
     private static final String Q = "\"";
-    private static final String STATUS_SUCCESS = "urn:oasis:names:tc:SAML:2.0:status:Success";
     private static final String STATUS_RESPONDER = "urn:oasis:names:tc:SAML:2.0:status:Responder";
 
     private KeyPair idpKeyPair;
@@ -368,37 +362,6 @@ class SamlVerifierTest {
     // ------------------------------------------------- SAML Core §5 signature processing (R-22)
 
     private static final String VICTIM = "https://id.example/victim";
-
-    private static Element assertionOf(Document doc) {
-        return (Element) doc.getElementsByTagNameNS(NS, "Assertion").item(0);
-    }
-
-    /** The transforms an IdP uses: enveloped signature, then exclusive canonicalization. */
-    private static List<Transform> standardTransforms() throws Exception {
-        XMLSignatureFactory fac = XMLSignatureFactory.getInstance("DOM");
-        return List.of(fac.newTransform(Transform.ENVELOPED, (TransformParameterSpec) null),
-                fac.newTransform(CanonicalizationMethod.EXCLUSIVE, (C14NMethodParameterSpec) null));
-    }
-
-    /**
-     * Signs {@code target} with an enveloped signature: one reference to its ID with the given digest and
-     * transforms, plus {@code extraWholeDocumentReferences} references to the whole document.
-     */
-    private static void sign(Element target, PrivateKey key, String method, String digest,
-                             List<Transform> transforms, int extraWholeDocumentReferences) throws Exception {
-        target.setIdAttribute("ID", true);
-        XMLSignatureFactory fac = XMLSignatureFactory.getInstance("DOM");
-        List<Reference> references = new ArrayList<>();
-        references.add(fac.newReference("#" + target.getAttribute("ID"), fac.newDigestMethod(digest, null),
-                transforms, null, null));
-        for (int i = 0; i < extraWholeDocumentReferences; i++) {
-            references.add(fac.newReference("", fac.newDigestMethod(digest, null), standardTransforms(), null, null));
-        }
-        SignedInfo si = fac.newSignedInfo(
-                fac.newCanonicalizationMethod(CanonicalizationMethod.EXCLUSIVE, (C14NMethodParameterSpec) null),
-                fac.newSignatureMethod(method, null), references);
-        fac.newXMLSignature(si, null).sign(new DOMSignContext(key, target));
-    }
 
     private SamlVerificationResult verifySigned(Document doc) throws Exception {
         return new SamlCredentialVerifier().verify(serialize(doc), idpCert, AUDIENCE);
@@ -802,15 +765,6 @@ class SamlVerifierTest {
                 "the parser exception must not be reflected back to the caller");
     }
 
-    /** Rewrites the SubjectConfirmationData NotOnOrAfter in a response template. */
-    private static String withSubjectConfirmationExpiry(String xml, String notOnOrAfter) {
-        int start = xml.indexOf("<saml:SubjectConfirmationData");
-        int end = xml.indexOf("/>", start);
-        String replacement = "<saml:SubjectConfirmationData Recipient=" + '"' + AUDIENCE + '"'
-                + " NotOnOrAfter=" + '"' + notOnOrAfter + '"';
-        return xml.substring(0, start) + replacement + xml.substring(end);
-    }
-
     // --------------------------------------------------------------------------- SAML construction
 
     private String signedResponse(String nameId) throws Exception {
@@ -819,124 +773,4 @@ class SamlVerifierTest {
         return serialize(doc);
     }
 
-    private static String responseTemplate(String nameId) {
-        String now = iso(0), nb = iso(-60), exp = iso(3600);
-        return "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"" + NS
-                + "\" ID=\"r1\" Version=\"2.0\" IssueInstant=\"" + now + "\">"
-                + "<saml:Issuer>https://idp.example</saml:Issuer>"
-                + status(STATUS_SUCCESS)
-                + "<saml:Assertion ID=\"a1\" Version=\"2.0\" IssueInstant=\"" + now + "\">"
-                + "<saml:Issuer>https://idp.example</saml:Issuer>"
-                + "<saml:Subject><saml:NameID Format=\"urn:oasis:names:tc:SAML:2.0:nameid-format:persistent\">"
-                + nameId + "</saml:NameID>"
-                + "<saml:SubjectConfirmation Method=\"urn:oasis:names:tc:SAML:2.0:cm:bearer\">"
-                + "<saml:SubjectConfirmationData Recipient=\"" + AUDIENCE + "\" NotOnOrAfter=\"" + exp + "\"/>"
-                + "</saml:SubjectConfirmation></saml:Subject>"
-                + "<saml:Conditions NotBefore=\"" + nb + "\" NotOnOrAfter=\"" + exp + "\">"
-                + "<saml:AudienceRestriction><saml:Audience>" + AUDIENCE + "</saml:Audience></saml:AudienceRestriction>"
-                + "</saml:Conditions>"
-                + "<saml:AuthnStatement AuthnInstant=\"" + now + "\"><saml:AuthnContext>"
-                + "<saml:AuthnContextClassRef>urn:oasis:names:tc:SAML:2.0:ac:classes:unspecified</saml:AuthnContextClassRef>"
-                + "</saml:AuthnContext></saml:AuthnStatement>"
-                + "</saml:Assertion></samlp:Response>";
-    }
-
-    /** Like {@link #responseTemplate} but the assertion's {@code <Conditions>} has no NotOnOrAfter. */
-    private static String responseTemplateNoExpiry(String nameId) {
-        String now = iso(0), nb = iso(-60), exp = iso(3600);
-        return "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"" + NS
-                + "\" ID=\"r1\" Version=\"2.0\" IssueInstant=\"" + now + "\">"
-                + "<saml:Issuer>https://idp.example</saml:Issuer>"
-                + status(STATUS_SUCCESS)
-                + "<saml:Assertion ID=\"a1\" Version=\"2.0\" IssueInstant=\"" + now + "\">"
-                + "<saml:Issuer>https://idp.example</saml:Issuer>"
-                + "<saml:Subject><saml:NameID Format=\"urn:oasis:names:tc:SAML:2.0:nameid-format:persistent\">"
-                + nameId + "</saml:NameID>"
-                + "<saml:SubjectConfirmation Method=\"urn:oasis:names:tc:SAML:2.0:cm:bearer\">"
-                + "<saml:SubjectConfirmationData Recipient=\"" + AUDIENCE + "\" NotOnOrAfter=\"" + exp + "\"/>"
-                + "</saml:SubjectConfirmation></saml:Subject>"
-                + "<saml:Conditions NotBefore=\"" + nb + "\">" // no NotOnOrAfter -> unbounded
-                + "<saml:AudienceRestriction><saml:Audience>" + AUDIENCE + "</saml:Audience></saml:AudienceRestriction>"
-                + "</saml:Conditions>"
-                + "</saml:Assertion></samlp:Response>";
-    }
-
-    private static void signAssertion(Document doc, PrivateKey key) throws Exception {
-        Element assertion = (Element) doc.getElementsByTagNameNS(NS, "Assertion").item(0);
-        assertion.setIdAttribute("ID", true);
-        XMLSignatureFactory fac = XMLSignatureFactory.getInstance("DOM");
-        Reference ref = fac.newReference("#" + assertion.getAttribute("ID"),
-                fac.newDigestMethod(DigestMethod.SHA256, null),
-                List.of(fac.newTransform(Transform.ENVELOPED, (TransformParameterSpec) null),
-                        fac.newTransform(CanonicalizationMethod.EXCLUSIVE, (C14NMethodParameterSpec) null)),
-                null, null);
-        SignedInfo si = fac.newSignedInfo(
-                fac.newCanonicalizationMethod(CanonicalizationMethod.EXCLUSIVE, (C14NMethodParameterSpec) null),
-                fac.newSignatureMethod(SignatureMethod.RSA_SHA256, null), List.of(ref));
-        fac.newXMLSignature(si, null).sign(new DOMSignContext(key, assertion));
-    }
-
-    private static void injectForgedAssertion(Document doc, String nameId) throws Exception {
-        Document forged = parse("<saml:Assertion xmlns:saml=\"" + NS + "\" ID=\"a2\" Version=\"2.0\" IssueInstant=\""
-                + iso(0) + "\"><saml:Issuer>https://idp.example</saml:Issuer>"
-                + "<saml:Subject><saml:NameID>" + nameId + "</saml:NameID></saml:Subject>"
-                + "<saml:Conditions NotBefore=\"" + iso(-60) + "\" NotOnOrAfter=\"" + iso(3600) + "\">"
-                + "<saml:AudienceRestriction><saml:Audience>" + AUDIENCE + "</saml:Audience></saml:AudienceRestriction>"
-                + "</saml:Conditions></saml:Assertion>");
-        Element node = (Element) doc.importNode(forged.getDocumentElement(), true);
-        Element response = doc.getDocumentElement();
-        response.insertBefore(node, response.getFirstChild());
-    }
-
-    // ---------------------------------------------------------------------------------- utilities
-
-    private static String status(String code) {
-        return "<samlp:Status><samlp:StatusCode Value=\"" + code + "\"/></samlp:Status>";
-    }
-
-    private static String iso(long offsetSec) {
-        return Instant.now().plusSeconds(offsetSec).truncatedTo(ChronoUnit.SECONDS).toString();
-    }
-
-    private static Document parse(String xml) throws Exception {
-        DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
-        dbf.setNamespaceAware(true);
-        return dbf.newDocumentBuilder().parse(new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
-    }
-
-    private static String serialize(Document doc) throws Exception {
-        Transformer t = TransformerFactory.newInstance().newTransformer();
-        StringWriter sw = new StringWriter();
-        t.transform(new DOMSource(doc), new StreamResult(sw));
-        return sw.toString();
-    }
-
-    private static KeyPair rsa() throws Exception {
-        KeyPairGenerator g = KeyPairGenerator.getInstance("RSA");
-        g.initialize(2048);
-        return g.generateKeyPair();
-    }
-
-    private static KeyPair ecP256() throws Exception {
-        KeyPairGenerator g = KeyPairGenerator.getInstance("EC");
-        g.initialize(new ECGenParameterSpec("secp256r1"));
-        return g.generateKeyPair();
-    }
-
-    private static X509Certificate selfSigned(KeyPair kp) throws Exception {
-        return certificate(kp, -1000L, 86_400_000L);
-    }
-
-    /** A self-signed certificate whose validity window is offset from now by the given milliseconds. */
-    private static X509Certificate certificate(KeyPair kp, long notBeforeOffset, long notAfterOffset)
-            throws Exception {
-        long now = System.currentTimeMillis();
-        X500Name dn = new X500Name("CN=test-idp");
-        ContentSigner signer = new JcaContentSignerBuilder(
-                "EC".equals(kp.getPublic().getAlgorithm()) ? "SHA256withECDSA" : "SHA256withRSA").build(kp.getPrivate());
-        return new JcaX509CertificateConverter().getCertificate(
-                new JcaX509v3CertificateBuilder(dn, BigInteger.valueOf(now),
-                        new Date(now + notBeforeOffset), new Date(now + notAfterOffset),
-                        dn, kp.getPublic()).build(signer));
-    }
 }
