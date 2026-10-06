@@ -132,6 +132,10 @@ public class LWSResourceProvider implements RealmResourceProvider {
         if (token == null || token.isBlank()) {
             return JsonResponses.badRequest("missing 'credential' form parameter or Bearer token");
         }
+        Response oversized = VerifyAccess.refuseOversized(token);
+        if (oversized != null) {
+            return oversized;
+        }
 
         VerificationResult result = new LWSCredentialVerifier(session)
                 .verify(token, expectedClientId, settings.audienceFor(expectedAudience));

@@ -86,4 +86,12 @@ class VerifyAccessTest {
             }
         }
     }
+
+    /** R-09. A credential is a few kilobytes; one far longer is only work for the parsers. */
+    @Test
+    void refusesAnOversizedCredential() {
+        assertNull(VerifyAccess.refuseOversized("x".repeat(VerifyAccess.MAX_CREDENTIAL_LENGTH)));
+        assertNull(VerifyAccess.refuseOversized(null));
+        assertEquals(400, VerifyAccess.refuseOversized("x".repeat(VerifyAccess.MAX_CREDENTIAL_LENGTH + 1)).getStatus());
+    }
 }

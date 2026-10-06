@@ -255,6 +255,12 @@ public class SamlCredentialVerifier {
             log.debugf(e, "[%s] LWS SAML credential verification failed", result.getTraceId());
             result.error("Credential could not be validated");
             return result.fail();
+        } catch (StackOverflowError tooDeep) {
+            // A last resort: MAX_ELEMENT_DEPTH should stop any document deep enough to get here (R-09).
+            // The stack has unwound by now, and nothing the verifier holds outlives the call.
+            log.debugf("[%s] LWS SAML credential verification overflowed the stack", result.getTraceId());
+            result.error("Credential could not be validated");
+            return result.fail();
         }
         return result;
     }
@@ -334,7 +340,19 @@ public class SamlCredentialVerifier {
         return null;
     }
 
-    /** Parses the XML with DTDs disallowed and external entities disabled (XXE-safe). */
+    /**
+     * How deep elements may nest in a credential. A SAML Response nests about ten deep; this is the limit
+     * JDK 25 applies by default. JDK 21's default is none, and on it fifty thousand nested elements in a
+     * signed assertion's {@code <Advice>} — 350 KB — overflowed the stack inside the signature check, before
+     * the signature was even looked at (R-09). Set here so it holds whatever the JDK or the
+     * {@code jdk.xml.maxElementDepth} system property says.
+     */
+    static final int MAX_ELEMENT_DEPTH = 100;
+
+    /**
+     * Parses the XML with DTDs disallowed and external entities disabled (XXE-safe), and elements nested
+     * no deeper than {@link #MAX_ELEMENT_DEPTH}.
+     */
     private static Document parseSecurely(byte[] xml) throws Exception {
         DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
         dbf.setNamespaceAware(true);
@@ -344,6 +362,8 @@ public class SamlCredentialVerifier {
         dbf.setFeature("http://xml.org/sax/features/external-general-entities", false);
         dbf.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
         dbf.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+        dbf.setAttribute("http://www.oracle.com/xml/jaxp/properties/maxElementDepth",
+                String.valueOf(MAX_ELEMENT_DEPTH));
         DocumentBuilder builder = dbf.newDocumentBuilder();
         return builder.parse(new ByteArrayInputStream(xml));
     }

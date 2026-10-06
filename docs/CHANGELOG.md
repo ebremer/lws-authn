@@ -112,6 +112,14 @@ realm under the default `bearer` access mode, before any signature is checked.
   `::127.0.0.1`, SIIT, 6to4, Teredo, the benchmarking, documentation and reserved IPv4 ranges. IPv6 is
   now allowed only within global unicast less the IANA special-purpose blocks, an embedded IPv4 address
   is judged by itself, and IPv4 follows the IANA IPv4 special-purpose registry.
+- **Deep nesting is refused rather than overflowing the stack** (R-09). The Turtle parser and the
+  JSON-LD processor recurse once per level: five thousand nested Turtle blank nodes (120 KB) or five
+  hundred nested JSON-LD contexts overflowed the stack, and the `StackOverflowError` escaped every
+  handler as a `500` with a stack trace in the log. On Java 21, whose XML parser sets no depth limit by
+  default, so did fifty thousand nested elements inside a signed SAML assertion, in the signature check.
+  A fetched Turtle or JSON-LD document may now nest 64 levels, counted before parsing; the SAML parser
+  sets its own limit of 100; each catches a `StackOverflowError` as a last resort. A `credential` over
+  256 KiB is refused with a `400`.
 
 ### Added
 

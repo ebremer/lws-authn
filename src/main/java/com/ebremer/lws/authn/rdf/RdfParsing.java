@@ -75,6 +75,25 @@ public final class RdfParsing {
         }
     }
 
+    /**
+     * How deep a dereferenced document may nest: blank nodes and collections in Turtle, objects and
+     * arrays in JSON-LD. A controlled identifier document nests a handful of levels.
+     *
+     * <p>Jena's Turtle parser and the JSON-LD processor recurse once per level, and nothing bounded
+     * that: five thousand levels of Turtle {@code [ … ]} — 120&nbsp;KB, under the response cap — and five
+     * hundred nested JSON-LD {@code @context}s overflowed the stack before any signature was checked,
+     * and the {@link StackOverflowError} escaped every handler as a {@code 500} (R-09). RDF/XML is read
+     * without recursion, and N-Triples cannot nest.</p>
+     */
+    public static final int MAX_NESTING_DEPTH = 64;
+
+    /** Thrown when a dereferenced document nests deeper than {@link #MAX_NESTING_DEPTH}. */
+    public static final class TooDeeplyNestedException extends RuntimeException {
+        TooDeeplyNestedException() {
+            super("the document nests deeper than " + MAX_NESTING_DEPTH + " levels");
+        }
+    }
+
     /** The bare {@code type/subtype} of a {@code Content-Type}, lower-cased; {@code null} if absent. */
     private static String mediaType(String contentType) {
         if (contentType == null) {
@@ -138,8 +157,15 @@ public final class RdfParsing {
                 throw new UnsupportedSyntaxException(ct);
             }
         }
+        if (lang == Lang.TURTLE) {
+            requireShallow(body, false);
+        }
         Model model = ModelFactory.createDefaultModel();
-        RDFDataMgr.read(model, new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)), base, lang);
+        try {
+            RDFDataMgr.read(model, new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)), base, lang);
+        } catch (StackOverflowError tooDeep) {
+            throw new TooDeeplyNestedException(); // a backstop; requireShallow should have refused it
+        }
         return model;
     }
 
@@ -157,10 +183,12 @@ public final class RdfParsing {
      * JSON-LD processor left to itself would fetch every {@code @context} URL the document names, which
      * would be an unvetted outbound fetch during verification.</p>
      *
+     * @throws TooDeeplyNestedException if the document nests deeper than {@link #MAX_NESTING_DEPTH}
      * @throws RuntimeException if the document is not valid JSON-LD, or names a context this provider
      *                          does not bundle
      */
     public static Model parseJsonLd(String body, String base) {
+        requireShallow(body, true);
         JsonLdOptions options = new JsonLdOptions();
         options.setDocumentLoader(LocalJsonLdContexts.INSTANCE);
 
@@ -168,13 +196,82 @@ public final class RdfParsing {
         context.set(TitaniumJsonLdOptions.JSONLD_OPTIONS, options);
 
         Model model = ModelFactory.createDefaultModel();
-        RDFParser.create()
-                .source(new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)))
-                .base(base)
-                .lang(Lang.JSONLD11)
-                .context(context)
-                .parse(model);
+        try {
+            RDFParser.create()
+                    .source(new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)))
+                    .base(base)
+                    .lang(Lang.JSONLD11)
+                    .context(context)
+                    .parse(model);
+        } catch (StackOverflowError tooDeep) {
+            throw new TooDeeplyNestedException(); // a backstop; requireShallow should have refused it
+        }
         return model;
+    }
+
+    /**
+     * Refuses a document that nests deeper than {@link #MAX_NESTING_DEPTH}, in one pass and without
+     * recursion. Brackets are counted outside strings — and, in Turtle, outside IRIs and comments and
+     * after a backslash — so the count can only overstate the depth of a malformed document, which the
+     * parser would refuse anyway.
+     *
+     * @param json JSON (counting {@code {} and {@code [}) rather than Turtle ({@code [} and {@code (})
+     * @throws TooDeeplyNestedException if it does
+     */
+    static void requireShallow(String body, boolean json) {
+        int depth = 0;
+        int n = body.length();
+        for (int i = 0; i < n; i++) {
+            char c = body.charAt(i);
+            switch (c) {
+                case '{', '[', '(' -> {
+                    if (++depth > MAX_NESTING_DEPTH) {
+                        throw new TooDeeplyNestedException();
+                    }
+                }
+                case '}', ']', ')' -> depth = Math.max(0, depth - 1);
+                case '"' -> i = endOfString(body, i, '"');
+                case '\\' -> i++; // Turtle: an escaped character in a prefixed name
+                case '\'' -> {
+                    if (!json) {
+                        i = endOfString(body, i, '\'');
+                    }
+                }
+                case '<' -> {
+                    if (!json) {
+                        int close = body.indexOf('>', i + 1);
+                        i = close < 0 ? n : close;
+                    }
+                }
+                case '#' -> {
+                    if (!json) {
+                        while (i + 1 < n && body.charAt(i + 1) != '\n' && body.charAt(i + 1) != '\r') {
+                            i++;
+                        }
+                    }
+                }
+                default -> { }
+            }
+        }
+    }
+
+    /**
+     * The index of the quote that closes the string opening at {@code start}, or the end of the body if
+     * none does. A tripled quote opens a Turtle long string, which only a tripled quote closes.
+     */
+    private static int endOfString(String body, int start, char quote) {
+        int n = body.length();
+        boolean isLong = start + 2 < n && body.charAt(start + 1) == quote && body.charAt(start + 2) == quote;
+        for (int i = start + (isLong ? 3 : 1); i < n; i++) {
+            char c = body.charAt(i);
+            if (c == '\\') {
+                i++;
+            } else if (c == quote && (!isLong || (i + 2 < n && body.charAt(i + 1) == quote
+                    && body.charAt(i + 2) == quote))) {
+                return isLong ? i + 2 : i;
+            }
+        }
+        return n;
     }
 
     /**
@@ -185,6 +282,7 @@ public final class RdfParsing {
      *         provider did for every JSON-LD document before {@link #parseJsonLd} existed
      * @throws UnsupportedSyntaxException if the document declares a content type that is not an RDF
      *                                    syntax this verifier reads
+     * @throws TooDeeplyNestedException   if it nests deeper than {@link #MAX_NESTING_DEPTH}
      */
     public static Model parse(String body, String contentType, String base) {
         // Checked before isJsonLd, whose {-sniff is a fallback for a document that declares no type at
@@ -196,6 +294,8 @@ public final class RdfParsing {
         }
         try {
             return parseJsonLd(body, base);
+        } catch (TooDeeplyNestedException tooDeep) {
+            throw tooDeep; // not a shape to fall back from: the compact reader is no answer to it
         } catch (RuntimeException notProcessable) {
             return null;
         }

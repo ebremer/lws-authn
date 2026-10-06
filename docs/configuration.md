@@ -50,7 +50,7 @@ is in the body:
 | Status | Meaning |
 |---|---|
 | `200` | The request was answered. Read `valid` — `true` or `false`. |
-| `400` | The request could not be read: a missing or unparseable parameter. |
+| `400` | The request could not be read: a missing or unparseable parameter, or a `credential` over 256 KiB (262 144 characters). |
 | `401` / `403` | **You** may not use this endpoint. Carries a `WWW-Authenticate` challenge (RFC 9110 §15.5.2). |
 | `404` | This suite is not enabled on this realm. |
 | `429` | Rate limited; retry shortly. |

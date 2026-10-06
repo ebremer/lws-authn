@@ -159,6 +159,10 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
         if (token == null || token.isBlank()) {
             return JsonResponses.badRequest("missing 'credential' form parameter or Bearer token");
         }
+        Response oversized = VerifyAccess.refuseOversized(token);
+        if (oversized != null) {
+            return oversized;
+        }
 
         SsiCidVerificationResult result =
                 new SelfSignedCidVerifier(session).verify(token, settings.audienceFor(expectedAudience));

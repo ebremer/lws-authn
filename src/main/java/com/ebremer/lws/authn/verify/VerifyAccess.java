@@ -185,6 +185,24 @@ public final class VerifyAccess {
         }
     }
 
+    /**
+     * The longest {@code credential} a verify endpoint reads, in characters: the same as the default cap
+     * on a document the verifiers fetch. An ID Token or a self-issued JWT is a few kilobytes and a signed
+     * SAML Response, base64-encoded, a few dozen; anything longer is only work for the parsers (R-09).
+     */
+    public static final int MAX_CREDENTIAL_LENGTH = 256 * 1024;
+
+    /**
+     * A {@code 400} if {@code credential} is longer than {@link #MAX_CREDENTIAL_LENGTH}, or {@code null}
+     * if it may be verified.
+     */
+    public static Response refuseOversized(String credential) {
+        if (credential != null && credential.length() > MAX_CREDENTIAL_LENGTH) {
+            return JsonResponses.badRequest("'credential' is longer than " + MAX_CREDENTIAL_LENGTH + " characters");
+        }
+        return null;
+    }
+
     /** The bearer value of an {@code Authorization} header, or {@code null} when there is not one. */
     public static String bearerToken(String authorization) {
         if (authorization == null || !authorization.regionMatches(true, 0, BEARER_PREFIX, 0, BEARER_PREFIX.length())) {

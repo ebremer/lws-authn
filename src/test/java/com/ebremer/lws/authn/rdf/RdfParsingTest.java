@@ -5,6 +5,7 @@
  */
 package com.ebremer.lws.authn.rdf;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -197,5 +198,53 @@ class RdfParsingTest {
                 + "<did:service rdf:resource=\"" + SUBJECT + "#op\"/></rdf:Description></rdf:RDF>";
         assertTrue(declaresProvider(RdfParsing.parse(rdfXml, "application/rdf+xml", SUBJECT)));
         assertNotNull(RdfParsing.parse(COMPACT_OPENID, "application/json", SUBJECT));
+    }
+
+    /**
+     * R-09. Jena's Turtle parser recurses once per blank node or collection: 5 000 levels — 120 KB, under
+     * the response cap — overflowed the stack, and the error escaped every handler as a 500.
+     */
+    @Test
+    void refusesTurtleNestedTooDeep() {
+        String bnodes = "<" + SUBJECT + "> <" + SUBJECT + "#p> " + ("[<" + SUBJECT + "#p> ").repeat(5_000)
+                + "1" + "]".repeat(5_000) + " .";
+        assertThrows(RdfParsing.TooDeeplyNestedException.class, () -> RdfParsing.parse(bnodes, "text/turtle", SUBJECT));
+        String lists = "<" + SUBJECT + "> <" + SUBJECT + "#p> " + "(".repeat(5_000) + ")".repeat(5_000) + " .";
+        assertThrows(RdfParsing.TooDeeplyNestedException.class, () -> RdfParsing.parse(lists, null, SUBJECT),
+                "undeclared, and so read as Turtle");
+    }
+
+    /** R-09. The JSON-LD processor recurses per nested context: 500 of them overflowed. */
+    @Test
+    void refusesJsonLdNestedTooDeep() {
+        String contexts = "{\"@context\":{\"p\":\"" + SUBJECT + "#p\"},\"@id\":\"" + SUBJECT + "\",\"p\":"
+                + ("{\"@context\":{\"q\":\"" + SUBJECT + "#q\"},\"q\":").repeat(500) + "1" + "}".repeat(500) + "}";
+        assertThrows(RdfParsing.TooDeeplyNestedException.class,
+                () -> RdfParsing.parse(contexts, "application/ld+json", SUBJECT),
+                "refused, not handed to the compact reader as a shape it might understand");
+        String arrays = "{\"@id\":\"" + SUBJECT + "\",\"x\":" + "[".repeat(100) + "]".repeat(100) + "}";
+        assertThrows(RdfParsing.TooDeeplyNestedException.class, () -> RdfParsing.parse(arrays, "application/json", SUBJECT));
+    }
+
+    /** Up to the limit is fine; brackets inside strings, IRIs and comments are not nesting. */
+    @Test
+    void countsOnlyStructuralNesting() {
+        int depth = RdfParsing.MAX_NESTING_DEPTH;
+        String deepEnough = "<" + SUBJECT + "> <" + SUBJECT + "#p> " + ("[<" + SUBJECT + "#p> ").repeat(depth) + "1"
+                + "]".repeat(depth) + " .";
+        assertEquals(depth + 1, RdfParsing.parse(deepEnough, "text/turtle", SUBJECT).size());
+
+        String brackets = "[(".repeat(100);
+        String turtle = "# " + brackets + "\n"
+                + "<" + SUBJECT + "> <" + SUBJECT + "#p> \"" + brackets + "\\\"" + brackets + "\" ;\n"
+                + "  <" + SUBJECT + "#q> '" + brackets + "' ;\n"
+                + "  <" + SUBJECT + "#r> \"\"\"" + brackets + "\" \"\" " + brackets + "\"\"\" ;\n"
+                + "  <" + SUBJECT + "#s> '''" + brackets + "' '' " + brackets + "''' ;\n"
+                + "  <" + SUBJECT + "#t> <" + SUBJECT + "#" + "[".repeat(100) + "> .";
+        assertEquals(5, assertDoesNotThrow(() -> RdfParsing.parse(turtle, "text/turtle", SUBJECT)).size());
+
+        String json = "{\"@context\":{\"p\":\"" + SUBJECT + "#p\"},\"@id\":\"" + SUBJECT + "\","
+                + "\"p\":\"" + "{[".repeat(100) + "\\\"" + "{[".repeat(100) + "\"}";
+        assertEquals(1, assertDoesNotThrow(() -> RdfParsing.parse(json, "application/ld+json", SUBJECT)).size());
     }
 }

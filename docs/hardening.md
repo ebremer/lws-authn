@@ -50,6 +50,12 @@ behaviours are covered by tests — `mvn test` for the unit tests, `mvn verify` 
   up front when its declared length does, and the connection is aborted rather than read to the end;
   and one caller may have at most `http-max-concurrent-per-caller` (4) fetches in flight, so a single
   caller cannot occupy the connection pool every verifier shares.
+- **Bounded nesting.** Parsers that recurse once per level can be run out of stack by a document that
+  nests deeply enough, and a `StackOverflowError` is not an exception any handler catches. A fetched
+  Turtle or JSON-LD document may nest at most 64 levels (`RdfParsing.MAX_NESTING_DEPTH`), counted in one
+  pass before it is parsed — five thousand levels of Turtle blank nodes, 120 KB, used to overflow; a SAML
+  credential's elements at most 100, set on the verifier's own parser rather than left to the JDK, whose
+  default on Java 21 is no limit. A `credential` longer than 256 KiB is refused with a `400`.
 - **Information disclosure.** A verify response never reflects an upstream status code, a resolved
   address or a raw exception message. Rejections carry a `traceId`; the detail is in the server log at
   `DEBUG` under that id.

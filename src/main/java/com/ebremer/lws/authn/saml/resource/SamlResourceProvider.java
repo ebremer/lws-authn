@@ -95,6 +95,10 @@ public class SamlResourceProvider implements RealmResourceProvider {
         if (credential == null || credential.isBlank()) {
             return JsonResponses.badRequest("missing 'credential' form parameter (the SAML Response)");
         }
+        Response oversized = VerifyAccess.refuseOversized(credential);
+        if (oversized != null) {
+            return oversized;
+        }
         if (certificatePem == null || certificatePem.isBlank()) {
             return JsonResponses.badRequest("missing 'certificate' form parameter "
                     + "(the trusted IdP signing certificate in PEM form; SAML trust is out-of-band)");

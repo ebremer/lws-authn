@@ -108,6 +108,39 @@ class SamlVerifierTest {
         assertTrue(r.isValid(), () -> "the genuine credential should still validate, errors: " + r.getErrors());
     }
 
+    /**
+     * R-09. Fifty thousand nested elements in a signed assertion overflowed the stack inside the
+     * signature check when the XML parser set no depth limit — JDK 21's default — and the
+     * {@link StackOverflowError} escaped every handler as a {@code 500}. The verifier now sets its own
+     * limit rather than relying on the JDK's.
+     */
+    @Test
+    void deeplyNestedElementsAreRefusedNotOverflowed() throws Exception {
+        String previous = System.getProperty("jdk.xml.maxElementDepth");
+        System.setProperty("jdk.xml.maxElementDepth", "0"); // no limit, as on JDK 21
+        try {
+            StringBuilder advice = new StringBuilder("<saml:Advice>");
+            for (int i = 0; i < 50_000; i++) {
+                advice.append("<x>");
+            }
+            for (int i = 0; i < 50_000; i++) {
+                advice.append("</x>");
+            }
+            advice.append("</saml:Advice>");
+            String xml = signedResponse("alice").replaceFirst(
+                    "(<saml:Assertion[^>]*><saml:Issuer>[^<]*</saml:Issuer>)", "$1" + advice);
+            assertTrue(xml.contains("<saml:Advice>"));
+            SamlVerificationResult r = new SamlCredentialVerifier().verify(xml, idpCert, AUDIENCE);
+            assertFalse(r.isValid());
+        } finally {
+            if (previous == null) {
+                System.clearProperty("jdk.xml.maxElementDepth");
+            } else {
+                System.setProperty("jdk.xml.maxElementDepth", previous);
+            }
+        }
+    }
+
     /** XXE: a credential containing a DOCTYPE / external entity must be rejected at parse time. */
     @Test
     void xxeDoctypeRejected() {

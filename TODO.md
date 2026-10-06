@@ -359,7 +359,7 @@ is needed.
   this item's list among them, and one that the neighbours of every block stay reachable; three fail
   against the previous guard.
 
-- [ ] **R-09 · `StackOverflowError` from attacker-controlled nesting escapes every handler.**
+- [x] **R-09 · `StackOverflowError` from attacker-controlled nesting escapes every handler.**
   `Medium` · robustness/DoS · `S` · *demonstrated*
   The verifiers catch `Exception`, not `Error`, so each of these returns a `500` with an ERROR stack
   trace instead of `valid: false`, and skips the breaker bookkeeping:
@@ -373,6 +373,20 @@ is needed.
   **Do:** set `jdk.xml.maxElementDepth` (e.g. 64) on the SAML `DocumentBuilderFactory`; pre-scan RDF and
   JSON for nesting depth; cap DID length and use possessive quantifiers or a hand scanner; cap the
   `credential` form parameter's length; catch `StackOverflowError` around parsing as a last resort.
+  **Done.** Re-probed first, on JDK 25 and with `jdk.xml.maxElementDepth=0` to stand in for JDK 21:
+  Turtle overflows at 5 000 levels of `[` or `(`; JSON-LD at 500 nested `@context`s (plain nested
+  objects and arrays did not, and the compact JSON path stops at Jackson's own depth limit of 1 000);
+  RDF/XML does not overflow at 50 000 even with no JDK limit, so it needs no scan; a JWT payload is
+  bounded by Jackson. Fixes: `RdfParsing.requireShallow` counts brackets outside strings, IRIs and
+  comments in one pass and refuses Turtle and JSON-LD deeper than `MAX_NESTING_DEPTH` (64) with
+  `TooDeeplyNestedException`, which `parse` does not turn into a fall-back to the compact reader; both
+  parsers also catch `StackOverflowError` as a backstop. `SamlCredentialVerifier` sets
+  `maxElementDepth` to 100 on its own `DocumentBuilderFactory` — JDK 25's default, whatever the JDK or
+  the system property says — and catches `StackOverflowError` as a backstop; the depth limit alone stops
+  the overflow (checked by removing the catch). `VerifyAccess.refuseOversized` caps `credential` at
+  256 KiB in all three endpoints with a `400`. Tests: `SamlVerifierTest.deeplyNestedElementsAreRefusedNotOverflowed`
+  (sets the system property to `0`; overflowed before), three in `RdfParsingTest` (Turtle, JSON-LD,
+  and brackets in strings, IRIs and comments that must not count), one in `VerifyAccessTest`.
 
 - [ ] **R-10 · The rate-limit key is spoofable behind the documented reverse proxy.**
   `Medium` · security/docs · `S` · *plausible (Quarkus forwarded-header parsing not run)*
