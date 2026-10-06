@@ -246,7 +246,7 @@ is needed.
   `VerificationMethodRulesTest`), each confirmed to fail against the previous code — one by taking
   22 s. Not done: an overall work budget per verification; the caps make it unnecessary for now.
 
-- [ ] **R-04 · The RDF parser accepts any syntax Jena knows, including binary RDF-Thrift: 8 bytes → 95 MB.**
+- [x] **R-04 · The RDF parser accepts any syntax Jena knows, including binary RDF-Thrift: 8 bytes → 95 MB.**
   `High` · security/DoS · `S` · *demonstrated*
   `rdf/RdfParsing.java:76-84` and `:116-129` gate on `RDFLanguages.contentTypeToLang(ct) != null`, so a
   `sub` served as `application/rdf+thrift` (also TriG, N3, RDF/JSON, TriX, RDF-Protobuf) is parsed. The
@@ -256,6 +256,14 @@ is needed.
   **Do:** accept exactly the syntaxes the `Accept` header asks for (Turtle, N-Triples, RDF/XML, JSON-LD,
   plus `application/json` and `application/cid` — R-19) and throw `UnsupportedSyntaxException` for
   everything else; consider excluding the Thrift/Protobuf readers from the shaded JAR.
+  **Done.** `RdfParsing` reads a declared type only if it is in `READABLE` (`text/turtle`,
+  `application/n-triples`, `application/rdf+xml`) or is `application/ld+json` / `application/json`;
+  `requireSupported`, `isJsonLd` and `parseRdf` all use that table instead of
+  `RDFLanguages.contentTypeToLang`. `RdfParsingTest.refusesRdfSyntaxesNobodyAskedFor` sends the
+  eight-byte Thrift body and six other Jena-readable types, and fails against the previous code;
+  `readsEverySyntaxTheVerifiersAskFor` keeps the four that matter. `application/cid` is left to R-19,
+  which also needs context injection to make it useful. Not done: excluding the Thrift/Protobuf readers
+  from the shaded JAR — unreachable now, so it is a size question rather than a security one.
 
 - [ ] **R-05 · A realm access token verifies as an LWS ID Token credential (token substitution).**
   `Medium` · security · `S` · *verified*

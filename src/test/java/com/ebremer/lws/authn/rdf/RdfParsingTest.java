@@ -165,4 +165,37 @@ class RdfParsingTest {
                 "text/turtle", SUBJECT);
         assertTrue(declaresProvider(turtle));
     }
+
+    /**
+     * R-04. Only the syntaxes the verifiers ask for are read. Jena reads many more, and one of them —
+     * the binary RDF-Thrift encoding — turned these eight bytes into a 95 MB allocation and an empty
+     * graph, without an error.
+     */
+    @Test
+    void refusesRdfSyntaxesNobodyAskedFor() {
+        String thrift = new String(new byte[]{0x1C, 0x18, (byte) 0xE5, (byte) 0x80, (byte) 0x80, 0x2D},
+                java.nio.charset.StandardCharsets.UTF_8);
+        RdfParsing.UnsupportedSyntaxException refused = assertThrows(RdfParsing.UnsupportedSyntaxException.class,
+                () -> RdfParsing.parse(thrift, "application/rdf+thrift", SUBJECT));
+        assertEquals("application/rdf+thrift", refused.getContentType());
+        for (String other : new String[]{"application/rdf+protobuf", "application/trig", "text/n3",
+                "application/n-quads", "application/trix+xml", "application/rdf+json", "text/plain"}) {
+            assertThrows(RdfParsing.UnsupportedSyntaxException.class,
+                    () -> RdfParsing.parse("<" + SUBJECT + "> <" + SUBJECT + "#p> <" + SUBJECT + "#o> .", other, SUBJECT),
+                    other);
+        }
+    }
+
+    /** The syntaxes the verifiers do ask for are all still read, by their registered media types. */
+    @Test
+    void readsEverySyntaxTheVerifiersAskFor() {
+        String triple = "<" + SUBJECT + "> <https://www.w3.org/ns/did#service> <" + SUBJECT + "#op> .";
+        assertTrue(declaresProvider(RdfParsing.parse(triple, "text/turtle; charset=utf-8", SUBJECT)));
+        assertTrue(declaresProvider(RdfParsing.parse(triple, "application/n-triples", SUBJECT)));
+        String rdfXml = "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" "
+                + "xmlns:did=\"https://www.w3.org/ns/did#\"><rdf:Description rdf:about=\"" + SUBJECT + "\">"
+                + "<did:service rdf:resource=\"" + SUBJECT + "#op\"/></rdf:Description></rdf:RDF>";
+        assertTrue(declaresProvider(RdfParsing.parse(rdfXml, "application/rdf+xml", SUBJECT)));
+        assertNotNull(RdfParsing.parse(COMPACT_OPENID, "application/json", SUBJECT));
+    }
 }

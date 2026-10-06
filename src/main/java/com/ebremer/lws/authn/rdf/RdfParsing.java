@@ -12,13 +12,13 @@ package com.ebremer.lws.authn.rdf;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
+import java.util.Map;
 
 import com.apicatalog.jsonld.JsonLdOptions;
 import org.apache.jena.rdf.model.Model;
 import org.apache.jena.rdf.model.ModelFactory;
 import org.apache.jena.riot.Lang;
 import org.apache.jena.riot.RDFDataMgr;
-import org.apache.jena.riot.RDFLanguages;
 import org.apache.jena.riot.RDFParser;
 import org.apache.jena.riot.system.jsonld.TitaniumJsonLdOptions;
 import org.apache.jena.sparql.util.Context;
@@ -34,6 +34,22 @@ public final class RdfParsing {
     }
 
     private static final String JSON_LD = "application/ld+json";
+
+    /**
+     * The non-JSON syntaxes a dereferenced document may be read as: exactly the ones the verifiers ask
+     * for in {@code Accept}, alongside JSON-LD.
+     *
+     * <p>Not "whatever Jena can read". That used to be the test, and Jena reads a great deal — TriG, N3,
+     * TriX, RDF/JSON, and the binary RDF-Thrift and RDF-Protobuf encodings. A subject served as
+     * {@code application/rdf+thrift} with the eight-byte body {@code 1C 18 E5 80 80 2D} made the Thrift
+     * reader allocate 95&nbsp;MB for a string length it was told to expect and return an empty graph
+     * without complaint; enough of those at once and the server ran out of memory (R-04). A document in
+     * a syntax nobody asked for is not one the verifier needs to read.</p>
+     */
+    private static final Map<String, Lang> READABLE = Map.of(
+            "text/turtle", Lang.TURTLE,
+            "application/n-triples", Lang.NTRIPLES,
+            "application/rdf+xml", Lang.RDFXML);
 
     /**
      * Thrown when a dereferenced document declares a content type that is not an RDF syntax this
@@ -78,7 +94,7 @@ public final class RdfParsing {
         if (ct == null || ct.equals(JSON_LD) || ct.equals("application/json")) {
             return;
         }
-        if (RDFLanguages.contentTypeToLang(ct) == null) {
+        if (!READABLE.containsKey(ct)) {
             throw new UnsupportedSyntaxException(ct);
         }
     }
@@ -93,8 +109,8 @@ public final class RdfParsing {
             if (ct.equals(JSON_LD) || ct.equals("application/json")) {
                 return true;
             }
-            if (RDFLanguages.contentTypeToLang(ct) != null) {
-                return false; // a recognized non-JSON RDF syntax
+            if (READABLE.containsKey(ct)) {
+                return false; // one of the non-JSON syntaxes the verifiers ask for
             }
         }
         String trimmed = body == null ? "" : body.trim();
@@ -104,8 +120,8 @@ public final class RdfParsing {
     /**
      * Parses Turtle / N-Triples / RDF/XML with Jena RIOT.
      *
-     * <p>A document that declares a content type Jena does not know is <strong>refused</strong>, not
-     * guessed at. Only a document that declares nothing at all falls back to Turtle: that is the
+     * <p>A document that declares any other content type — including another RDF syntax Jena could
+     * read, see {@link #READABLE} — is <strong>refused</strong>, not guessed at. Only a document that declares nothing at all falls back to Turtle: that is the
      * syntax the verifiers ask for first and the WebID/Solid norm, so it is the best guess available
      * when the server offers none, and it is a guess about silence rather than a contradiction of
      * something the server actually said.</p>
@@ -117,11 +133,10 @@ public final class RdfParsing {
         Lang lang = Lang.TURTLE;
         String ct = mediaType(contentType);
         if (ct != null) {
-            Lang detected = RDFLanguages.contentTypeToLang(ct);
-            if (detected == null) {
+            lang = READABLE.get(ct);
+            if (lang == null) {
                 throw new UnsupportedSyntaxException(ct);
             }
-            lang = detected;
         }
         Model model = ModelFactory.createDefaultModel();
         RDFDataMgr.read(model, new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)), base, lang);

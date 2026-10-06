@@ -62,7 +62,9 @@ behaviours are covered by tests — `mvn test` for the unit tests, `mvn verify` 
   document, `404`, `406`, `429` — is the same media type with the same body shape so nothing but the
   status distinguishes them, and a rate limit (`cid-rate-limit`, default 600/minute per caller) makes
   scraping slow. Set `enabled=false` for a deployment that does not want to host identifiers at all.
-- **Unrecognised syntaxes are refused, not guessed.** A dereferenced document that declares a content
-  type which is not an RDF syntax this verifier reads is rejected by name, rather than handed to the
-  Turtle parser to fail with a misleading error. Only a document declaring nothing at all falls back to
-  Turtle, the syntax the verifiers ask for first.
+- **Only the syntaxes asked for are read.** A dereferenced document is read only as one of the syntaxes
+  the verifiers request — Turtle, JSON-LD, N-Triples, RDF/XML — or as `application/json`. Anything else
+  is rejected by name rather than handed to a parser: not only HTML or PDF, which once failed as a
+  misleading Turtle syntax error, but other RDF syntaxes the underlying library *could* read. One of
+  those, the binary RDF-Thrift encoding, turned an eight-byte body into a 95 MB allocation. Only a
+  document declaring nothing at all falls back to Turtle, the syntax the verifiers ask for first.

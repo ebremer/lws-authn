@@ -79,6 +79,12 @@ realm under the default `bearer` access mode, before any signature is checked.
   DID over 1 024; the RDF reader reads each method once, a property at a time; references resolve
   through an index built once. The DID syntax check no longer recurses once per character, which
   overflowed the stack — a `500` — on a DID of a couple of thousand characters.
+- **A dereferenced document is read only in a syntax the verifiers asked for** (R-04). The check was
+  "any media type Jena can read", which includes TriG, N3, TriX, RDF/JSON and the binary RDF-Thrift
+  and RDF-Protobuf encodings. A subject served as `application/rdf+thrift` with an eight-byte body made
+  the Thrift reader allocate 95 MB and return an empty graph without error; a few dozen at once ran the
+  server out of memory. Now only Turtle, N-Triples, RDF/XML, JSON-LD and `application/json` are read,
+  and anything else is refused by name.
 
 ### Added
 

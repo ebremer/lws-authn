@@ -201,8 +201,10 @@ which is an unvetted outbound fetch during verification and a dependency on `w3.
 for anything to verify at all. A document naming a context this provider does not bundle is refused as
 unverifiable rather than guessed at, with a key-reading fallback for the standardized compact shape.
 
-A document declaring a content type that is not an RDF syntax is **refused by name**, not handed to the
-Turtle parser.
+A document declaring any other content type is **refused by name**, not handed to the Turtle parser —
+including an RDF syntax this provider does not ask for (TriG, N3, RDF/JSON, the binary RDF-Thrift and
+RDF-Protobuf encodings): the verifiers read exactly the four syntaxes listed above, plus
+`application/json` read as JSON-LD.
 
 **DID documents** are accepted as `application/did+json`, `application/did+ld+json`, `application/did`,
 `application/ld+json` or `application/json` (or undeclared), and read by the JSON rules of the DID
