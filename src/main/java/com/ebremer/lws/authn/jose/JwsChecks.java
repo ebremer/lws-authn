@@ -25,6 +25,7 @@ import org.keycloak.representations.JsonWebToken;
 import org.keycloak.util.JsonSerialization;
 
 import com.ebremer.lws.authn.config.ServerSettings;
+import com.ebremer.lws.authn.did.DidKey;
 
 /**
  * @author Erich Bremer
@@ -201,6 +202,58 @@ public final class JwsChecks {
             return "EdDSA".equals(keyType) || "Ed25519".equals(keyType) || "Ed448".equals(keyType);
         }
         return false;
+    }
+
+    /**
+     * True iff a JWK's {@code key_ops}, when it has one, includes {@code verify} (RFC 7517 §4.3). A key
+     * published for encryption only is not one to check a signature with.
+     */
+    public static boolean keyOpsAllowVerify(JsonNode jwk) {
+        JsonNode ops = jwk == null ? null : jwk.get("key_ops");
+        if (ops == null || ops.isNull()) {
+            return true;
+        }
+        if (!ops.isArray()) {
+            return false;
+        }
+        for (JsonNode op : ops) {
+            if ("verify".equals(op.asText(null))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The smallest RSA modulus a JWT may be verified with, in bits: RFC 7518 §3.3 and §3.5. */
+    public static final int MIN_RSA_BITS = 2048;
+
+    /**
+     * True iff {@code key} is strong enough to verify a credential with. RFC 7518 §3.3: "A key of size
+     * 2048 bits or larger MUST be used with these algorithms" — and with RSASSA-PSS (§3.5). Neither JWT
+     * suite checked, so a credential signed with a 512-bit RSA key verified (R-27). EC curves are already
+     * pinned to the algorithm ({@link #algMatchesKey}); Ed25519 has one size.
+     */
+    public static boolean keyStrongEnough(PublicKey key) {
+        return !(key instanceof java.security.interfaces.RSAPublicKey rsa)
+                || rsa.getModulus().bitLength() >= MIN_RSA_BITS;
+    }
+
+    /**
+     * Why an {@code OKP} JWK on {@code Ed25519} is not a key to verify with, or {@code null} if it is, or is
+     * not an Ed25519 JWK at all: its {@code x} must be a canonical encoding of a point on the curve that
+     * is not of small order — with the identity point as the key, any message verifies (R-27; see
+     * {@link DidKey#ed25519KeyProblem}).
+     */
+    public static String ed25519Problem(JsonNode jwk) {
+        if (jwk == null || !"OKP".equals(jwk.path("kty").asText(null))
+                || !"Ed25519".equals(jwk.path("crv").asText(null))) {
+            return null;
+        }
+        try {
+            return DidKey.ed25519KeyProblem(Base64.getUrlDecoder().decode(jwk.path("x").asText("")));
+        } catch (IllegalArgumentException unreadable) {
+            return "the Ed25519 key's 'x' is not base64url";
+        }
     }
 
     /**

@@ -240,4 +240,63 @@ class LWSCredentialVerifierTest {
             com.ebremer.lws.authn.config.ServerSettings.reset();
         }
     }
+
+    // ------------------------------------------------------------------ JWKS key selection (R-27)
+
+    private static String rsaJwk(java.security.KeyPair pair, String extra) {
+        java.security.interfaces.RSAPublicKey key = (java.security.interfaces.RSAPublicKey) pair.getPublic();
+        Base64.Encoder b64 = Base64.getUrlEncoder().withoutPadding();
+        return "{\"kty\":\"RSA\",\"n\":\"" + b64.encodeToString(unsigned(key.getModulus()))
+                + "\",\"e\":\"" + b64.encodeToString(unsigned(key.getPublicExponent())) + "\"" + extra + "}";
+    }
+
+    private static byte[] unsigned(java.math.BigInteger value) {
+        byte[] bytes = value.toByteArray();
+        return bytes[0] == 0 ? java.util.Arrays.copyOfRange(bytes, 1, bytes.length) : bytes;
+    }
+
+    private static java.util.List<LWSCredentialVerifier.SigningKey> candidates(String jwks, String kid, String alg)
+            throws Exception {
+        return LWSCredentialVerifier.candidateKeys(new com.fasterxml.jackson.databind.ObjectMapper().readTree(jwks), kid, alg);
+    }
+
+    private static java.security.KeyPair rsa() throws Exception {
+        java.security.KeyPairGenerator g = java.security.KeyPairGenerator.getInstance("RSA");
+        g.initialize(2048);
+        return g.generateKeyPair();
+    }
+
+    /** RFC 7517 §4.2-4.4: a key published for encryption, or for another algorithm, does not verify signatures. */
+    @Test
+    void onlyKeysPublishedForSigningWithThisAlgorithmAreCandidates() throws Exception {
+        java.security.KeyPair pair = rsa();
+        for (String notForThis : new String[]{",\"kid\":\"k1\",\"use\":\"enc\"", ",\"kid\":\"k1\",\"key_ops\":[\"encrypt\"]",
+                ",\"kid\":\"k1\",\"alg\":\"RS512\"", ",\"kid\":\"k2\""}) {
+            assertTrue(candidates("{\"keys\":[" + rsaJwk(pair, notForThis) + "]}", "k1", "RS256").isEmpty(), notForThis);
+        }
+        for (String forThis : new String[]{",\"kid\":\"k1\"", ",\"kid\":\"k1\",\"use\":\"sig\",\"alg\":\"RS256\"",
+                ",\"kid\":\"k1\",\"key_ops\":[\"verify\"]"}) {
+            assertEquals(1, candidates("{\"keys\":[" + rsaJwk(pair, forThis) + "]}", "k1", "RS256").size(), forThis);
+        }
+        assertTrue(candidates("{\"keys\":[" + rsaJwk(pair, ",\"kid\":\"k1\"") + "]}", "k1", "ES256").isEmpty(),
+                "an RSA key cannot produce an ES256 signature");
+    }
+
+    /** One key this server cannot read used to throw, and end the search for the one it could. */
+    @Test
+    void anUnreadableKeyDoesNotHideTheRest() throws Exception {
+        String jwks = "{\"keys\":[{\"kty\":\"oct\",\"kid\":\"k1\",\"k\":\"c2VjcmV0\"},"
+                + "{\"kty\":\"EC\",\"kid\":\"k1\",\"crv\":\"P-999\",\"x\":\"AA\",\"y\":\"AA\"},"
+                + "{\"kty\":\"RSA\",\"kid\":\"k1\",\"n\":\"!!!\",\"e\":\"AQAB\"},"
+                + "\"not a key\"," + rsaJwk(rsa(), ",\"kid\":\"k1\"") + "]}";
+        assertEquals(1, candidates(jwks, "k1", "RS256").size());
+    }
+
+    /** Without a kid every key of the right type is a candidate; only the first one used to be tried. */
+    @Test
+    void withoutAKidEveryKeyIsTried() throws Exception {
+        String jwks = "{\"keys\":[" + rsaJwk(rsa(), ",\"kid\":\"old\"") + "," + rsaJwk(rsa(), ",\"kid\":\"new\"") + "]}";
+        assertEquals(2, candidates(jwks, null, "RS256").size());
+        assertEquals(1, candidates(jwks, "new", "RS256").size());
+    }
 }

@@ -49,7 +49,6 @@ import org.keycloak.crypto.KeyUse;
 import org.keycloak.crypto.KeyWrapper;
 import org.keycloak.crypto.SignatureProvider;
 import org.keycloak.crypto.SignatureVerifierContext;
-import org.keycloak.jose.jwk.JSONWebKeySet;
 import org.keycloak.jose.jwk.JWK;
 import org.keycloak.jose.jwk.JWKParser;
 import org.keycloak.jose.jws.JWSHeader;
@@ -245,20 +244,25 @@ public class LWSCredentialVerifier {
                 return result.fail();
             }
 
-            // 4. OpenID Connect Discovery -> signing key.
-            PublicKey publicKey = resolveSigningKey(iss, header, result);
-            if (publicKey == null) {
+            // 4. OpenID Connect Discovery -> the keys that may have signed it: every published key the
+            //    kid names (or every one, with no kid), published for signing with this alg (R-27).
+            List<SigningKey> candidates = resolveSigningKeys(iss, header, result);
+            if (candidates == null) {
                 return result.fail();
             }
 
             // 4b. Pin the token's declared algorithm to the discovered key type. Without this a forged
             // token could claim a symmetric alg (e.g. HS256) and have the OP's RSA public key treated
-            // as the HMAC secret — the classic algorithm-confusion attack.
-            boolean algMatchesKey = JwsChecks.algMatchesKey(alg, publicKey);
-            result.check("algorithmMatchesKey", algMatchesKey);
-            if (!algMatchesKey) {
-                result.error("ID Token 'alg' " + alg + " is not consistent with the discovered "
-                        + publicKey.getAlgorithm() + " signing key");
+            // as the HMAC secret — the classic algorithm-confusion attack. Candidates of another type
+            // were never selected, so this records what selection enforced.
+            result.check("algorithmMatchesKey", true);
+
+            // RFC 7518 §3.3: an RSA key "of size 2048 bits or larger MUST be used" (R-27).
+            List<SigningKey> strong = candidates.stream().filter(k -> JwsChecks.keyStrongEnough(k.key())).toList();
+            result.check("signingKeyStrong", !strong.isEmpty());
+            if (strong.isEmpty()) {
+                result.error("The key <" + iss + "> published for this ID Token is an RSA key under "
+                        + JwsChecks.MIN_RSA_BITS + " bits");
                 return result.fail();
             }
 
@@ -275,16 +279,26 @@ public class LWSCredentialVerifier {
                 result.error("No signature provider available for algorithm " + alg);
                 return result.fail();
             }
-            KeyWrapper keyWrapper = new KeyWrapper();
-            keyWrapper.setKid(header.getKeyId());
-            keyWrapper.setAlgorithm(alg);
-            keyWrapper.setType(JwsChecks.keycloakKeyType(publicKey));
-            keyWrapper.setUse(KeyUse.SIG);
-            keyWrapper.setPublicKey(publicKey);
-
-            SignatureVerifierContext verifierContext = signatureProvider.verifier(keyWrapper);
-            boolean signatureValid = verifierContext.verify(
-                    jws.getEncodedSignatureInput().getBytes(StandardCharsets.UTF_8), jws.getSignature());
+            // Each candidate in turn: with no kid, or during a rotation that reused one, the first key of
+            // the right type is not necessarily the one that signed (R-27).
+            boolean signatureValid = false;
+            for (SigningKey candidate : strong) {
+                KeyWrapper keyWrapper = new KeyWrapper();
+                keyWrapper.setKid(header.getKeyId());
+                keyWrapper.setAlgorithm(alg);
+                keyWrapper.setType(JwsChecks.keycloakKeyType(candidate.key()));
+                if (candidate.curve() != null) {
+                    keyWrapper.setCurve(candidate.curve());
+                }
+                keyWrapper.setUse(KeyUse.SIG);
+                keyWrapper.setPublicKey(candidate.key());
+                SignatureVerifierContext verifierContext = signatureProvider.verifier(keyWrapper);
+                if (verifierContext.verify(jws.getEncodedSignatureInput().getBytes(StandardCharsets.UTF_8),
+                        jws.getSignature())) {
+                    signatureValid = true;
+                    break;
+                }
+            }
             result.check("signatureValid", signatureValid);
             if (!signatureValid) {
                 result.error("ID Token signature is invalid");
@@ -506,8 +520,15 @@ public class LWSCredentialVerifier {
         }
     }
 
-    /** Performs OpenID Connect Discovery on iss and returns the public key matching the token's kid. */
-    private PublicKey resolveSigningKey(String iss, JWSHeader header, VerificationResult result) {
+    /** A published key that may have signed the token, with its curve when Keycloak needs one (OKP). */
+    record SigningKey(PublicKey key, String curve) {
+    }
+
+    /**
+     * Performs OpenID Connect Discovery on iss and returns the published keys that may have signed the
+     * token, or {@code null} after recording why there are none.
+     */
+    private List<SigningKey> resolveSigningKeys(String iss, JWSHeader header, VerificationResult result) {
         try {
             String base = iss.endsWith("/") ? iss.substring(0, iss.length() - 1) : iss;
             String discoveryUrl = base + "/.well-known/openid-configuration";
@@ -530,6 +551,22 @@ public class LWSCredentialVerifier {
                 result.error("The OpenID configuration served for <" + iss + "> declares a different issuer");
                 return null;
             }
+            String alg = header.getRawAlgorithm();
+            // Discovery 1.0 §3: id_token_signing_alg_values_supported is the "list of the JWS signing
+            // algorithms (alg values) supported by the OP for the ID Token". An ID Token in any other
+            // was not signed the way this OP signs them (R-27; Core §3.1.3.7 step 7).
+            JsonNode advertised = config.get("id_token_signing_alg_values_supported");
+            if (advertised != null && advertised.isArray()) {
+                boolean listed = false;
+                for (JsonNode value : advertised) {
+                    listed |= alg.equals(value.asText(null));
+                }
+                result.check("algorithmAdvertised", listed);
+                if (!listed) {
+                    result.error("<" + iss + "> does not list " + alg + " among the algorithms it signs ID Tokens with");
+                    return null;
+                }
+            }
             String jwksUri = text(config, "jwks_uri");
             if (jwksUri == null) {
                 result.check("jwksResolved", false);
@@ -543,25 +580,14 @@ public class LWSCredentialVerifier {
                 result.error("The JWK set published by <" + iss + "> could not be retrieved");
                 return null;
             }
-            JSONWebKeySet keySet = JsonSerialization.readValue(jwks.body(), JSONWebKeySet.class);
             String kid = header.getKeyId();
-            String alg = header.getRawAlgorithm();
-            if (keySet.getKeys() != null) {
-                for (JWK jwk : keySet.getKeys()) {
-                    if (kid != null && !kid.equals(jwk.getKeyId())) {
-                        continue;
-                    }
-                    PublicKey pk = JWKParser.create(jwk).toPublicKey();
-                    if (!JwsChecks.algMatchesKey(alg, pk)) {
-                        continue; // ignore keys whose type cannot produce this token's alg
-                    }
-                    result.check("jwksResolved", true);
-                    return pk;
-                }
+            List<SigningKey> candidates = candidateKeys(JsonSerialization.mapper.readTree(jwks.body()), kid, alg);
+            result.check("jwksResolved", !candidates.isEmpty());
+            if (candidates.isEmpty()) {
+                result.error("No JWK published by <" + iss + "> matched the token (kid=" + kid + ", alg=" + alg + ")");
+                return null;
             }
-            result.check("jwksResolved", false);
-            result.error("No JWK published by <" + iss + "> matched the token (kid=" + kid + ", alg=" + alg + ")");
-            return null;
+            return candidates;
         } catch (SsrfGuard.InsecureSchemeException insecure) {
             // iss itself has been checked, so this is the jwks_uri, which OpenID Connect Discovery 1.0
             // §3 says "MUST use the https scheme".
@@ -575,6 +601,57 @@ public class LWSCredentialVerifier {
             result.error("OpenID Connect Discovery failed for <" + iss + ">");
             return null;
         }
+    }
+
+    /**
+     * The keys of a JWK set that may have signed a token with {@code kid} and {@code alg} (R-27):
+     *
+     * <ul>
+     *   <li>the {@code kid}'s keys, or — with no {@code kid} — every key, all to be tried. OpenID Connect
+     *       Core §10.1 requires a {@code kid} when the set has several keys, but the first key of the
+     *       right type, which is all this used to try, is not the one that signed halfway through a
+     *       rotation;</li>
+     *   <li>published for signing: {@code use} absent or {@code sig}, {@code key_ops} absent or
+     *       including {@code verify}, and {@code alg} absent or the token's. A {@code use: enc} key used
+     *       to verify signatures;</li>
+     *   <li>of a type and curve that {@code alg} is ({@link JwsChecks#algMatchesKey}), and, for Ed25519, a
+     *       key only its holder can sign for ({@link JwsChecks#ed25519Problem}).</li>
+     * </ul>
+     *
+     * <p>A key that cannot be read — {@code oct}, a curve this server does not support, garbage — is
+     * skipped. It used to throw, and abort the whole set.</p>
+     */
+    static List<SigningKey> candidateKeys(JsonNode jwks, String kid, String alg) {
+        List<SigningKey> out = new java.util.ArrayList<>();
+        JsonNode keys = jwks == null ? null : jwks.get("keys");
+        if (keys == null || !keys.isArray()) {
+            return out;
+        }
+        for (JsonNode node : keys) {
+            if (!node.isObject()) {
+                continue;
+            }
+            if (kid != null && !kid.equals(node.path("kid").asText(null))) {
+                continue;
+            }
+            String use = node.path("use").asText(null);
+            String keyAlg = node.path("alg").asText(null);
+            if ((use != null && !"sig".equals(use)) || (keyAlg != null && !keyAlg.equals(alg))
+                    || !JwsChecks.keyOpsAllowVerify(node) || JwsChecks.ed25519Problem(node) != null) {
+                continue;
+            }
+            PublicKey key;
+            try {
+                key = JWKParser.create(JsonSerialization.mapper.treeToValue(node, JWK.class)).toPublicKey();
+            } catch (Exception unreadable) {
+                continue;
+            }
+            if (key != null && JwsChecks.algMatchesKey(alg, key)) {
+                out.add(new SigningKey(key, "OKP".equals(node.path("kty").asText(null))
+                        ? node.path("crv").asText(null) : null));
+            }
+        }
+        return out;
     }
 
     /**

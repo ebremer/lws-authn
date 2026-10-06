@@ -103,8 +103,13 @@ fetched but is about somebody else fails `subjectIdMatches`, not `subjectDerefer
 (`openIdProviderServiceLocated`), located by parameterized SPARQL so an attacker-controlled `sub`
 cannot inject. Discovery on `iss` must return a configuration whose `issuer` matches
 (`issuerDiscoveryMatches`) and an https `jwks_uri` (Discovery 1.0 §3; `jwksResolved`). Every fetch —
-`sub`, discovery, `jwks_uri` — is https; plain http only to a host the deployment allow-lists. The `alg` is pinned to the discovered key
-type (`algorithmMatchesKey`) — the classic HS256-against-an-RSA-public-key confusion. Signature
+`sub`, discovery, `jwks_uri` — is https; plain http only to a host the deployment allow-lists. When
+the configuration lists `id_token_signing_alg_values_supported`, the token's `alg` must be among them
+(`algorithmAdvertised`). The keys tried are those of the `kid` — or all of them, without one — that are
+published for signing with this `alg` (`use`, `key_ops` and `alg` permitting); one this server cannot
+read is skipped rather than ending the search. The `alg` is pinned to the discovered key
+type (`algorithmMatchesKey`) — the classic HS256-against-an-RSA-public-key confusion — and an RSA key
+must be at least 2048 bits (`signingKeyStrong`; RFC 7518 §3.3). Signature
 (`signatureValid`) and an explicit `exp` (`notExpired`; a missing `exp` is not "never expires"). The
 claims OpenID Connect Core §2 makes REQUIRED in an ID Token are required whatever the caller asks:
 `iat` (`issuedAtPresent`) — not in the future, nor after `exp` (`issuedAtConsistent`) — and a non-blank
@@ -158,8 +163,11 @@ the suite cites for this step. The method must be:
 The `kid` may be the method's full identifier (the verification method identifier §3.3 retrieves by,
 and the usual form for a DID), its fragment with or without `#`, or its JWK's `kid` — tried in that
 order, so the method a fragment names under §3.4 is the one selected. The key must be
-published for signing and consistent with the token's algorithm (`verificationMethodUsableForSigning`,
-`algorithmMatchesKey` — `ES*` pinned to its curve). Signature (`signatureValid`), explicit `exp`
+published for signing — `use`, `key_ops` and `alg` permitting — and consistent with the token's algorithm
+(`verificationMethodUsableForSigning`, `algorithmMatchesKey` — `ES*` pinned to its curve), and an RSA key
+at least 2048 bits (`signingKeyStrong`). An Ed25519 key, from a `did:key`, a `Multikey` or a JWK, must
+be canonically encoded and not of small order: with the identity point as the key, a fixed signature
+verifies any message. Signature (`signatureValid`), explicit `exp`
 (`notExpired`), required `iat` (`issuedAtPresent`) that is not in the future nor after `exp`
 (`issuedAtConsistent`), a lifetime within `max-credential-lifetime-seconds` when one is configured
 (`lifetimeWithinLimit`), and an audience that is present, not blank, and **includes the target
@@ -284,7 +292,8 @@ does.
 representation. **Verification method types:** `JsonWebKey` and `Multikey`, the two CID 1.0 defines.
 
 **Signature algorithms:** whatever Keycloak's `SignatureProvider` offers for the JWT suites (RS*, PS*,
-ES256/384/512, EdDSA), constrained by the published key — each `ES*` pinned to its curve, and its
+ES256/384/512, EdDSA), constrained by the published key — RSA of 2048 bits or more, each `ES*` pinned to
+its curve, and its
 signature exactly the 64, 96 or 132 octets RFC 7518 §3.4 requires, which Keycloak's ECDSA verifier does
 not check itself. `alg: none` is refused everywhere.
 

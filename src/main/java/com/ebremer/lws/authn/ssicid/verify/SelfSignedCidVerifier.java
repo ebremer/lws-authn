@@ -246,10 +246,19 @@ public class SelfSignedCidVerifier {
             // one algorithm that key type signs with.)
             String jwkUse = jwk.path("use").asText(null);
             String jwkAlg = jwk.path("alg").asText(null);
-            boolean jwkUsable = (jwkUse == null || "sig".equals(jwkUse)) && (jwkAlg == null || jwkAlg.equals(alg));
+            boolean jwkUsable = (jwkUse == null || "sig".equals(jwkUse)) && (jwkAlg == null || jwkAlg.equals(alg))
+                    && JwsChecks.keyOpsAllowVerify(jwk);
             result.check("verificationMethodUsableForSigning", jwkUsable);
             if (!jwkUsable) {
                 result.error("The selected verification method is not published for signing with " + alg);
+                return result.fail();
+            }
+
+            // RFC 7518 §3.3: an RSA key "of size 2048 bits or larger MUST be used" (R-27).
+            boolean keyStrong = JwsChecks.keyStrongEnough(publicKey);
+            result.check("signingKeyStrong", keyStrong);
+            if (!keyStrong) {
+                result.error("The selected verification method is an RSA key under " + JwsChecks.MIN_RSA_BITS + " bits");
                 return result.fail();
             }
 
@@ -695,6 +704,13 @@ public class SelfSignedCidVerifier {
         if (!privateMembers.isEmpty()) {
             log.debugf("skipping verification method <%s>: its publicKeyJwk carries private members %s",
                     methodId, privateMembers);
+            return Optional.empty();
+        }
+        // An Ed25519 key must be one only its holder can sign for: canonical, on the curve, not of small
+        // order. The JDK accepts the identity point, against which any message verifies (R-27).
+        String weakEd25519 = JwsChecks.ed25519Problem(jwk);
+        if (weakEd25519 != null) {
+            log.debugf("skipping verification method <%s>: %s", methodId, weakEd25519);
             return Optional.empty();
         }
         return Optional.of(new VerificationMethod(methodId, jwk, SsiCidConstants.TYPE_JSON_WEB_KEY, null,

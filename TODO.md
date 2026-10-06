@@ -801,7 +801,7 @@ is needed.
   and for CIDs (honour `Cache-Control`); short-circuit `iss` equal to this realm's issuer to the local key
   store and user lookup.
 
-- [ ] **R-27 · Key selection and key strength.** `Low` · security-hardening · `S` · *verified*
+- [x] **R-27 · Key selection and key strength.** `Low` · security-hardening · `S` · *verified*
   - OpenID JWKS selection (`LWSCredentialVerifier.java:456-475`) ignores `use`/`key_ops` (verifies with a
     `use: enc` key) and the JWK's `alg`; with no `kid` it tries only the first type-compatible key (breaks
     during rotation; OIDC Core §10.1 requires `kid` when the set has several keys); one unparseable key
@@ -815,6 +815,18 @@ is needed.
     identifiers (RFC 8032 §5.1.3: decoding fails for `y ≥ p`). *Demonstrated against the JDK verifier.*
   **Do:** filter on `use`/`key_ops`/`alg`; try/continue per key; try all candidates when `kid` is absent;
   enforce RSA ≥ 2048; reject small-order and non-canonical Ed25519 points.
+  **Done.** `LWSCredentialVerifier.candidateKeys` reads the JWK set as JSON and keeps every key of the
+  `kid` (all, without one) whose `use`, `key_ops` and `alg` allow it and whose type and curve match;
+  an unreadable key is skipped; each candidate is tried in turn. `algorithmAdvertised` when discovery
+  lists `id_token_signing_alg_values_supported`. `JwsChecks.keyStrongEnough` (`signingKeyStrong`, both
+  suites; RSA ≥ 2048) and `keyOpsAllowVerify` (both suites). `did/Ed25519Points` decodes per RFC 8032
+  §5.1.3 — `y ≥ p`, off-curve, and `x = 0` with the sign bit set are refused — and refuses a point whose
+  eightfold multiple is the identity; it guards `did:key`, `Multikey` and `OKP` JWKs alike. To test
+  RS256 without a session, `JwsSignatures` now verifies RS* and PS* too. `aSmallOrderKeyCannotSignForAnyone`
+  — a did:key of the identity point and a signature of 0x01 then 63 zero bytes, `valid: true` before — and
+  `selfSignedAnRsaKeyUnder2048BitsIsRefused` fail against the previous code; the rest (`DidKeyTest`,
+  `JwsChecksTest`, `LWSCredentialVerifierTest`) test new methods. The OpenID suite also sets the curve
+  on an `OKP` key for Keycloak's EdDSA provider, which it did not.
 
 - [x] **R-28 · Time-claim hardening.** `Low` · security-hardening · `S` · *demonstrated*
   Accepted today in both JWT suites: `iat` ten years in the future, `iat > exp`, and `exp` in 9999 (no

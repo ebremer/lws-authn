@@ -288,6 +288,16 @@ realm under the default `bearer` access mode, before any signature is checked.
   (`issueInstantValid`), a Response `<Issuer>` other than its assertion's (`issuersMatch`), and **a
   Response holding more than one assertion** whether or not the Response is signed (`singleAssertion`) —
   an unsigned Response with a forged assertion beside the signed one used to verify as the signed one.
+- **Keys are chosen and checked more carefully** (R-27). An **Ed25519 key of small order** — the
+  identity point as a `did:key`, a `Multikey` or a JWK — is refused, and so is a non-canonical one
+  (`y ≥ p`): with the identity as the key, a fixed signature that nobody made verifies any message, and
+  a credential for that `did:key` verified with no signer at all. An **RSA key under 2048 bits** is
+  refused in both JWT suites (`signingKeyStrong`; RFC 7518 §3.3). In the OpenID suite, the JWK set is
+  searched for every key the `kid` names — or every key, without a `kid` — that is published for
+  signing with the token's `alg`: a `use: enc` key used to verify signatures, a key this server could
+  not read ended the search, and without a `kid` only the first key of the right type was tried. When
+  discovery lists `id_token_signing_alg_values_supported`, the `alg` must be in it
+  (`algorithmAdvertised`). The self-signed suite honours `key_ops` as well as `use` and `alg`.
 - **An `iat` in the future, or after `exp`, is refused** in both JWT suites (new check
   `issuedAtConsistent`; the clock skew allowance applies). A credential "issued" ten years from now used
   to pass.

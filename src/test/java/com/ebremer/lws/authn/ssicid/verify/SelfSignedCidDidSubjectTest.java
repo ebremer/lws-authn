@@ -308,4 +308,28 @@ class SelfSignedCidDidSubjectTest {
             com.ebremer.lws.authn.config.ServerSettings.reset();
         }
     }
+
+    /**
+     * R-27. The identity point as a did:key: {@code (R = identity, S = 0)} is a valid Ed25519 signature on
+     * any message under it, which the JDK verifier accepts — so anyone could sign as this subject.
+     */
+    @Test
+    void aSmallOrderKeyCannotSignForAnyone() throws Exception {
+        byte[] multicodec = new byte[34];
+        multicodec[0] = (byte) 0xed;
+        multicodec[1] = 0x01;
+        multicodec[2] = 0x01; // y = 1: the identity
+        String did = "did:key:z" + DidKey.base58Encode(multicodec);
+        java.util.Base64.Encoder b64 = java.util.Base64.getUrlEncoder().withoutPadding();
+        com.fasterxml.jackson.databind.ObjectMapper json = new com.fasterxml.jackson.databind.ObjectMapper();
+        String input = b64.encodeToString(json.writeValueAsBytes(Map.of("alg", "EdDSA", "typ", "JWT",
+                "kid", did + "#" + DidKey.multibaseValue(did))))
+                + "." + b64.encodeToString(json.writeValueAsBytes(SelfIssuedJwts.claims(did)));
+        byte[] signature = new byte[64];
+        signature[0] = 0x01; // R = identity, S = 0
+        SsiCidVerificationResult result = verify(input + "." + b64.encodeToString(signature));
+
+        assertFalse(result.isValid(), "a credential nobody signed verified");
+        assertEquals(Boolean.FALSE, result.getChecks().get("subjectDereferenced"));
+    }
 }

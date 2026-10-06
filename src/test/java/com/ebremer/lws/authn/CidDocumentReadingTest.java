@@ -248,4 +248,37 @@ class CidDocumentReadingTest {
         assertProviderLocated(openId("application/ld+json", "{" + CID_CONTEXT + "\"id\":\"SUB\",\"service\":["
                 + service + "]}"));
     }
+
+    // ------------------------------------------------------------------- RSA key strength (R-27)
+
+    private SsiCidVerificationResult selfSignedRsa(int bits) throws Exception {
+        java.security.KeyPairGenerator g = java.security.KeyPairGenerator.getInstance("RSA");
+        g.initialize(bits);
+        KeyPair pair = g.generateKeyPair();
+        java.security.interfaces.RSAPublicKey key = (java.security.interfaces.RSAPublicKey) pair.getPublic();
+        Base64.Encoder b64 = Base64.getUrlEncoder().withoutPadding();
+        String jwk = "{\"kty\":\"RSA\",\"n\":\"" + b64.encodeToString(unsigned(key.getModulus()))
+                + "\",\"e\":\"" + b64.encodeToString(unsigned(key.getPublicExponent())) + "\"}";
+        String sub = serve("application/json", "{\"id\":\"SUB\",\"authentication\":[{\"id\":\"SUB#k1\","
+                + "\"type\":\"JsonWebKey\",\"controller\":\"SUB\",\"publicKeyJwk\":" + jwk + "}]}");
+        String jwt = SelfIssuedJwts.sign(SelfIssuedJwts.claims(sub), "RS256", sub + "#k1", pair.getPrivate(),
+                "SHA256withRSA");
+        return new SelfSignedCidVerifier(null).verify(jwt, SelfIssuedJwts.AUDIENCE);
+    }
+
+    private static byte[] unsigned(java.math.BigInteger value) {
+        byte[] bytes = value.toByteArray();
+        return bytes[0] == 0 ? java.util.Arrays.copyOfRange(bytes, 1, bytes.length) : bytes;
+    }
+
+    /** RFC 7518 §3.3: an RSA key "of size 2048 bits or larger MUST be used". Nothing checked. */
+    @Test
+    void selfSignedAnRsaKeyUnder2048BitsIsRefused() throws Exception {
+        SsiCidVerificationResult weak = selfSignedRsa(1024);
+        assertFalse(weak.isValid());
+        assertEquals(Boolean.FALSE, weak.getChecks().get("signingKeyStrong"), String.valueOf(weak.getChecks()));
+
+        SsiCidVerificationResult strong = selfSignedRsa(2048);
+        assertTrue(strong.isValid(), () -> strong.getErrors() + " " + strong.getChecks());
+    }
 }

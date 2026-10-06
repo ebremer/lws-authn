@@ -293,10 +293,24 @@ public final class DidKey {
 
     // ---- key building ----
 
+    /**
+     * Why {@code raw} — the 32 bytes RFC 8032 encodes an Ed25519 public key as — is not one a verifier
+     * should accept, or {@code null} if it is: it must be canonically encoded, on the curve, and not of
+     * small order (R-27; see {@link Ed25519Points}). Applied to every Ed25519 key, however it arrived —
+     * a {@code did:key}, a {@code Multikey} or an {@code OKP} JWK.
+     */
+    public static String ed25519KeyProblem(byte[] raw) {
+        return Ed25519Points.problem(raw);
+    }
+
     private static PublicKey ed25519PublicKey(byte[] raw32) {
         try {
             if (raw32.length != 32) {
                 throw new IllegalArgumentException("Ed25519 key must be 32 bytes");
+            }
+            String problem = Ed25519Points.problem(raw32);
+            if (problem != null) {
+                throw new IllegalArgumentException(problem);
             }
             return KeyFactory.getInstance("Ed25519")
                     .generatePublic(new X509EncodedKeySpec(concat(ED25519_SPKI_PREFIX, raw32)));

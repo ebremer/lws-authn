@@ -206,4 +206,42 @@ class JwsChecksTest {
             assertFalse(JwsChecks.typeIsJwtOrAbsent(typ), typ);
         }
     }
+
+    // -------------------------------------------------------------- key strength and use (R-27)
+
+    /** RFC 7518 §3.3: "A key of size 2048 bits or larger MUST be used with these algorithms." */
+    @Test
+    void rsaKeysUnder2048BitsAreTooWeak() throws Exception {
+        KeyPairGenerator g = KeyPairGenerator.getInstance("RSA");
+        g.initialize(1024);
+        assertFalse(JwsChecks.keyStrongEnough(g.generateKeyPair().getPublic()));
+        g.initialize(2048);
+        assertTrue(JwsChecks.keyStrongEnough(g.generateKeyPair().getPublic()));
+        assertTrue(JwsChecks.keyStrongEnough(ec("secp256r1")), "an EC key's strength is its curve, pinned elsewhere");
+    }
+
+    @Test
+    void keyOpsMustIncludeVerifyWhenPresent() throws Exception {
+        com.fasterxml.jackson.databind.ObjectMapper json = new com.fasterxml.jackson.databind.ObjectMapper();
+        assertTrue(JwsChecks.keyOpsAllowVerify(json.readTree("{\"kty\":\"EC\"}")));
+        assertTrue(JwsChecks.keyOpsAllowVerify(json.readTree("{\"key_ops\":[\"verify\",\"sign\"]}")));
+        assertFalse(JwsChecks.keyOpsAllowVerify(json.readTree("{\"key_ops\":[\"encrypt\"]}")));
+        assertFalse(JwsChecks.keyOpsAllowVerify(json.readTree("{\"key_ops\":\"verify\"}")), "RFC 7517: an array");
+    }
+
+    /** An OKP JWK gets the same Ed25519 point checks a did:key does. */
+    @Test
+    void anEd25519JwkMustNotBeASmallOrderPoint() throws Exception {
+        com.fasterxml.jackson.databind.ObjectMapper json = new com.fasterxml.jackson.databind.ObjectMapper();
+        byte[] identity = new byte[32];
+        identity[0] = 1;
+        String x = Base64.getUrlEncoder().withoutPadding().encodeToString(identity);
+        assertTrue(JwsChecks.ed25519Problem(json.readTree("{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"x\":\"" + x + "\"}"))
+                .contains("small order"));
+        byte[] spki = KeyPairGenerator.getInstance("Ed25519").generateKeyPair().getPublic().getEncoded();
+        String real = Base64.getUrlEncoder().withoutPadding().encodeToString(
+                java.util.Arrays.copyOfRange(spki, spki.length - 32, spki.length));
+        assertEquals(null, JwsChecks.ed25519Problem(json.readTree("{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"x\":\"" + real + "\"}")));
+        assertEquals(null, JwsChecks.ed25519Problem(json.readTree("{\"kty\":\"EC\"}")), "not an Ed25519 key");
+    }
 }
