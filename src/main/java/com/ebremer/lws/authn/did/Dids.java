@@ -246,6 +246,17 @@ public final class Dids {
                 if (parts[i].isEmpty()) {
                     throw new InvalidDidException("did:web path has an empty segment");
                 }
+                // A segment is one segment of the URL's path (R-37). "." and ".." — written so, or as
+                // %2E — would climb out of the path the DID names once anything normalises the URL, and
+                // an encoded "/" or "\" would add segments the DID does not have. The document's id
+                // must still be the DID, so none of this could impersonate anyone; it is refused anyway,
+                // as a DID that does not mean what it says.
+                String segment = java.net.URLDecoder.decode(parts[i].replace("+", "%2B"),
+                        java.nio.charset.StandardCharsets.UTF_8);
+                if (segment.equals(".") || segment.equals("..") || segment.indexOf('/') >= 0
+                        || segment.indexOf('\\') >= 0) {
+                    throw new InvalidDidException("did:web path has a segment that is '.', '..' or holds a slash");
+                }
                 url.append('/').append(parts[i]);
             }
         }
@@ -253,15 +264,20 @@ public final class Dids {
     }
 
     /**
-     * True iff {@code host} is a DNS name: dot-separated labels of letters, digits and hyphens, whose
-     * last label is not all digits (which also rules out a dotted-quad IPv4 address). IPv6 literals
-     * cannot get this far — {@code [} is not a DID character.
+     * True iff {@code host} is a fully qualified DNS name: two or more dot-separated labels of letters,
+     * digits and hyphens, whose last label is not all digits (which also rules out a dotted-quad IPv4
+     * address). A single label — {@code localhost}, an intranet short name — is not fully qualified, as
+     * the method requires (R-37); it resolves through the server's search domains, to whatever they
+     * say. IPv6 literals cannot get this far — {@code [} is not a DID character.
      */
     static boolean isDomainName(String host) {
         if (host == null || host.isEmpty() || host.length() > 253) {
             return false;
         }
         String[] labels = host.split("\\.", -1);
+        if (labels.length < 2) {
+            return false;
+        }
         for (String label : labels) {
             if (!LABEL.matcher(label).matches()) {
                 return false;

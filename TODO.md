@@ -1016,11 +1016,15 @@ is needed.
   `RateLimiterTest`, `JsonResponsesTest`; `LwsAuthIT.theDocumentIsReadableFromABrowserAndVerifyIsNot`
   (unrun here) covers the real routing, including whether Keycloak lets the `OPTIONS` method through.
 
-- [ ] **R-37 · `did:web` edge cases.** `Info` · robustness · `S` · *verified*
+- [x] **R-37 · `did:web` edge cases.** `Info` · robustness · `S` · *verified*
   `Dids.java:213-218` accepts `.`, `..` and `%2F` path segments
   (`did:web:example.com:..:..:etc` → `https://example.com/../../etc/did.json`; the `id` check prevents
   impersonation, but these should be refused), and single-label hosts such as `localhost` pass
   `isDomainName` although the method requires a fully qualified domain name.
+  **Done.** `Dids.didWebUrl` percent-decodes each path segment to check it — `.`, `..`, or containing `/`
+  or `\` is refused — while the URL keeps the segment as written; `isDomainName` requires two or more
+  labels. Tests in `DidsTest` (`aDidWebPathCannotClimbOrSplit`, `aDidWebHostMustBeFullyQualified`), both
+  failing against the previous code.
 
 - [ ] **R-38 · `PublicJwk` does not know AKP's private member.** `Info` · security · `S`
   `PublicJwk.PRIVATE_MEMBERS` lacks `priv` (the `AKP` key type, which Keycloak 26.7.4's `JWKParser` now

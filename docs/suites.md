@@ -115,7 +115,7 @@ resolved. Two methods are resolved; any other is refused by name.
 | Method | Resolution | Example `kid` |
 |---|---|---|
 | `did:key` | expanded locally into the did:key Method's document — one `Multikey` method, referenced from `authentication`. No network. Must be canonically encoded; Ed25519, P-256, P-384 or P-521. | `did:key:zDnae…#zDnae…` |
-| `did:web` | `did:web:example.com` → `https://example.com/.well-known/did.json`; `did:web:example.com:u:bob` → `https://example.com/u/bob/did.json`; a port as `%3A`. Fetched through the same SSRF-guarded client as an HTTPS subject; a domain name only, never an IP address; the document's `id` must be the DID. | `did:web:example.com#key-1` |
+| `did:web` | `did:web:example.com` → `https://example.com/.well-known/did.json`; `did:web:example.com:u:bob` → `https://example.com/u/bob/did.json`; a port as `%3A`. Fetched through the same SSRF-guarded client as an HTTPS subject; a fully qualified domain name only — never an IP address, nor a single label such as `localhost` — and no path segment that is `.` or `..` or holds an encoded slash; the document's `id` must be the DID. | `did:web:example.com#key-1` |
 
 A `kid` may name the method by its full identifier, as above, or by its fragment (`key-1` or
 `#key-1`), or by its JWK's own `kid` — in that order, so a method's own id wins. This suite requires one; for a `did:key` it is

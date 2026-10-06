@@ -177,4 +177,29 @@ class DidsTest {
             assertThrows(InvalidDidException.class, () -> Dids.methodOf(bad), bad);
         }
     }
+
+    /**
+     * R-37. A path segment is one segment: {@code .} and {@code ..}, plain or percent-encoded, and an
+     * encoded slash or backslash are refused; {@code did:web:example.com:..:..:etc} used to become
+     * {@code https://example.com/../../etc/did.json}.
+     */
+    @Test
+    void aDidWebPathCannotClimbOrSplit() {
+        for (String bad : new String[]{"did:web:example.com:..:..:etc", "did:web:example.com:.:alice",
+                "did:web:example.com:%2E%2E:etc", "did:web:example.com:%2e", "did:web:example.com:a%2Fb",
+                "did:web:example.com:a%2fb", "did:web:example.com:a%5Cb"}) {
+            assertThrows(InvalidDidException.class, () -> Dids.didWebUrl(bad), bad);
+        }
+        assertEquals("https://example.com/a.b/..c/did.json", Dids.didWebUrl("did:web:example.com:a.b:..c"));
+        assertEquals("https://example.com/a%20b/did.json", Dids.didWebUrl("did:web:example.com:a%20b"));
+    }
+
+    /** R-37. The method's identifier "is a fully qualified domain name": one label is not. */
+    @Test
+    void aDidWebHostMustBeFullyQualified() {
+        for (String bad : new String[]{"did:web:localhost", "did:web:localhost%3A8443", "did:web:intranet:user:bob"}) {
+            assertThrows(InvalidDidException.class, () -> Dids.didWebUrl(bad), bad);
+        }
+        assertEquals("https://a.b/.well-known/did.json", Dids.didWebUrl("did:web:a.b"));
+    }
 }
