@@ -129,6 +129,36 @@ public class SelfSignedCidVerifier {
         return this;
     }
 
+    /** How this verifier fetches a document: {@link OutboundHttp} unless a test says otherwise (R-44). */
+    @FunctionalInterface
+    interface Fetcher {
+        /**
+         * @param followRedirects {@code true} for an HTTPS subject ({@link OutboundHttp#dereference}),
+         *                        {@code false} for a did:web document ({@link OutboundHttp#fetch})
+         */
+        OutboundHttp.Fetched fetch(String url, String accept, boolean followRedirects) throws IOException;
+    }
+
+    private Fetcher fetcher;
+
+    /**
+     * Test seam: answers this verifier's fetches from {@code fetcher} instead of the network, so what it
+     * makes of an HTTPS subject's or a did:web DID's answer — a 404, the wrong media type, a document
+     * about someone else — can be tested without a TLS server (R-44). Package-private and per instance:
+     * nothing outside this package can reach it, and no other verifier is affected.
+     */
+    SelfSignedCidVerifier fetchingWith(Fetcher fetcher) {
+        this.fetcher = fetcher;
+        return this;
+    }
+
+    private OutboundHttp.Fetched fetchDocument(String url, String accept, boolean followRedirects) throws IOException {
+        if (fetcher != null) {
+            return fetcher.fetch(url, accept, followRedirects);
+        }
+        return followRedirects ? OutboundHttp.dereference(url, accept, session) : OutboundHttp.fetch(url, accept, session);
+    }
+
     public SsiCidVerificationResult verify(String credential) {
         return verify(credential, null);
     }
@@ -421,7 +451,7 @@ public class SelfSignedCidVerifier {
             OutboundHttp.Fetched response = thisRealm == null || ownDocuments == null ? null
                     : thisRealm.document(sub, SsiCidConstants.RESOURCE_PROVIDER_ID, SsiCidConstants.CID_PATH, ownDocuments);
             if (response == null) {
-                response = OutboundHttp.dereference(sub, RdfParsing.ACCEPT, session);
+                response = fetchDocument(sub, RdfParsing.ACCEPT, true);
             }
             if (response.status() != 200) {
                 log.debugf("[%s] dereferencing sub <%s> returned HTTP %d", result.getTraceId(), sub,
@@ -543,7 +573,7 @@ public class SelfSignedCidVerifier {
      */
     private JsonNode fetchDidWebDocument(String did, String url, SsiCidVerificationResult result) {
         try {
-            OutboundHttp.Fetched response = OutboundHttp.fetch(url, Dids.DID_DOCUMENT_ACCEPT, session);
+            OutboundHttp.Fetched response = fetchDocument(url, Dids.DID_DOCUMENT_ACCEPT, false);
             if (response.status() != 200) {
                 log.debugf("[%s] resolving <%s> via %s returned HTTP %d", result.getTraceId(), did, url,
                         response.status());
