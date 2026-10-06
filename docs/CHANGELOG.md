@@ -30,6 +30,10 @@ Identifiers 1.0 §3.3, which that suite cites normatively for selecting a key.
 > (R-11). Create it in each realm and grant it to the service account that verifies credentials
 > *before* upgrading, or every caller gets a `403`. `LWS_AUTHN_VERIFY_ROLE` names a different role;
 > `LWS_AUTHN_VERIFY_ROLE=*` restores the old "any user of the realm".
+>
+> For a server running an older build, [INSTALL §16](INSTALL.md#upgrading-a-deployment-that-predates-the-october-2026-review)
+> has a step-by-step upgrade: what to check and change first, then a deploy in `public` mode followed by
+> a switch back to `bearer`.
 
 ### What changed in the specifications
 

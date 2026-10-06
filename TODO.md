@@ -509,6 +509,16 @@ is needed.
   will be more so after this review's P1 items. **Do:** as P0-10 says — stage it with
   `LWS_AUTHN_VERIFY_ACCESS=public`, confirm live traffic verifies, then tighten — but deploy a build that
   already contains R-01 to R-05, R-11 and R-14, since the deployment is internet-facing.
+  **Prepared, not done — deploying is the operator's step.** A build containing R-01 to R-14 now
+  exists (branch `p0-dos-and-token-substitution`, Keycloak 26.7.5). INSTALL §16 has a new *Upgrading a
+  deployment that predates the October 2026 review* runbook, which the CHANGELOG's upgrade box links:
+  audit issuers (claim strictness, R-06, R-07), create and grant `lws-verifier` (R-11), move callers to
+  the `credential` field, move provider options off `kc.sh build` (R-12), fix the proxy headers (R-10),
+  run Keycloak 26.7.5 (R-14); then deploy with `public` access — briefly, or restricted at nginx to the
+  callers' addresses, since the server is internet-facing — read the `settings in force` log lines,
+  verify known-good credentials, switch back to `bearer`, and delete any `lws-demo` realm (R-13). §16's
+  "Upgrade Keycloak itself" also no longer says every Keycloak upgrade needs a provider rebuild (R-14).
+  Still to do, on the live server: all of the above, and running `LwsAuthIT` with Docker first (R-43).
 
 ---
 

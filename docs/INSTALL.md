@@ -793,9 +793,44 @@ sudo -u keycloak /opt/keycloak/bin/kc.sh build
 sudo systemctl restart keycloak
 ```
 
-**Upgrade Keycloak itself**: the provider must be built against the matching `keycloak.version`. Bump
-`keycloak.version` in `pom.xml`, rebuild the provider, install the new Keycloak distribution
-(step 5), re-point the `/opt/keycloak` symlink, redeploy the JAR (step 7), `kc.sh build`, restart.
+**Upgrade Keycloak itself.** A patch release of the same minor (26.7.5 → 26.7.6) needs no new provider
+build: install the new distribution (step 5), re-point the `/opt/keycloak` symlink, redeploy the same
+JAR (step 7), `kc.sh build`, restart. Take these as they come — they are where Keycloak's security
+fixes land. A new minor (26.8) needs the provider rebuilt against it: bump `keycloak.version` in
+`pom.xml`, rebuild (step 6), then as above.
+
+### Upgrading a deployment that predates the October 2026 review
+
+A server running a provider built before the fixes in [the changelog](CHANGELOG.md)'s *Security*
+section will see breaking changes, and most of them surface as `401`, `403` or `valid: false` on
+traffic that works today. Prepare, then deploy in two steps.
+
+**Before deploying**
+
+1. **Audit what your issuers send.** The claim-level checks have no opt-out: `azp`, `iat` and `kid` are
+   required; a controlled identifier document needs `id`, `type` and `controller`; `revoked`/`expires`
+   that are not one date make a key unusable; and `sub`, `iss` and `jwks_uri` must be `https` unless
+   their host is on the SSRF allow-list. Run a sample of real credentials through a test server first.
+2. **Create the `lws-verifier` realm role** in every realm that serves `/verify`, and grant it to every
+   caller — normally the authorization server's service account ([step 9d](#9d-decide-who-may-call-verify)).
+3. **Callers send the credential in the `credential` form field** and their own access token in
+   `Authorization`, which no longer means "the credential to verify" outside `public` mode.
+4. **Move any provider option off `kc.sh build`** into `keycloak.conf` or the environment
+   ([step 9d](#9d-decide-who-may-call-verify)).
+5. **Fix the proxy headers**: nginx sets `X-Forwarded-For $remote_addr`, and `keycloak.conf` has
+   `proxy-trusted-addresses` ([steps 9b](#9b-write-keycloakconf) and [12](#12-terminate-tls-with-nginx--certbot)).
+6. **Run Keycloak 26.7.5 or later** — the release this provider is built against.
+
+**Deploy, then tighten**
+
+7. Deploy the new JAR with `LWS_AUTHN_VERIFY_ACCESS=public` in `/etc/keycloak/keycloak.env`, so callers
+   that have not yet switched to step 3 keep working while you check. On an internet-facing server keep
+   this window short, or restrict `…/verify` in nginx to your callers' addresses while it lasts.
+   Restart, read the `settings in force` lines in the startup log, and run a known-good credential
+   through each suite you use; anything `valid: false` lists the failed check.
+8. Remove `LWS_AUTHN_VERIFY_ACCESS` (back to `bearer`), restart, and confirm your callers get `200`s —
+   a `401` means a caller without an access token, a `403` one without the role.
+9. Delete any `lws-demo` realm the [fast path](#fast-path--the-bundled-demo-script) created on this server.
 
 **Uninstall**:
 
