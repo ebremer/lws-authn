@@ -118,8 +118,8 @@ public class SelfSignedCidVerifier {
      * @param credential       the self-issued JWT
      * @param expectedAudience the authorization server this verifier speaks for. The suite says the
      *                         {@code aud} claim "MUST include the target authorization server", which
-     *                         only means anything if the verifier knows which one it is; without it
-     *                         only the presence of an audience can be checked.
+     *                         only means anything if the verifier knows which one it is; without it the
+     *                         credential is not valid (R-16).
      */
     public SsiCidVerificationResult verify(String credential, String expectedAudience) {
         SsiCidVerificationResult result = new SsiCidVerificationResult();
@@ -283,22 +283,32 @@ public class SelfSignedCidVerifier {
                 result.error("Credential is missing the required 'iat' claim");
                 return result.fail();
             }
-
-            // the suite REQUIRES an audience restriction, and that it name the target authorization server
-            String[] aud = token.getAudience();
-            boolean audiencePresent = aud != null && aud.length > 0;
-            result.check("audiencePresent", audiencePresent);
-            if (!audiencePresent) {
-                result.error("Credential is missing the required 'aud' claim");
+            boolean issuedAtConsistent = JwsChecks.issuedAtConsistent(token);
+            result.check("issuedAtConsistent", issuedAtConsistent);
+            if (!issuedAtConsistent) {
+                result.error("Credential 'iat' is in the future, or after its 'exp'");
                 return result.fail();
             }
-            if (expectedAudience != null && !expectedAudience.isBlank()) {
-                boolean audienceMatched = JwsChecks.audienceIncludes(aud, expectedAudience);
-                result.check("audienceMatched", audienceMatched);
-                if (!audienceMatched) {
-                    result.error("Credential 'aud' does not include the target audience <" + expectedAudience + ">");
-                    return result.fail();
-                }
+
+            // "The `aud` claim MUST include the target authorization server." Every conforming credential
+            // names its target, so requiring the match rejects none of them — and without it a credential
+            // minted for authorization server A was accepted on behalf of B, the replay the requirement
+            // exists to stop (R-16). With no target to compare against, there is no verdict to give.
+            String[] aud = token.getAudience();
+            boolean audiencePresent = JwsChecks.audiencePresent(aud);
+            result.check("audiencePresent", audiencePresent);
+            if (!audiencePresent) {
+                result.error("Credential is missing the required 'aud' claim, or names a blank audience");
+                return result.fail();
+            }
+            boolean audienceMatched = expectedAudience != null && !expectedAudience.isBlank()
+                    && JwsChecks.audienceIncludes(aud, expectedAudience);
+            result.check("audienceMatched", audienceMatched);
+            if (!audienceMatched) {
+                result.error(expectedAudience == null || expectedAudience.isBlank()
+                        ? "No target authorization server was given to match 'aud' against"
+                        : "Credential 'aud' does not include the target audience <" + expectedAudience + ">");
+                return result.fail();
             }
 
             if (replayCache != null) {

@@ -202,6 +202,40 @@ public final class JwsChecks {
     }
 
     /** True iff {@code audience} contains {@code expected}. */
+    /**
+     * True iff {@code audience} names at least one audience and none of them is blank. A blank entry —
+     * {@code "aud": [""]} — names nothing, and used to satisfy "present" on its own (R-16).
+     */
+    public static boolean audiencePresent(String[] audience) {
+        if (audience == null || audience.length == 0) {
+            return false;
+        }
+        for (String value : audience) {
+            if (value == null || value.isBlank()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * True iff {@code token}'s {@code iat} is not in the future — allowing {@link #clockSkewSeconds()} —
+     * and not after its own {@code exp} (R-28). A credential "issued" ten years from now, or after it
+     * expires, was not issued by anything keeping time; both used to pass. Presence is checked
+     * separately, so an absent {@code iat} passes here.
+     */
+    public static boolean issuedAtConsistent(JsonWebToken token) {
+        Long iat = token == null ? null : token.getIat();
+        if (iat == null || iat == 0) {
+            return true;
+        }
+        if (iat > Instant.now().getEpochSecond() + clockSkewSeconds()) {
+            return false;
+        }
+        Long exp = token.getExp();
+        return exp == null || exp == 0 || iat <= exp;
+    }
+
     public static boolean audienceIncludes(String[] audience, String expected) {
         if (audience == null || expected == null) {
             return false;

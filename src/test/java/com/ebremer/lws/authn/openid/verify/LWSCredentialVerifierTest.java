@@ -155,4 +155,43 @@ class LWSCredentialVerifierTest {
                 "{\"sub\":\"https://id.example/u\",\"iss\":\"https://op.example/realms/r\",\"azp\":\"https://c.example\"}")
                 .getChecks().get("issuerWellFormed"));
     }
+
+    private static final String CLAIMS = "\"sub\":\"https://id.example/u\",\"iss\":\"https://op.example\","
+            + "\"azp\":\"https://c.example\"";
+
+    /**
+     * R-17. OpenID Connect Core §2: {@code iat} and {@code aud} are REQUIRED in an ID Token, whatever
+     * the caller asks for. Both are checked before anything is fetched.
+     */
+    @Test
+    void requiresIssuedAtAndAudience() {
+        long now = java.time.Instant.now().getEpochSecond();
+        VerificationResult noIat = verify("{\"alg\":\"RS256\"}",
+                "{" + CLAIMS + ",\"aud\":[\"https://c.example\"],\"exp\":" + (now + 300) + "}");
+        assertEquals(Boolean.FALSE, noIat.getChecks().get("issuedAtPresent"));
+        assertFalse(noIat.isValid());
+
+        for (String aud : new String[]{"", ",\"aud\":[]", ",\"aud\":[\"\"]", ",\"aud\":\"\"",
+                ",\"aud\":[\"https://c.example\",\" \"]"}) {
+            VerificationResult r = verify("{\"alg\":\"RS256\"}",
+                    "{" + CLAIMS + aud + ",\"iat\":" + now + ",\"exp\":" + (now + 300) + "}");
+            assertEquals(Boolean.FALSE, r.getChecks().get("audiencePresent"), aud);
+            assertFalse(r.isValid(), aud);
+        }
+    }
+
+    /** R-28, with R-17. An {@code iat} in the future, or after {@code exp}, is not one a clock wrote. */
+    @Test
+    void rejectsAnIssuedAtInTheFutureOrAfterExpiry() {
+        long now = java.time.Instant.now().getEpochSecond();
+        for (long[] times : new long[][]{{now + 86_400, now + 90_000}, {now + 50, now + 30}}) {
+            VerificationResult r = verify("{\"alg\":\"RS256\"}", "{" + CLAIMS + ",\"aud\":[\"https://c.example\"],"
+                    + "\"iat\":" + times[0] + ",\"exp\":" + times[1] + "}");
+            assertEquals(Boolean.FALSE, r.getChecks().get("issuedAtConsistent"), java.util.Arrays.toString(times));
+        }
+        VerificationResult fine = verify("{\"alg\":\"RS256\"}", "{" + CLAIMS + ",\"aud\":[\"https://c.example\"],"
+                + "\"iat\":" + now + ",\"exp\":" + (now + 300) + "}");
+        assertEquals(Boolean.TRUE, fine.getChecks().get("issuedAtConsistent"));
+        assertEquals(Boolean.TRUE, fine.getChecks().get("audiencePresent"));
+    }
 }

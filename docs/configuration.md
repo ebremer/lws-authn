@@ -116,7 +116,7 @@ A shared secret is shown only as `secret=(set)`.
 | Setting | Scope key | System property | Environment variable | Default |
 |---|---|---|---|---|
 | Serve this suite at all | `enabled` | `lws.authn.enabled` | `LWS_AUTHN_ENABLED` | `true` |
-| Audience to require when the request names none | `audience` | `lws.authn.audience` | `LWS_AUTHN_AUDIENCE` | — |
+| Audience to require when the request names none — for `lws-ssi-cid`, which needs one, the target authorization server | `audience` | `lws.authn.audience` | `LWS_AUTHN_AUDIENCE` | — |
 | `Cache-Control: max-age` on a served CID | `cid-cache-seconds` | `lws.authn.cid.cacheSeconds` | `LWS_AUTHN_CID_CACHE_SECONDS` | `300` |
 | CID requests per minute, per caller | `cid-rate-limit` | `lws.authn.cid.rateLimit` | `LWS_AUTHN_CID_RATE_LIMIT` | `600` |
 

@@ -487,6 +487,18 @@ class LwsAuthIT {
         }
     }
 
+    /**
+     * R-16. "The {@code aud} claim MUST include the target authorization server": with no target named
+     * by the request or the deployment there is no verdict to give, so the request is refused.
+     */
+    @Test
+    void aSelfSignedCidRequestWithoutAnAudienceIsRefused() throws Exception {
+        HttpResponse<String> r = postForm(base + "/realms/" + REALM + "/lws-ssi-cid/verify",
+                Map.of("credential", mintDidKeyP256()), accessToken());
+        assertEquals(400, r.statusCode(), r.body());
+        assertTrue(r.body().contains("audience"), r.body());
+    }
+
     /** A token from another realm is not a caller credential for this one. */
     @Test
     void aBadCallerTokenIsRefused() throws Exception {

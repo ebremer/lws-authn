@@ -226,4 +226,59 @@ class SelfSignedCidDidSubjectTest {
             assertEquals(Boolean.FALSE, result.getChecks().get("typeIsJwt"), typ);
         }
     }
+
+    private static String edDsaCredential(KeyPair pair, String did, Map<String, Object> claims) throws Exception {
+        return SelfIssuedJwts.sign(claims, "EdDSA", methodId(did), pair.getPrivate(), "Ed25519");
+    }
+
+    /**
+     * R-16. "The {@code aud} claim MUST include the target authorization server." With no target to
+     * compare against, a credential minted for any authorization server used to verify; it now does not.
+     */
+    @Test
+    void withoutATargetAuthorizationServerNothingIsValid() throws Exception {
+        KeyPair pair = SelfIssuedJwts.ed25519();
+        String did = DidKey.encodeEd25519(pair.getPublic());
+        String jwt = edDsaCredential(pair, did, SelfIssuedJwts.claims(did));
+        for (String target : new String[]{null, "", " "}) {
+            assertRejected(new SelfSignedCidVerifier(null).verify(jwt, target), "audienceMatched");
+        }
+        assertRejected(new SelfSignedCidVerifier(null).verify(jwt, "https://another-as.example"), "audienceMatched");
+        assertTrue(verify(jwt).isValid(), "the control: the right target verifies");
+    }
+
+    /** R-16. A blank audience names nothing, and used to count as "present" on its own. */
+    @Test
+    void aBlankAudienceIsNotAnAudience() throws Exception {
+        KeyPair pair = SelfIssuedJwts.ed25519();
+        String did = DidKey.encodeEd25519(pair.getPublic());
+        for (java.util.List<String> aud : java.util.List.of(java.util.List.of(""), java.util.List.of(" "),
+                java.util.List.of(SelfIssuedJwts.AUDIENCE, ""))) {
+            Map<String, Object> claims = SelfIssuedJwts.claims(did);
+            claims.put("aud", aud);
+            assertRejected(verify(edDsaCredential(pair, did, claims)), "audiencePresent");
+        }
+    }
+
+    /** R-28, with R-17. A credential issued in the future, or after it expires, was not issued by a clock. */
+    @Test
+    void anIssuedAtInTheFutureOrAfterExpiryIsRejected() throws Exception {
+        KeyPair pair = SelfIssuedJwts.ed25519();
+        String did = DidKey.encodeEd25519(pair.getPublic());
+        long now = Instant.now().getEpochSecond();
+
+        Map<String, Object> future = SelfIssuedJwts.claims(did);
+        future.put("iat", now + 10 * 365 * 86_400L);
+        future.put("exp", now + 11 * 365 * 86_400L);
+        assertRejected(verify(edDsaCredential(pair, did, future)), "issuedAtConsistent");
+
+        Map<String, Object> afterExpiry = SelfIssuedJwts.claims(did);
+        afterExpiry.put("iat", now + 50);   // within the clock skew, so not "in the future"
+        afterExpiry.put("exp", now + 30);
+        assertRejected(verify(edDsaCredential(pair, did, afterExpiry)), "issuedAtConsistent");
+
+        Map<String, Object> slightlyAhead = SelfIssuedJwts.claims(did);
+        slightlyAhead.put("iat", now + 30);  // a clock a little fast is still a clock
+        assertTrue(verify(edDsaCredential(pair, did, slightlyAhead)).isValid());
+    }
 }

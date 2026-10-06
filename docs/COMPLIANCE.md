@@ -70,7 +70,7 @@ suite to be associated with a token type URI.
 | subject REQUIRED | `subjectPresent` | `selfIssued` | `NameID` from the covered assertion |
 | issuer REQUIRED | `issuerPresent` + `issuerWellFormed` | `selfIssued` | `issuerPresent` |
 | client REQUIRED | `clientPresent` (`azp`) | `selfIssued` (`client_id`) | `recipientPresent` |
-| audience restriction | `audienceMatched` | `audiencePresent` + `audienceMatched` | `audiencePresent` + `audienceMatched` |
+| audience restriction | `audiencePresent` always; `audienceMatched` when one is given | `audiencePresent` + `audienceMatched`, both always | `audiencePresent` + `audienceMatched` |
 | signed (§4.2) | `signatureValid` | `signatureValid` | `signatureValid` |
 | token type URI (§4.3) | reported as `tokenType` on every result | | |
 
@@ -99,7 +99,10 @@ cannot inject. Discovery on `iss` must return a configuration whose `issuer` mat
 (`issuerDiscoveryMatches`) and an https `jwks_uri` (Discovery 1.0 §3; `jwksResolved`). Every fetch —
 `sub`, discovery, `jwks_uri` — is https; plain http only to a host the deployment allow-lists. The `alg` is pinned to the discovered key
 type (`algorithmMatchesKey`) — the classic HS256-against-an-RSA-public-key confusion. Signature
-(`signatureValid`) and an explicit `exp` (`notExpired`; a missing `exp` is not "never expires").
+(`signatureValid`) and an explicit `exp` (`notExpired`; a missing `exp` is not "never expires"). The
+claims OpenID Connect Core §2 makes REQUIRED in an ID Token are required whatever the caller asks:
+`iat` (`issuedAtPresent`) — not in the future, nor after `exp` (`issuedAtConsistent`) — and a non-blank
+`aud` (`audiencePresent`), checked with `sub`, `iss` and `azp` before anything is fetched.
 
 **Enforced when the caller asks.** OpenID Connect Core §3.1.3.7 steps 3–5, which the suite
 incorporates by reference: pass `client_id` and `aud` must list it (`audienceContainsClient`) and `azp`
@@ -143,8 +146,11 @@ The `kid` may be the method's full identifier (the verification method identifie
 and the usual form for a DID), its fragment with or without `#`, or its JWK's `kid`. The key must be
 published for signing and consistent with the token's algorithm (`verificationMethodUsableForSigning`,
 `algorithmMatchesKey` — `ES*` pinned to its curve). Signature (`signatureValid`), explicit `exp`
-(`notExpired`), required `iat` (`issuedAtPresent`), and an audience that is present and — when one is
-configured or supplied — matched (`audiencePresent`, `audienceMatched`).
+(`notExpired`), required `iat` (`issuedAtPresent`) that is not in the future nor after `exp`
+(`issuedAtConsistent`), and an audience that is present, not blank, and **includes the target
+authorization server** (`audiencePresent`, `audienceMatched`): "The `aud` claim MUST include the target
+authorization server." The target is the request's `audience` or the configured one, and a request with
+neither is a `400` — there is no verdict without it.
 
 **DID subjects.** The suite "is designed to work with subject identifiers that use HTTPS URIs as well
 as DID URIs", because a DID document extends a controlled identifier document (DID 1.1 §5). No DID
@@ -230,7 +236,7 @@ Each is a decision, not an oversight; each names where the reasoning lives.
 | # | Divergence | Why |
 |---|---|---|
 | 1 | The LWS `client` identifier is required but **not required to be a URI** | Core §4.1 says SHOULD, not MUST. The bundled demo realm uses `lws-app`, a bare id, which is what Keycloak conventionally issues — see **P6-8**, and use a URI in production if your relying party cares. |
-| 2 | **Audience binding is optional per request** | The suites RECOMMEND an audience restriction; enforcing one unconditionally would reject conforming credentials. A deployment that wants it mandatory sets the `audience` configuration, which applies when a request names none (**P3-6**). |
+| 2 | **OpenID: audience binding is optional per request** | Core RECOMMENDS an audience restriction naming the authorization server, and OpenID Connect binds an ID Token to a relying party, not to an authorization server: requiring a match would reject conforming ID Tokens. `aud` must be present (OpenID Connect Core §2); matching it is enforced when the request passes `client_id` or `audience`, or the deployment configures `audience` (**P3-6**). The **self-signed CID** suite is different: there "the `aud` claim MUST include the target authorization server", every conforming credential names one, and the match is required — a request with no target is refused (**R-16**). SAML follows the request and the configuration, as OpenID does. |
 | 3 | **Replay protection is off by default** | No suite mandates it, and a verify endpoint is legitimately asked about the same live credential repeatedly. Opt in per caller (**P2-8**). |
 | 4 | **`cid/{userId}` is unauthenticated** | A controlled identifier is a URL others dereference; an identity document requiring a credential would not be dereferenceable. Enumeration is bounded — random-UUID ids, a uniform response shape, and a rate limit — not closed (**P3-7**). |
 | 5 | **The SAML verifier trusts the caller's certificate** | The suite's own model: SAML trust is out of band. See the suite section above. |

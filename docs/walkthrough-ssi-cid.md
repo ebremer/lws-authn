@@ -148,8 +148,11 @@ Sign `base64url(header) + "." + base64url(payload)`; ES256 needs the signature a
 ```bash
 curl -s -X POST "$KC/realms/$REALM/lws-ssi-cid/verify" \
   -H "Authorization: Bearer $CALLER_ACCESS_TOKEN" \
-  --data-urlencode "credential=$JWT" | jq
+  --data-urlencode "credential=$JWT" --data-urlencode "audience=https://as.example" | jq
 ```
+
+`audience` is the authorization server you verify for, and the credential's `aud` must include it:
+the suite requires that, so a request without one — and without a configured `audience` — is a `400`.
 
 > `Authorization` identifies **you**, the caller: the `…/verify` endpoints are authenticated by
 > default, and the caller must hold the realm role `lws-verifier`. The credential being checked always
@@ -167,7 +170,10 @@ curl -s -X POST "$KC/realms/$REALM/lws-ssi-cid/verify" \
     "verificationMethodFound": true,
     "signatureValid": true,
     "notExpired": true,
-    "audiencePresent": true
+    "issuedAtPresent": true,
+    "issuedAtConsistent": true,
+    "audiencePresent": true,
+    "audienceMatched": true
   }
 }
 ```

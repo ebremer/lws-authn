@@ -93,7 +93,7 @@ suite validates against — one `Multikey` method, referenced from `authenticati
 ```bash
 curl -s -X POST "$KC/realms/$REALM/lws-ssi-cid/verify" \
   -H "Authorization: Bearer $CALLER_ACCESS_TOKEN" \
-  --data-urlencode "credential=$JWT" | jq
+  --data-urlencode "credential=$JWT" --data-urlencode "audience=https://as.example" | jq
 ```
 
 > `Authorization` identifies **you**, the caller: the `…/verify` endpoints are authenticated by
@@ -114,7 +114,10 @@ curl -s -X POST "$KC/realms/$REALM/lws-ssi-cid/verify" \
     "algorithmMatchesKey": true,
     "signatureValid": true,
     "notExpired": true,
-    "audiencePresent": true
+    "issuedAtPresent": true,
+    "issuedAtConsistent": true,
+    "audiencePresent": true,
+    "audienceMatched": true
   }
 }
 ```
@@ -143,6 +146,6 @@ prior relationship and no lookups.
 - **No hosting, no rotation endpoint.** A new key means a new `did:key` (a new identifier). There is
   nothing to publish or update.
 - **Audience / token type.** The credential carries token type `urn:ietf:params:oauth:token-type:jwt`
-  when exchanged, and the result reports it. The verifier requires `aud` and `iat`; pass
-  `audience=<authorization server>` to require that `aud` actually names the server doing the checking,
-  which is what the suite means by "the `aud` claim MUST include the target authorization server".
+  when exchanged, and the result reports it. The verifier requires `aud` and `iat`, and requires
+  `audience=<authorization server>` — or a configured `audience` — so that `aud` is checked against the
+  server doing the checking: "the `aud` claim MUST include the target authorization server".

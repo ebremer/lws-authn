@@ -31,6 +31,9 @@ Identifiers 1.0 §3.3, which that suite cites normatively for selecting a key.
 > *before* upgrading, or every caller gets a `403`. `LWS_AUTHN_VERIFY_ROLE` names a different role;
 > `LWS_AUTHN_VERIFY_ROLE=*` restores the old "any user of the realm".
 >
+> **Callers of `/lws-ssi-cid/verify` must pass `audience`** — the authorization server they verify for —
+> unless the deployment sets `audience` (R-16); without either the endpoint answers `400`.
+>
 > For a server running an older build, [INSTALL §16](INSTALL.md#upgrading-a-deployment-that-predates-the-october-2026-review)
 > has a step-by-step upgrade: what to check and change first, then a deploy in `public` mode followed by
 > a switch back to `bearer`.
@@ -209,6 +212,19 @@ realm under the default `bearer` access mode, before any signature is checked.
 - **`/verify` in `bearer` mode needs the realm role `lws-verifier`** (R-11) — see the box at the top.
   A realm that does not define it refuses every bearer caller with a `403`, and the server log says so
   once per realm.
+- **`/lws-ssi-cid/verify` needs to know the target authorization server** (R-16). The suite says "the
+  `aud` claim MUST include the target authorization server", and the verifier only checked that *some*
+  audience was present unless told which one to expect — so a credential minted for one authorization
+  server verified on behalf of any other, and so did `"aud": [""]`. Pass `audience` with each request,
+  or set the `audience` setting; a request with neither is now a `400`, and `audienceMatched` is always
+  checked. A blank audience no longer counts as present, in either JWT suite.
+- **The OpenID suite requires `aud` and `iat`** (R-17), which OpenID Connect Core §2 makes REQUIRED in
+  every ID Token; they were only read when the caller passed `client_id` or `audience`. Both are now
+  checked before anything is fetched (`audiencePresent`, `issuedAtPresent`). Every provider known to
+  this project sets both.
+- **An `iat` in the future, or after `exp`, is refused** in both JWT suites (new check
+  `issuedAtConsistent`; the clock skew allowance applies). A credential "issued" ten years from now used
+  to pass.
 
 The rest are requirements of CID 1.0, which the self-signed CID suite cites for selecting the key, and
 each may reject a document that used to verify. Check your issuers' documents before rolling this out.

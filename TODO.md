@@ -532,7 +532,7 @@ is needed.
 
 ## P1 — Specification conformance (MUST-level, as of 5 October 2026)
 
-- [ ] **R-16 · Self-signed CID: "The `aud` claim MUST include the target authorization server" is not enforced
+- [x] **R-16 · Self-signed CID: "The `aud` claim MUST include the target authorization server" is not enforced
   by default** (challenges COMPLIANCE divergence 2). `Medium` · spec-conformance · `S` · *verified*
   `SelfSignedCidVerifier.java:283-297`: with no `audience` form parameter and no configured `audience`,
   only presence is checked — `aud: ["https://evil.example"]` returns `valid: true`, and so does `aud: [""]`;
@@ -543,8 +543,17 @@ is needed.
   **Do:** for `lws-ssi-cid`, refuse a verification with no known target (`400`, or `valid: false` with
   `audienceMatched: false` and a clear error), or at the very least never return `valid: true` without
   `audienceMatched`; reject blank `aud` values. Rewrite divergence 2 per suite. Breaking — CHANGELOG.
+  **Done, both ways.** `SsiCidResourceProvider` answers `400` when neither the request nor the
+  `audience` setting names a target, before anything is fetched; and `SelfSignedCidVerifier` itself
+  always records `audienceMatched`, `false` with "No target authorization server was given…" when it is
+  called without one. `JwsChecks.audiencePresent` refuses an empty `aud` and any blank entry, in both
+  JWT suites. Divergence 2 now distinguishes the suites; `suites.md`, `configuration.md`, both
+  self-signed walkthroughs (whose manual `curl` lacked `audience`) and the CHANGELOG's upgrade box say
+  so. The demo scripts and `LwsAuthIT` already passed `audience`. `SelfSignedCidDidSubjectTest`:
+  `withoutATargetAuthorizationServerNothingIsValid`, `aBlankAudienceIsNotAnAudience` — both fail
+  against the previous code.
 
-- [ ] **R-17 · OpenID: `aud` and `iat` are REQUIRED ID Token claims and are not enforced.**
+- [x] **R-17 · OpenID: `aud` and `iat` are REQUIRED ID Token claims and are not enforced.**
   `Medium` · spec-conformance · `S` · *verified*
   `LWSCredentialVerifier.java:217-243` reads `aud` only when the caller passes `client_id` or `audience`,
   and never reads `iat`; a token with neither validates. OpenID Connect Core §2 lists `aud` and `iat` as
@@ -556,6 +565,15 @@ is needed.
   Consider `aud ∋ azp` by default with an opt-out (some providers issue cross-client tokens where they
   differ). Fix the stale step numbering in the comment at `:217-220` (errata set 2 renumbered §3.1.3.7
   and made `azp` handling SHOULD/MAY).
+  **Done.** The OpenID verifier now checks `issuedAtPresent`, `issuedAtConsistent` and
+  `audiencePresent` with the other claims, before anything is fetched — so a token that cannot be valid
+  costs no outbound request, and the checks are unit-testable. `JwsChecks.issuedAtConsistent` refuses an
+  `iat` beyond now + skew or after `exp`, in both JWT suites — R-28's first half. The comment no longer
+  numbers §3.1.3.7's steps. Not done: `aud ∋ azp` by default. It would only check that the token is
+  consistent with itself — a token minted for another relying party has `aud = azp` too — so it binds
+  nothing; `client_id` and `audience` do that. `LWSCredentialVerifierTest`:
+  `requiresIssuedAtAndAudience`, `rejectsAnIssuedAtInTheFutureOrAfterExpiry`; the self-signed suite's
+  `anIssuedAtInTheFutureOrAfterExpiryIsRejected`. All fail against the previous code.
 
 - [ ] **R-18 · "a valid controlled identifier document with an `id` value equal to the subject identifier"
   is only loosely checked, in both JWT suites.** `Medium` · spec-conformance · `S` · *demonstrated*
@@ -711,6 +729,8 @@ is needed.
   lifetime bound). **P1-C1** proposed rejecting a future `iat` and a configurable maximum credential age;
   only `iat` presence was implemented. **Do:** reject `iat > now + skew` and `iat > exp`; optional
   `max-credential-lifetime-seconds` on `exp − iat`.
+  **Partly done with R-17:** `issuedAtConsistent` rejects both, in both suites. Open: the optional
+  maximum lifetime.
 
 - [ ] **R-29 · Follow (or explicitly refuse) redirects when dereferencing a subject.**
   `Low` · interop/docs · `S` · *verified*

@@ -128,10 +128,10 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
      * <em>caller's</em> own credential (see {@link com.ebremer.lws.authn.verify.VerifyAccess}), and
      * only falls back to meaning the credential to verify in {@code public} access mode.
      *
-     * <p>The optional {@code audience} parameter names the target authorization server, which the
-     * suite requires the credential's {@code aud} to include. Without it only the presence of an
-     * audience restriction can be checked, so a deployment can supply one for every request with the
-     * {@code audience} setting.</p>
+     * <p>The {@code audience} parameter names the target authorization server, which the suite requires
+     * the credential's {@code aud} to include. It is required — by the request, or for every request by
+     * the {@code audience} setting — and a request with neither is a {@code 400} before anything is
+     * fetched: without a target there is no verdict to give (R-16).</p>
      *
      * <p><strong>An invalid credential is a {@code 200}</strong> carrying {@code "valid": false}, not a
      * {@code 401}: the request was authorized and this is its answer. A {@code 401} from this endpoint
@@ -163,9 +163,13 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
         if (oversized != null) {
             return oversized;
         }
+        String audience = settings.audienceFor(expectedAudience);
+        if (audience == null) {
+            return JsonResponses.badRequest("missing 'audience' form parameter: the credential's 'aud' must include "
+                    + "the target authorization server, so the verifier must be told which one that is");
+        }
 
-        SsiCidVerificationResult result =
-                new SelfSignedCidVerifier(session).verify(token, settings.audienceFor(expectedAudience));
+        SsiCidVerificationResult result = new SelfSignedCidVerifier(session).verify(token, audience);
         return JsonResponses.of(Response.Status.OK, result);
     }
 }

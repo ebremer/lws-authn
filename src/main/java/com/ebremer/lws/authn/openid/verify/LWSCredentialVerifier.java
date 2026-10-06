@@ -174,6 +174,31 @@ public class LWSCredentialVerifier {
                 return result.fail();
             }
 
+            // OpenID Connect Core §2 lists 'iat' and 'aud' among the claims an ID Token REQUIRES, and the
+            // suite says the token "MUST be validated as described by" Core — so both are required
+            // whatever the caller asks for (R-17), as the self-signed suite already required them.
+            // Checked here, with the other claims, so a token that cannot be valid costs no fetch.
+            Long iat = token.getIat();
+            boolean issuedAtPresent = iat != null && iat != 0;
+            result.check("issuedAtPresent", issuedAtPresent);
+            if (!issuedAtPresent) {
+                result.error("ID Token is missing the required 'iat' claim");
+                return result.fail();
+            }
+            boolean issuedAtConsistent = JwsChecks.issuedAtConsistent(token);
+            result.check("issuedAtConsistent", issuedAtConsistent);
+            if (!issuedAtConsistent) {
+                result.error("ID Token 'iat' is in the future, or after its 'exp'");
+                return result.fail();
+            }
+            String[] audience = token.getAudience();
+            boolean audiencePresent = JwsChecks.audiencePresent(audience);
+            result.check("audiencePresent", audiencePresent);
+            if (!audiencePresent) {
+                result.error("ID Token is missing the required 'aud' claim, or names a blank audience");
+                return result.fail();
+            }
+
             // 2. Trust establishment: dereference the subject to a controlled identifier document.
             //    The suite requires "a valid controlled identifier document with an `id` value equal to
             //    the subject identifier", so the document must actually claim to be about this subject.
@@ -244,11 +269,10 @@ public class LWSCredentialVerifier {
                 return result.fail();
             }
 
-            // OpenID Connect Core 3.1.3.7 steps 3-5. Without an expected client identifier there is
-            // nothing to compare against, so these are enforced only when the caller says who it is —
-            // but step 4 (multiple audiences require azp) holds unconditionally, and azp is already
-            // required above, so the multi-audience case is covered either way.
-            String[] audience = token.getAudience();
+            // OpenID Connect Core §3.1.3.7: 'aud' MUST contain the relying party's own client_id, and
+            // what follows about 'azp' is SHOULD and MAY since errata set 2. Only the caller knows which
+            // relying party it is, so the comparison runs when it says — 'client_id' — and the
+            // configured or requested 'audience' binds the credential to an authorization server.
             if (!isBlank(expectedClientId)) {
                 boolean audienceHasClient = JwsChecks.audienceIncludes(audience, expectedClientId);
                 result.check("audienceContainsClient", audienceHasClient);

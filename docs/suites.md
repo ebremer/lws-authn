@@ -84,8 +84,9 @@ whose `id` **is** `sub`; select, by `kid`, a `JsonWebKey` or `Multikey` method t
 that is neither revoked nor expired; pin the `alg` to that key; validate the signature; require `iat`
 and `exp`; and check the audience.
 
-Pass `audience=<authorization server>` to enforce the suite's "the `aud` claim MUST include the target
-authorization server" — without it only the presence of an audience restriction can be checked.
+`audience=<authorization server>` is **required** — or the deployment's `audience` setting. The suite
+says "the `aud` claim MUST include the target authorization server", and that only means something if
+the verifier knows which one it is; a request without one is a `400`, before anything is fetched.
 
 The document a verifier dereferences must therefore be CID-conformant: an `id` equal to the subject,
 and the key listed under `authentication` (CID 1.0 §2.3 — a key defined under `verificationMethod`
