@@ -292,7 +292,7 @@ is needed.
   `LwsAuthIT.anAccessTokenIsNotAnLwsCredential`, which presents a real realm access token — written,
   not yet run (no Docker here; see R-43).
 
-- [ ] **R-06 · Revocation and expiry of a verification method fail open.**
+- [x] **R-06 · Revocation and expiry of a verification method fail open.**
   `Medium` · security/spec-conformance · `S` · *verified*
   CID 1.0 §2.2: a revoked method "MUST NOT be used". On the JSON path (every `did:web` document, and the
   compact fallback) `firstText` (`SelfSignedCidVerifier.java:844-852`) returns `null` for any non-string
@@ -304,9 +304,15 @@ is needed.
   was never revoked."
   **Do:** a present `revoked`/`expires` that is not exactly one parseable date-time string or literal
   makes the method unusable, on both paths. Tests for each shape.
-  **Partly done with R-03:** the RDF path now refuses a method with two values for one property or a
-  non-literal value (`rdfAMethodWithTwoValuesForOnePropertyIsNotUsable`,
-  `rdfANonLiteralRevocationIsNotUsable`). The JSON path's `firstText` is still open.
+  **Done.** The RDF half went with R-03: a method with two values for one property, or a non-literal
+  value, is unusable (`rdfAMethodWithTwoValuesForOnePropertyIsNotUsable`,
+  `rdfANonLiteralRevocationIsNotUsable`). On the JSON path `revoked` and `expires` are now read by
+  `soleDateTime` instead of `firstText`: a string, a JSON-LD value object with a string `@value`, or an
+  array of exactly one of those is read as that date; JSON `null` is no value, as it is to a JSON-LD
+  processor; anything else — two dates, an empty array, a number, a boolean, a node reference, a value
+  object whose `@value` is not a string — makes the method unusable. `VerificationMethodRulesTest`
+  covers each shape for both properties (`aRevocationThatIsNotAStringIsNotIgnored`,
+  `aRevocationInAnotherShapeOfOneDateIsRead`); both fail against the previous code.
 
 - [ ] **R-07 · Plain `http` is accepted for every key-bearing fetch.**
   `Medium` · security/spec-conformance · `S` · *verified*

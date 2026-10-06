@@ -198,6 +198,44 @@ class VerificationMethodRulesTest {
         }
     }
 
+    /**
+     * R-06. A {@code revoked} or {@code expires} that is not a string used to read as "never": the key
+     * stayed usable. Whatever its shape, a value that is there is either read as one date or makes the
+     * method unusable.
+     */
+    @Test
+    void aRevocationThatIsNotAStringIsNotIgnored() throws Exception {
+        for (String property : new String[]{"revoked", "expires"}) {
+            for (String value : new String[]{
+                    "[\"2000-01-01T00:00:00Z\",\"2999-01-01T00:00:00Z\"]",
+                    "[\"2999-01-01T00:00:00Z\",\"2000-01-01T00:00:00Z\"]",
+                    "[]", "946684800", "true", "{}", "{\"@id\":\"#when\"}", "{\"@value\":946684800}"}) {
+                String doc = "{\"id\":\"" + SUB + "\",\"authentication\":["
+                        + multikey(SUB + "#k1", SUB, ",\"" + property + "\":" + value) + "]}";
+                assertTrue(json(doc).isEmpty(), property + ": " + value);
+            }
+        }
+    }
+
+    /** R-06. The shapes JSON-LD gives one date — a value object, an array of one — are read as that date. */
+    @Test
+    void aRevocationInAnotherShapeOfOneDateIsRead() throws Exception {
+        for (String value : new String[]{
+                "{\"@value\":\"2000-01-01T00:00:00Z\",\"@type\":\"xsd:dateTime\"}",
+                "[\"2000-01-01T00:00:00Z\"]",
+                "[{\"@value\":\"2000-01-01T00:00:00Z\"}]"}) {
+            String doc = "{\"id\":\"" + SUB + "\",\"authentication\":["
+                    + multikey(SUB + "#k1", SUB, ",\"revoked\":" + value) + "]}";
+            List<VerificationMethod> methods = json(doc);
+            assertEquals(1, methods.size(), value);
+            assertEquals(Instant.parse("2000-01-01T00:00:00Z"), methods.get(0).revoked(), value);
+            assertNotNull(methods.get(0).inactiveReason(Instant.now()), value);
+        }
+        String unset = "{\"id\":\"" + SUB + "\",\"authentication\":["
+                + multikey(SUB + "#k1", SUB, ",\"revoked\":null") + "]}";
+        assertNull(json(unset).get(0).revoked(), "null is no value, as it is to a JSON-LD processor");
+    }
+
     // ---------------------------------------------------------------------------------- the RDF path
 
     private static Resource method(Model model, String id, String type) {

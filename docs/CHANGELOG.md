@@ -94,6 +94,12 @@ realm under the default `bearer` access mode, before any signature is checked.
   user's credential. `at+jwt` is now refused in both JWT suites, and the OpenID verifier rejects a
   payload `typ` other than `ID` (new check `tokenIsIdToken`; an absent claim, usual outside Keycloak,
   is still fine).
+- **A revocation date in an unexpected shape no longer leaves a key usable** (R-06). CID 1.0 §2.2: a
+  revoked verification method "MUST NOT be used". On the JSON path — every `did:web` document — the
+  verifier looked for a string, and anything else read as "never revoked": a JSON-LD value object
+  `{"@value": "2000-01-01T00:00:00Z", "@type": "xsd:dateTime"}`, two dates in an array, a number. Now a
+  value object or an array of one is read as its date, `null` is no value, and every other shape makes
+  the method unusable; `expires` follows the same rule.
 
 ### Added
 
@@ -153,7 +159,8 @@ each may reject a document that used to verify. Check your issuers' documents be
 - **`revoked` and `expires` are honoured** (`verificationMethodActive`), and a value that is not an
   `xsd:dateTimeStamp` makes the method unusable rather than silently current. In RDF, so does a value
   that is not a literal, or **two values for one property** — two expiry dates, two revocations, two
-  `publicKeyJwk`s — where the reader used to take whichever the query returned first (R-03).
+  `publicKeyJwk`s — where the reader used to take whichever the query returned first (R-03). In JSON, so
+  does a value that is not one date: an array of two, a number, a node reference (R-06).
 - **A `publicKeyJwk` carrying private members is not a usable verification method** (CID 1.0 §2.2.3).
   This provider already refused to *publish* one (P0-1); it now refuses to *verify* against one too.
 - **`ES256`/`ES384`/`ES512` are pinned to P-256/P-384/P-521** (RFC 7518 §3.4), for every JWT suite. A

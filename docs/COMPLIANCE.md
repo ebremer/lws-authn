@@ -132,8 +132,9 @@ the suite cites for this step. The method must be:
 - a **`JsonWebKey`** with a `publicKeyJwk` carrying no private members (§2.2.3), or a **`Multikey`**
   with a `publicKeyMultibase` that is a canonically encoded public key of a supported type — a
   secret-key header is refused by name (§2.2.2);
-- **neither revoked nor expired** (`verificationMethodActive`, §2.2); an unreadable `revoked` or
-  `expires` makes the method unusable rather than current.
+- **neither revoked nor expired** (`verificationMethodActive`, §2.2); a `revoked` or `expires` that is
+  not exactly one `xsd:dateTimeStamp` — unparseable, two values, a number, a node reference — makes the
+  method unusable rather than current.
 
 The `kid` may be the method's full identifier (the verification method identifier §3.3 retrieves by,
 and the usual form for a DID), its fragment with or without `#`, or its JWK's `kid`. The key must be

@@ -581,11 +581,11 @@ public class SelfSignedCidVerifier {
         Instant revoked;
         Instant expires;
         try {
-            revoked = dateTimeStamp(firstText(method, "revoked"));
-            expires = dateTimeStamp(firstText(method, "expires"));
-        } catch (DateTimeParseException malformed) {
+            revoked = soleDateTime(method, "revoked");
+            expires = soleDateTime(method, "expires");
+        } catch (DateTimeParseException | IllegalArgumentException malformed) {
             // An unreadable revocation date is not evidence that the key was never revoked.
-            log.debugf("skipping verification method <%s>: 'revoked'/'expires' is not an xsd:dateTimeStamp", methodId);
+            log.debugf("skipping verification method <%s>: 'revoked'/'expires' is not one xsd:dateTimeStamp", methodId);
             return Optional.empty();
         }
         if (SsiCidConstants.TYPE_JSON_WEB_KEY.equals(type)) {
@@ -882,6 +882,37 @@ public class SelfSignedCidVerifier {
             }
         }
         return null;
+    }
+
+    /**
+     * The one date-time a method's {@code revoked} or {@code expires} gives, or {@code null} if it has
+     * none.
+     *
+     * <p>A string, as CID 1.0 writes it; or the shapes JSON-LD gives the same single value — a value
+     * object ({@code {"@value": "…", "@type": "xsd:dateTime"}}) or an array of one. {@code null} is no
+     * value, as it is to a JSON-LD processor. Anything else fails rather than reading as "no date": this
+     * used to look for a string and, finding a value object, an array of two dates or a number instead,
+     * report the key as never revoked (R-06). The RDF path applies the same rule through
+     * {@link #soleLiteral}.</p>
+     *
+     * @throws IllegalArgumentException if present and not exactly one string
+     * @throws DateTimeParseException   if that string is not an {@code xsd:dateTimeStamp}
+     */
+    private static Instant soleDateTime(JsonNode method, String name) {
+        JsonNode value = method.get(name);
+        if (value == null || value.isNull()) {
+            return null;
+        }
+        if (value.isArray() && value.size() == 1) {
+            value = value.get(0);
+        }
+        if (value.isObject() && value.has("@value")) {
+            value = value.get("@value");
+        }
+        if (!value.isTextual()) {
+            throw new IllegalArgumentException("'" + name + "' is not one date-time string");
+        }
+        return dateTimeStamp(value.asText());
     }
 
     /** An {@code xsd:dateTimeStamp} (a date-time with a time zone), or {@code null} if absent. */
