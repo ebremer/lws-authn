@@ -29,6 +29,13 @@ behaviours are covered by tests — `mvn test` for the unit tests, `mvn verify` 
     host, or OpenID `/verify` is blocked.
   - A host that fails repeatedly is short-circuited for a few seconds, so a dead or hostile target
     cannot be used to make this server spend five seconds per request on the caller's behalf.
+- **Bounded fetches.** A hostile server can try to hold a verifier's fetch open — trickling a byte at a
+  time, or streaming without end. Each fetch has a hard **deadline** on the whole exchange
+  (`http-deadline-millis`, 10 s), enforced by aborting the request, which shuts the connection whatever
+  it is doing; a body is refused the moment it passes the **size cap** (`http-max-response-bytes`), or
+  up front when its declared length does, and the connection is aborted rather than read to the end;
+  and one caller may have at most `http-max-concurrent-per-caller` (4) fetches in flight, so a single
+  caller cannot occupy the connection pool every verifier shares.
 - **Information disclosure.** A verify response never reflects an upstream status code, a resolved
   address or a raw exception message. Rejections carry a `traceId`; the detail is in the server log at
   `DEBUG` under that id.

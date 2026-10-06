@@ -92,10 +92,18 @@ setting leaves it alone):
 | SSRF allow-list (comma-separated hosts) | `allowed-internal-hosts` | `lws.authn.allowedInternalHosts` | `LWS_AUTHN_ALLOWED_INTERNAL_HOSTS` | — |
 | Outbound fetch timeout (ms) | `http-timeout-millis` | `lws.authn.http.timeoutMillis` | `LWS_AUTHN_HTTP_TIMEOUT_MILLIS` | `5000` |
 | Outbound response cap (bytes) | `http-max-response-bytes` | `lws.authn.http.maxResponseBytes` | `LWS_AUTHN_HTTP_MAX_RESPONSE_BYTES` | `262144` |
+| Outbound fetch deadline, whole exchange (ms) | `http-deadline-millis` | `lws.authn.http.deadlineMillis` | `LWS_AUTHN_HTTP_DEADLINE_MILLIS` | `10000` |
+| Outbound fetches one caller may have in flight | `http-max-concurrent-per-caller` | `lws.authn.http.maxConcurrentPerCaller` | `LWS_AUTHN_HTTP_MAX_CONCURRENT_PER_CALLER` | `4` |
 | Clock skew allowed on `exp`/`nbf`/`<Conditions>` (s) | `clock-skew-seconds` | `lws.authn.clockSkewSeconds` | `LWS_AUTHN_CLOCK_SKEW_SECONDS` | `60` |
 
 Out-of-range values are clamped rather than honoured (timeout 100 ms–60 s, response cap 1 KiB–16 MiB,
-skew 0–600 s), and a value that will not parse falls back to the default.
+deadline 100 ms–120 s, fetches in flight 1–64, skew 0–600 s), and a value that will not parse falls back
+to the default.
+
+The **timeout** bounds each step of a fetch — waiting for a pooled connection, connecting, each read —
+and the **deadline** bounds all of them together: a server that sends one byte just inside the timeout,
+every time, is still cut off at the deadline. A caller over its **in-flight** share is refused at once
+rather than queued, so one caller cannot occupy the connection pool every verifier shares.
 
 **Per realm.** `enabled` is the one setting realms of the same server sensibly differ on, so it also
 honours a realm attribute — `lws.authn.<providerId>.enabled` (for example

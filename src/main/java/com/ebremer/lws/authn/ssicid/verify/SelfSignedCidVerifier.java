@@ -58,7 +58,6 @@ import org.apache.jena.query.ResultSet;
 import org.apache.jena.rdf.model.Literal;
 import org.apache.jena.rdf.model.Model;
 import org.apache.jena.rdf.model.RDFNode;
-import org.keycloak.broker.provider.util.SimpleHttp;
 import org.keycloak.crypto.KeyType;
 import org.keycloak.crypto.KeyUse;
 import org.keycloak.crypto.KeyWrapper;
@@ -321,20 +320,19 @@ public class SelfSignedCidVerifier {
         try {
             // OutboundHttp applies the SSRF policy, refuses a host that has been failing, and fetches
             // through a client that follows no redirects and resolves only vetted addresses.
-            SimpleHttp.Response response = OutboundHttp.get(sub, session)
-                    .header("Accept", SsiCidConstants.TURTLE + ", " + SsiCidConstants.JSON_LD + ";q=0.9, "
-                            + SsiCidConstants.N_TRIPLES + ";q=0.8, " + SsiCidConstants.RDF_XML + ";q=0.7")
-                    .asResponse();
-            if (response.getStatus() != 200) {
+            OutboundHttp.Fetched response = OutboundHttp.fetch(sub,
+                    SsiCidConstants.TURTLE + ", " + SsiCidConstants.JSON_LD + ";q=0.9, "
+                            + SsiCidConstants.N_TRIPLES + ";q=0.8, " + SsiCidConstants.RDF_XML + ";q=0.7", session);
+            if (response.status() != 200) {
                 log.debugf("[%s] dereferencing sub <%s> returned HTTP %d", result.getTraceId(), sub,
-                        response.getStatus());
+                        response.status());
                 OutboundHttp.recordFailure(sub);
                 result.check("subjectDereferenced", false);
                 result.error("Dereferencing 'sub' <" + sub + "> did not return a controlled identifier document");
                 return null;
             }
-            String contentType = response.getFirstHeader("Content-Type");
-            String body = response.asString();
+            String contentType = response.contentType();
+            String body = response.body();
             // Processed as real JSON-LD where possible, so a conforming document from another
             // implementation works regardless of how it spells things; the compact reader remains for
             // a document naming a context this provider does not bundle.
@@ -424,18 +422,16 @@ public class SelfSignedCidVerifier {
      */
     private JsonNode fetchDidWebDocument(String did, String url, SsiCidVerificationResult result) {
         try {
-            SimpleHttp.Response response = OutboundHttp.get(url, session)
-                    .header("Accept", Dids.DID_DOCUMENT_ACCEPT)
-                    .asResponse();
-            if (response.getStatus() != 200) {
+            OutboundHttp.Fetched response = OutboundHttp.fetch(url, Dids.DID_DOCUMENT_ACCEPT, session);
+            if (response.status() != 200) {
                 log.debugf("[%s] resolving <%s> via %s returned HTTP %d", result.getTraceId(), did, url,
-                        response.getStatus());
+                        response.status());
                 OutboundHttp.recordFailure(url);
                 result.check("subjectDereferenced", false);
                 result.error("Resolving 'sub' <" + did + "> did not return a DID document");
                 return null;
             }
-            String contentType = response.getFirstHeader("Content-Type");
+            String contentType = response.contentType();
             if (!Dids.isDidDocumentMediaType(contentType)) {
                 OutboundHttp.recordFailure(url);
                 result.check("subjectDereferenced", false);
@@ -443,7 +439,7 @@ public class SelfSignedCidVerifier {
                         + contentType.split(";")[0].trim() + "', which is not a DID document media type");
                 return null;
             }
-            JsonNode document = JsonSerialization.mapper.readTree(response.asString());
+            JsonNode document = JsonSerialization.mapper.readTree(response.body());
             if (document == null || !document.isObject()) {
                 OutboundHttp.recordFailure(url);
                 result.check("subjectDereferenced", false);

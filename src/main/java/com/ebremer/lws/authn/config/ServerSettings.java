@@ -38,6 +38,8 @@ import org.keycloak.Config;
  *   <tr><td>{@code allowed-internal-hosts}</td><td>{@code lws.authn.allowedInternalHosts}</td><td>{@code LWS_AUTHN_ALLOWED_INTERNAL_HOSTS}</td><td>none</td></tr>
  *   <tr><td>{@code http-timeout-millis}</td><td>{@code lws.authn.http.timeoutMillis}</td><td>{@code LWS_AUTHN_HTTP_TIMEOUT_MILLIS}</td><td>{@code 5000}</td></tr>
  *   <tr><td>{@code http-max-response-bytes}</td><td>{@code lws.authn.http.maxResponseBytes}</td><td>{@code LWS_AUTHN_HTTP_MAX_RESPONSE_BYTES}</td><td>{@code 262144}</td></tr>
+ *   <tr><td>{@code http-deadline-millis}</td><td>{@code lws.authn.http.deadlineMillis}</td><td>{@code LWS_AUTHN_HTTP_DEADLINE_MILLIS}</td><td>{@code 10000}</td></tr>
+ *   <tr><td>{@code http-max-concurrent-per-caller}</td><td>{@code lws.authn.http.maxConcurrentPerCaller}</td><td>{@code LWS_AUTHN_HTTP_MAX_CONCURRENT_PER_CALLER}</td><td>{@code 4}</td></tr>
  *   <tr><td>{@code clock-skew-seconds}</td><td>{@code lws.authn.clockSkewSeconds}</td><td>{@code LWS_AUTHN_CLOCK_SKEW_SECONDS}</td><td>{@code 60}</td></tr>
  * </table>
  *
@@ -61,6 +63,21 @@ public final class ServerSettings {
     public static final long DEFAULT_MAX_RESPONSE_BYTES = 256L * 1024L;
 
     /**
+     * The whole of one outbound fetch — waiting for a connection, connecting, the TLS handshake and
+     * reading the body — must finish within this, or it is aborted. The per-operation timeout alone
+     * bounds each read, not their sum: a server that sends one byte just inside it, every time, holds
+     * the connection for as long as it likes (R-01).
+     */
+    public static final int DEFAULT_HTTP_DEADLINE_MILLIS = 10_000;
+
+    /**
+     * Outbound fetches one caller may have in flight at once. The verifiers share one connection pool,
+     * so without a per-caller bound a single caller pointing every request at a slow server could hold
+     * all of it, and every other caller's verification would wait for a connection (R-01).
+     */
+    public static final int DEFAULT_HTTP_MAX_CONCURRENT_PER_CALLER = 4;
+
+    /**
      * Leeway allowed on {@code exp}, {@code nbf} and the SAML {@code Conditions} window. Both JWT
      * suites say a verifier "MAY provide for some small leeway to account for clock skew".
      */
@@ -72,6 +89,8 @@ public final class ServerSettings {
     private static volatile Set<String> allowedInternalHosts;
     private static volatile int httpTimeoutMillis = DEFAULT_HTTP_TIMEOUT_MILLIS;
     private static volatile long maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES;
+    private static volatile int httpDeadlineMillis = DEFAULT_HTTP_DEADLINE_MILLIS;
+    private static volatile int httpMaxConcurrentPerCaller = DEFAULT_HTTP_MAX_CONCURRENT_PER_CALLER;
     private static volatile long clockSkewSeconds = DEFAULT_CLOCK_SKEW_SECONDS;
 
     /** Which settings some provider has already contributed, so only a real disagreement is logged. */
@@ -106,6 +125,22 @@ public final class ServerSettings {
                     DEFAULT_MAX_RESPONSE_BYTES), 1024L, 16L * 1024L * 1024L);
             warnOnConflict(providerId, "http-max-response-bytes", maxResponseBytes, bytes);
             maxResponseBytes = bytes;
+        }
+        if (Settings.isSet(scope, "http-deadline-millis",
+                "lws.authn.http.deadlineMillis", "LWS_AUTHN_HTTP_DEADLINE_MILLIS")) {
+            int millis = (int) clamp(Settings.getInt(scope, "http-deadline-millis",
+                    "lws.authn.http.deadlineMillis", "LWS_AUTHN_HTTP_DEADLINE_MILLIS",
+                    DEFAULT_HTTP_DEADLINE_MILLIS), 100, 120_000);
+            warnOnConflict(providerId, "http-deadline-millis", httpDeadlineMillis, millis);
+            httpDeadlineMillis = millis;
+        }
+        if (Settings.isSet(scope, "http-max-concurrent-per-caller",
+                "lws.authn.http.maxConcurrentPerCaller", "LWS_AUTHN_HTTP_MAX_CONCURRENT_PER_CALLER")) {
+            int permits = (int) clamp(Settings.getInt(scope, "http-max-concurrent-per-caller",
+                    "lws.authn.http.maxConcurrentPerCaller", "LWS_AUTHN_HTTP_MAX_CONCURRENT_PER_CALLER",
+                    DEFAULT_HTTP_MAX_CONCURRENT_PER_CALLER), 1, 64);
+            warnOnConflict(providerId, "http-max-concurrent-per-caller", httpMaxConcurrentPerCaller, permits);
+            httpMaxConcurrentPerCaller = permits;
         }
         if (Settings.isSet(scope, "clock-skew-seconds",
                 "lws.authn.clockSkewSeconds", "LWS_AUTHN_CLOCK_SKEW_SECONDS")) {
@@ -143,6 +178,16 @@ public final class ServerSettings {
         return maxResponseBytes;
     }
 
+    /** The total time one outbound verifier fetch may take before it is aborted, in milliseconds. */
+    public static int httpDeadlineMillis() {
+        return httpDeadlineMillis;
+    }
+
+    /** Outbound verifier fetches one caller may have in flight at once. */
+    public static int httpMaxConcurrentPerCaller() {
+        return httpMaxConcurrentPerCaller;
+    }
+
     /** Leeway allowed on a credential's validity window, in seconds. */
     public static long clockSkewSeconds() {
         return clockSkewSeconds;
@@ -154,6 +199,8 @@ public final class ServerSettings {
         allowedInternalHosts = null;
         httpTimeoutMillis = DEFAULT_HTTP_TIMEOUT_MILLIS;
         maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES;
+        httpDeadlineMillis = DEFAULT_HTTP_DEADLINE_MILLIS;
+        httpMaxConcurrentPerCaller = DEFAULT_HTTP_MAX_CONCURRENT_PER_CALLER;
         clockSkewSeconds = DEFAULT_CLOCK_SKEW_SECONDS;
     }
 

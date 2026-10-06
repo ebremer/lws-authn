@@ -165,7 +165,7 @@ validation) — **not applicable**: this provider is not an authorization server
 (R-11), and every item from R-01 to R-04 runs **before** a signature is checked, so no valid credential
 is needed.
 
-- [ ] **R-01 · Outbound fetches have no overall deadline; a trickling or endless response stalls every
+- [x] **R-01 · Outbound fetches have no overall deadline; a trickling or endless response stalls every
   verification server-wide.** `High` · security/DoS · `M` · *demonstrated*
   `net/OutboundHttp.java:98-113` sets only connect, pool-wait and per-read socket timeouts; the guarded
   client is one static pool of 16 connections, 4 per route (`:72-73`). Socket timeout is per read, so a
@@ -178,6 +178,17 @@ is needed.
   `abortConnection()` instead of `close()`; refuse an oversized `Content-Length` before reading; bound
   concurrent fetches per target host and per caller. Add trickle and endless-body tests to
   `OutboundHttpClientTest` (its `keepsTheResponseSizeCap` never sends an oversized body).
+  **Done:** `OutboundHttp.fetch(url, accept, session)` replaces Keycloak's `SimpleHttp` in both
+  verifiers, and `LwsSimpleHttp` is gone. A daemon timer aborts the request at `http-deadline-millis`
+  (default 10 s, clamped 100 ms–120 s), which shuts the socket whatever the request is doing — waiting
+  for a pooled connection, connecting, or blocked in a read; a declared `Content-Length` over the cap is
+  refused before reading, and the body is read by hand and the request aborted the moment it passes the
+  cap; a non-`200` body is not read at all. One caller (`VerifyAccess.callerKey`) may have at most
+  `http-max-concurrent-per-caller` fetches in flight (default 4, clamped 1–64); one more is refused at
+  once with `CallerBusyException` rather than queued for the pool. Session mode now refuses redirects
+  per request too. The OpenID verifier's JWKS fetch also gained the status check it never had.
+  `OutboundHttpClientTest` adds a trickling body, an endless body (and asserts the server stops being
+  read), a stalled server, a declared gigabyte, and the per-caller bound; R-02 is the breaker half.
 
 - [ ] **R-02 · Any caller can hold the per-host circuit breaker open, and it re-arms itself.**
   `High` · security/DoS · `S` · *verified + demonstrated*

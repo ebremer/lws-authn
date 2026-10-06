@@ -10,37 +10,60 @@
  */
 package com.ebremer.lws.authn.net;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
-import org.apache.http.client.HttpClient;
+import org.apache.http.Header;
+import org.apache.http.HttpEntity;
+import org.apache.http.client.config.RequestConfig;
+import org.apache.http.client.methods.CloseableHttpResponse;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.entity.ContentType;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.jboss.logging.Logger;
-import org.keycloak.broker.provider.util.SimpleHttp;
+import org.keycloak.connections.httpclient.HttpClientProvider;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.truststore.TruststoreProvider;
 
 import com.ebremer.lws.authn.config.ServerSettings;
+import com.ebremer.lws.authn.verify.VerifyAccess;
 
 /**
- * Builds {@link SimpleHttp} GETs pre-configured with bounded timeouts, a response-size cap, redirect
- * following disabled, and SSRF-vetted name resolution.
+ * Fetches a document for a verifier: SSRF-vetted name resolution, no redirects, bounded timeouts, a
+ * hard deadline on the whole exchange, a response-size cap, and a bound on how many fetches one caller
+ * may have in flight.
  *
- * <p><strong>Why not the session's client.</strong> {@code SimpleHttp.doGet(url, session)} uses
- * Keycloak's server-wide HTTP client. That client resolves the target host itself, after
- * {@link SsrfGuard} has already resolved it — a rebinding window — and whether it follows redirects is
- * a deployment setting ({@code spi-connections-http-client-default-allow-redirects}, off by default,
- * but one flag away from letting a 302 walk past the guard). Neither is controllable per request.
- * This class therefore builds its own client with {@code disableRedirectHandling()} and
- * {@link GuardedDnsResolver}, while reusing Keycloak's configured truststore and hostname-verification
- * policy so private-CA deployments keep working.</p>
+ * <p><strong>Why not the session's client.</strong> Keycloak's server-wide HTTP client resolves the
+ * target host itself, after {@link SsrfGuard} has already resolved it — a rebinding window — and
+ * whether it follows redirects is a deployment setting
+ * ({@code spi-connections-http-client-default-allow-redirects}, off by default, but one flag away from
+ * letting a 302 walk past the guard). This class therefore builds its own client with
+ * {@code disableRedirectHandling()} and {@link GuardedDnsResolver}, while reusing Keycloak's configured
+ * truststore and hostname-verification policy so private-CA deployments keep working.</p>
  *
- * <p>Set {@code lws.authn.http.mode=session} (or {@code LWS_AUTHN_HTTP_MODE=session}) to fall back to
- * the server-wide client — for a deployment that needs Keycloak's proxy mappings, which this client
- * does not replicate. That fallback is neither redirect-safe nor rebinding-safe.</p>
+ * <p><strong>Why not Keycloak's {@code SimpleHttp}.</strong> It bounds each read but not the exchange,
+ * and when its size cap trips it closes the stream, which makes Apache HttpClient read and discard the
+ * rest of the body to keep the connection reusable. A server trickling one byte just inside the read
+ * timeout, or streaming without end, therefore held a pooled connection and a worker thread for as long
+ * as it liked; sixteen such fetches exhausted the pool and stopped every verification on the server
+ * (R-01). {@link #fetch} instead aborts the request — which shuts the socket rather than draining it —
+ * at a deadline, on a declared length over the cap, and as soon as the body passes it.</p>
+ *
+ * <p>Set {@code lws.authn.http.mode=session} (or {@code LWS_AUTHN_HTTP_MODE=session}) to fetch through
+ * the server-wide client instead — for a deployment that needs Keycloak's proxy mappings, which this
+ * client does not replicate. Redirects stay off per request and the deadline, cap and caller bound
+ * still apply, but name resolution is then Keycloak's: that fallback is not rebinding-safe.</p>
  *
  * @author Erich Bremer
  */
@@ -69,6 +92,14 @@ public final class OutboundHttp {
         return ServerSettings.maxResponseBytes();
     }
 
+    /**
+     * The total time one fetch may take, connection and body included, before it is aborted
+     * (milliseconds). Configurable as {@code http-deadline-millis}.
+     */
+    public static int deadlineMillis() {
+        return ServerSettings.httpDeadlineMillis();
+    }
+
     private static final int POOL_SIZE = 16;
     private static final int MAX_PER_ROUTE = 4;
 
@@ -86,33 +117,176 @@ public final class OutboundHttp {
         }
     }
 
+    /** Thrown when the caller already has as many fetches in flight as it may. */
+    public static final class CallerBusyException extends RuntimeException {
+        public CallerBusyException(String message) {
+            super(message);
+        }
+    }
+
+    /** Thrown when a response body is, or declares itself, larger than {@link #maxResponseBytes()}. */
+    public static final class ResponseTooLargeException extends IOException {
+        public ResponseTooLargeException(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * A completed fetch.
+     *
+     * @param status      the HTTP status
+     * @param contentType the {@code Content-Type} the server declared, or {@code null}
+     * @param body        the decoded body for a {@code 200}; {@code null} for any other status, whose
+     *                    body is not read at all
+     */
+    public record Fetched(int status, String contentType, String body) {
+    }
+
     private static volatile CloseableHttpClient guardedClient;
 
     /**
-     * A {@link SimpleHttp} GET with the bounded timeouts and response-size cap already applied, whose
-     * URL has passed {@link SsrfGuard} and whose host is not currently short-circuited.
-     *
-     * @throws SsrfGuard.BlockedException if the URL must not be fetched
-     * @throws HostUnavailableException if the host has failed repeatedly in the last few seconds
+     * Aborts fetches that overrun their deadline. One daemon thread: an abort only shuts a socket, and
+     * a cancelled task is removed at once, so the queue holds no more than the fetches in flight.
      */
-    public static SimpleHttp get(String url, KeycloakSession session) {
+    private static final ScheduledThreadPoolExecutor DEADLINES = deadlineTimer();
+
+    private static ScheduledThreadPoolExecutor deadlineTimer() {
+        ScheduledThreadPoolExecutor timer = new ScheduledThreadPoolExecutor(1, task -> {
+            Thread thread = new Thread(task, "lws-authn-fetch-deadline");
+            thread.setDaemon(true);
+            return thread;
+        });
+        timer.setRemoveOnCancelPolicy(true);
+        return timer;
+    }
+
+    /** Fetches each caller has in flight, keyed by {@link VerifyAccess#callerKey}. Entries at zero are removed. */
+    private static final ConcurrentHashMap<String, Integer> IN_FLIGHT = new ConcurrentHashMap<>();
+
+    /**
+     * GETs {@code url} for a verifier.
+     *
+     * @param accept  the {@code Accept} header to send, or {@code null}
+     * @param session the request's session: whose caller the fetch counts against, and — in
+     *                {@code session} mode — whose HTTP client fetches. May be {@code null} (tests).
+     * @throws SsrfGuard.BlockedException  if the URL must not be fetched
+     * @throws HostUnavailableException    if the host has failed repeatedly in the last few seconds
+     * @throws CallerBusyException         if the caller already has its share of fetches in flight
+     * @throws ResponseTooLargeException   if the body is over the size cap
+     * @throws IOException                 if the fetch fails or overruns its deadline
+     */
+    public static Fetched fetch(String url, String accept, KeycloakSession session) throws IOException {
         // The breaker comes first: its whole purpose is to stop paying for a host that keeps failing,
         // and resolving the name before consulting it would pay part of that cost anyway.
         requireClosedCircuit(hostOf(url));
         SsrfGuard.verify(url);
-        HttpClient client = usingSessionClient() ? null : guardedClient(session);
-        long maxBytes = maxResponseBytes();
-        int timeout = timeoutMillis();
-        SimpleHttp request = client == null
-                ? SimpleHttp.doGet(url, session).setMaxConsumedResponseSize(maxBytes)
-                : LwsSimpleHttp.get(url, client, maxBytes);
-        return request
-                .connectTimeoutMillis(timeout)
-                .connectionRequestTimeoutMillis(timeout)
-                .socketTimeOutMillis(timeout);
+        String caller = VerifyAccess.callerKey(session);
+        acquire(caller);
+        try {
+            return execute(url, accept, client(session));
+        } finally {
+            release(caller);
+        }
     }
 
-    // ------------------------------------------------------------------ the shared, guarded client
+    private static Fetched execute(String url, String accept, CloseableHttpClient client) throws IOException {
+        int timeout = timeoutMillis();
+        HttpGet request = new HttpGet(url);
+        request.setConfig(RequestConfig.custom()
+                .setConnectTimeout(timeout)
+                .setSocketTimeout(timeout)
+                .setConnectionRequestTimeout(timeout)
+                // Already off on the guarded client; set per request too so session mode cannot follow one.
+                .setRedirectsEnabled(false)
+                .build());
+        if (accept != null) {
+            request.setHeader("Accept", accept);
+        }
+        // abort() shuts the connection whatever the request is doing — waiting for a pooled connection,
+        // connecting, or blocked in a read of the body — which is what makes the deadline a deadline.
+        ScheduledFuture<?> deadline = DEADLINES.schedule(request::abort, deadlineMillis(), TimeUnit.MILLISECONDS);
+        try (CloseableHttpResponse response = client.execute(request)) {
+            int status = response.getStatusLine().getStatusCode();
+            Header type = response.getFirstHeader("Content-Type");
+            String contentType = type == null ? null : type.getValue();
+            if (status != 200) {
+                // No verifier reads anything but a 200, so an error body is never worth reading — and
+                // closing it normally would read it anyway, to keep the connection.
+                request.abort();
+                return new Fetched(status, contentType, null);
+            }
+            return new Fetched(status, contentType, readBody(response.getEntity(), request));
+        } finally {
+            deadline.cancel(false);
+        }
+    }
+
+    /**
+     * Reads at most {@link #maxResponseBytes()} of {@code entity}. Over the cap — declared or actual —
+     * the request is aborted before the stream is closed, so the rest of the body is never read.
+     */
+    private static String readBody(HttpEntity entity, HttpGet request) throws IOException {
+        if (entity == null) {
+            return "";
+        }
+        long max = maxResponseBytes();
+        long declared = entity.getContentLength();
+        if (declared > max) {
+            request.abort();
+            throw new ResponseTooLargeException("response declares " + declared + " bytes; the limit is " + max);
+        }
+        ByteArrayOutputStream body = new ByteArrayOutputStream(declared > 0 ? (int) declared : 8192);
+        try (InputStream in = entity.getContent()) {
+            byte[] chunk = new byte[8192];
+            long total = 0;
+            int n;
+            while ((n = in.read(chunk)) != -1) {
+                total += n;
+                if (total > max) {
+                    request.abort();
+                    throw new ResponseTooLargeException("response exceeds the limit of " + max + " bytes");
+                }
+                body.write(chunk, 0, n);
+            }
+        }
+        return body.toString(charsetOf(entity));
+    }
+
+    private static Charset charsetOf(HttpEntity entity) {
+        try {
+            ContentType type = ContentType.get(entity);
+            Charset charset = type == null ? null : type.getCharset();
+            return charset == null ? StandardCharsets.UTF_8 : charset;
+        } catch (RuntimeException unreadable) {
+            return StandardCharsets.UTF_8;
+        }
+    }
+
+    // ------------------------------------------------------------------ per-caller concurrency
+
+    private static void acquire(String caller) {
+        int limit = ServerSettings.httpMaxConcurrentPerCaller();
+        IN_FLIGHT.compute(caller, (key, inFlight) -> {
+            int current = inFlight == null ? 0 : inFlight;
+            if (current >= limit) {
+                throw new CallerBusyException("caller already has " + current + " outbound fetches in flight");
+            }
+            return current + 1;
+        });
+    }
+
+    private static void release(String caller) {
+        IN_FLIGHT.computeIfPresent(caller, (key, inFlight) -> inFlight <= 1 ? null : inFlight - 1);
+    }
+
+    // ------------------------------------------------------------------ the HTTP client
+
+    private static CloseableHttpClient client(KeycloakSession session) {
+        if (usingSessionClient() && session != null) {
+            return session.getProvider(HttpClientProvider.class).getHttpClient();
+        }
+        return guardedClient(session);
+    }
 
     private static CloseableHttpClient guardedClient(KeycloakSession session) {
         CloseableHttpClient existing = guardedClient;

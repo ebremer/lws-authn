@@ -40,7 +40,6 @@ import org.apache.jena.rdf.model.ModelFactory;
 import org.apache.jena.rdf.model.Property;
 import org.apache.jena.rdf.model.Resource;
 import org.apache.jena.vocabulary.RDF;
-import org.keycloak.broker.provider.util.SimpleHttp;
 import org.keycloak.crypto.KeyUse;
 import org.keycloak.crypto.KeyWrapper;
 import org.keycloak.crypto.SignatureProvider;
@@ -263,20 +262,19 @@ public class LWSCredentialVerifier {
         try {
             // OutboundHttp applies the SSRF policy, refuses a host that has been failing, and fetches
             // through a client that follows no redirects and resolves only vetted addresses.
-            SimpleHttp.Response response = OutboundHttp.get(sub, session)
-                    .header("Accept", LWSConstants.TURTLE + ", " + LWSConstants.JSON_LD + ";q=0.9, "
-                            + LWSConstants.N_TRIPLES + ";q=0.8, " + LWSConstants.RDF_XML + ";q=0.7")
-                    .asResponse();
-            if (response.getStatus() != 200) {
+            OutboundHttp.Fetched response = OutboundHttp.fetch(sub,
+                    LWSConstants.TURTLE + ", " + LWSConstants.JSON_LD + ";q=0.9, "
+                            + LWSConstants.N_TRIPLES + ";q=0.8, " + LWSConstants.RDF_XML + ";q=0.7", session);
+            if (response.status() != 200) {
                 log.debugf("[%s] dereferencing sub <%s> returned HTTP %d", result.getTraceId(), sub,
-                        response.getStatus());
+                        response.status());
                 OutboundHttp.recordFailure(sub);
                 result.check("subjectDereferenced", false);
                 result.error("Dereferencing 'sub' <" + sub + "> did not return a controlled identifier document");
                 return null;
             }
-            String contentType = response.getFirstHeader("Content-Type");
-            String body = response.asString();
+            String contentType = response.contentType();
+            String body = response.body();
             // JSON-LD is processed properly (Jena + Titanium, contexts served from this JAR) so a
             // conforming document verifies whatever shape it is written in. The compact reader stays
             // as a fallback for a document whose context this provider does not bundle, which is the
@@ -427,16 +425,16 @@ public class LWSCredentialVerifier {
         try {
             String base = iss.endsWith("/") ? iss.substring(0, iss.length() - 1) : iss;
             discoveryUrl = base + "/.well-known/openid-configuration";
-            SimpleHttp.Response discovery = OutboundHttp.get(discoveryUrl, session).asResponse();
-            if (discovery.getStatus() != 200) {
+            OutboundHttp.Fetched discovery = OutboundHttp.fetch(discoveryUrl, "application/json", session);
+            if (discovery.status() != 200) {
                 log.debugf("[%s] OpenID discovery for <%s> returned HTTP %d", result.getTraceId(), iss,
-                        discovery.getStatus());
+                        discovery.status());
                 OutboundHttp.recordFailure(discoveryUrl);
                 result.check("jwksResolved", false);
                 result.error("OpenID Connect Discovery for <" + iss + "> did not return a configuration document");
                 return null;
             }
-            JsonNode config = discovery.asJson();
+            JsonNode config = JsonSerialization.mapper.readTree(discovery.body());
             String discoveredIssuer = text(config, "issuer");
             boolean issuerOk = iss.equals(discoveredIssuer);
             result.check("issuerDiscoveryMatches", issuerOk);
@@ -453,7 +451,15 @@ public class LWSCredentialVerifier {
                 result.error("The OpenID configuration for <" + iss + "> has no jwks_uri");
                 return null;
             }
-            JSONWebKeySet keySet = OutboundHttp.get(jwksUri, session).asJson(JSONWebKeySet.class);
+            OutboundHttp.Fetched jwks = OutboundHttp.fetch(jwksUri, "application/jwk-set+json, application/json", session);
+            if (jwks.status() != 200) {
+                log.debugf("[%s] the JWKS for <%s> returned HTTP %d", result.getTraceId(), iss, jwks.status());
+                OutboundHttp.recordFailure(discoveryUrl);
+                result.check("jwksResolved", false);
+                result.error("The JWK set published by <" + iss + "> could not be retrieved");
+                return null;
+            }
+            JSONWebKeySet keySet = JsonSerialization.readValue(jwks.body(), JSONWebKeySet.class);
             OutboundHttp.recordSuccess(discoveryUrl);
             String kid = header.getKeyId();
             String alg = header.getRawAlgorithm();

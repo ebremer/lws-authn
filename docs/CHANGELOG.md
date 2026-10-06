@@ -46,6 +46,23 @@ Identifiers 1.0 §3.3, which that suite cites normatively for selecting a key.
   table of published versions was stale, and it named a 21 August vocabulary draft that was never
   published (the latest is the Group Note Draft of 14 July 2026). It is corrected.
 
+### Security
+
+Fixes from the review of 6 October 2026 (`TODO.md`, R-items). Each was reachable by any user of the
+realm under the default `bearer` access mode, before any signature is checked.
+
+- **Outbound fetches are bounded in total time, and an over-long body is cut off rather than drained**
+  (R-01). The verifiers fetched through Keycloak's `SimpleHttp`, which bounds each read but not the
+  exchange, and which — when its size cap tripped — closed the stream, making Apache HttpClient read the
+  rest of the body to keep the connection. A server trickling bytes, or streaming without end, held a
+  pooled connection and a worker thread for as long as it liked, and sixteen of them stopped every
+  verification on the server. Fetches now go through `OutboundHttp.fetch`: a hard deadline on the whole
+  exchange (`http-deadline-millis`, default 10 s) aborts the request, which shuts the socket; a body is
+  refused as soon as it passes `http-max-response-bytes`, or up front when its declared length does; a
+  non-`200` body is never read; and one caller may have at most `http-max-concurrent-per-caller`
+  (default 4) fetches in flight, refused at once rather than queued. In `session` HTTP mode redirects
+  are now also refused per request.
+
 ### Added
 
 - **A Docker setup for trying the suites** (`Dockerfile`, `compose.yaml`). `docker compose up --build

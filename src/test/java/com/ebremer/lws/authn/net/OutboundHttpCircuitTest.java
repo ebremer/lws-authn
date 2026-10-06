@@ -33,7 +33,7 @@ class OutboundHttpCircuitTest {
             OutboundHttp.recordFailure(URL);
         }
         assertThrows(OutboundHttp.HostUnavailableException.class,
-                () -> OutboundHttp.get(URL, null),
+                () -> OutboundHttp.fetch(URL, null, null),
                 "a host that just failed five times must not be fetched again immediately");
     }
 
@@ -44,7 +44,7 @@ class OutboundHttpCircuitTest {
         }
         // Four failures are not enough to open it. The call still fails, but on the SSRF check
         // (cid.example does not resolve) rather than on the breaker.
-        assertThrows(SsrfGuard.BlockedException.class, () -> OutboundHttp.get(URL, null));
+        assertThrows(SsrfGuard.BlockedException.class, () -> OutboundHttp.fetch(URL, null, null));
     }
 
     @Test
@@ -53,7 +53,7 @@ class OutboundHttpCircuitTest {
             OutboundHttp.recordFailure(URL);
         }
         OutboundHttp.recordSuccess(URL);
-        assertThrows(SsrfGuard.BlockedException.class, () -> OutboundHttp.get(URL, null),
+        assertThrows(SsrfGuard.BlockedException.class, () -> OutboundHttp.fetch(URL, null, null),
                 "after a success the breaker must be closed again");
     }
 
@@ -64,7 +64,7 @@ class OutboundHttpCircuitTest {
             OutboundHttp.recordFailure(URL);
         }
         assertThrows(SsrfGuard.BlockedException.class,
-                () -> OutboundHttp.get("https://other.example/agent", null));
+                () -> OutboundHttp.fetch("https://other.example/agent", null, null));
     }
 
     @Test
