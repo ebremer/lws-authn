@@ -97,10 +97,40 @@ public final class CidEndpoint {
         }
 
         String issuer = ThisRealm.issuerOf(session, realm);
-        String webId = issuer + "/" + settings.getProviderId() + "/" + cidPath + "/" + user.getId();
+        String webId = documentUrl(issuer, settings.getProviderId(), cidPath, user.getId());
 
         String body = renderer.render(user, issuer, webId, contentType);
         return withValidators(contentType, body, ifNoneMatch, settings.getCidCacheSeconds());
+    }
+
+    /**
+     * The URL of {@code userId}'s document: {@code {issuer}/{providerId}/{cidPath}/{userId}}, the id
+     * percent-encoded as one path segment (R-30). A Keycloak user id is a UUID, which encoding leaves
+     * alone; a user-storage provider's id is {@code f:<component>:<external id>}, and the external id
+     * may hold anything — a {@code /} or {@code #} in it used to give the user an identifier for another
+     * path, or with a fragment.
+     */
+    public static String documentUrl(String issuer, String providerId, String cidPath, String userId) {
+        return issuer + "/" + providerId + "/" + cidPath + "/" + pathSegment(userId);
+    }
+
+    /** {@code value} as one RFC 3986 path segment: {@code pchar}s kept, everything else UTF-8 encoded. */
+    static String pathSegment(String value) {
+        if (value.equals(".") || value.equals("..")) {
+            return value.replace(".", "%2E");
+        }
+        StringBuilder out = new StringBuilder(value.length());
+        for (byte b : value.getBytes(java.nio.charset.StandardCharsets.UTF_8)) {
+            int c = b & 0xff;
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+                    || "-._~!$&'()*+,;=:@".indexOf(c) >= 0) {
+                out.append((char) c);
+            } else {
+                out.append('%').append(Character.toUpperCase(Character.forDigit(c >> 4, 16)))
+                        .append(Character.toUpperCase(Character.forDigit(c & 0xf, 16)));
+            }
+        }
+        return out.toString();
     }
 
     /**

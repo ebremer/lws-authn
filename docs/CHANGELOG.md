@@ -169,6 +169,15 @@ realm under the default `bearer` access mode, before any signature is checked.
   brute-force protection and says in its name that it is for development; and INSTALL generates a
   password, says to delete the realm afterwards, and lists that in the production checklist. **If you
   ran the fast path on a real server, delete the `lws-demo` realm.**
+- **The WebID mapper will not make one user another's subject** (R-30). A *WebID user attribute* naming
+  a URL in the realm's own namespace — `{issuer}/lws/cid/<another user's id>`, whose document lists this
+  issuer as that user's OpenID provider — was used as the `sub`, and the token verified as the other
+  user; only the attribute policy being admin-only stood in the way. Such a value, a WebID another user
+  of the realm also holds (OIDC Core §2: a `sub` is locally unique), and one longer than 255 ASCII
+  characters are now ignored with a warning, and the hosted WebID used instead. The mapper also warns,
+  at most every ten minutes, when the realm's user profile lets users edit the attribute. A user id is
+  now percent-encoded into the hosted WebID, so a user-storage id holding `/` or `#` cannot give its user
+  an identifier for some other path; Keycloak's own UUID ids are unaffected.
 
 ### Added
 
@@ -377,6 +386,10 @@ each may reject a document that used to verify. Check your issuers' documents be
   realm and `lws-demo.sh` set it off explicitly. Existing mappers with the switch explicitly on keep
   it; turn it off unless something downstream needs the WebID in the access token. The ID Token and
   userinfo are unchanged.
+- **Userinfo's `sub` follows the ID Token's** (R-30). The mapper's *Add to userinfo* switch is gone — one
+  saved with a mapper is ignored — and *Add to ID token and userinfo* sets both, because OIDC Core
+  §5.3.2 requires userinfo's `sub` to match the ID Token's exactly: with the ID Token on and userinfo
+  off, a client checking that saw two different subjects.
 - **Built and tested against Keycloak 26.8.0** (was 26.7.3; W-5), released 1 October 2026. **Run the
   provider on 26.8.0 or a later 26.8 release**; from 26.7 that is a minor upgrade of the server — every
   node stopped, the database migrated — so read Keycloak's migration notes first. Its security fixes

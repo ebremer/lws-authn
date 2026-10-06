@@ -879,7 +879,7 @@ is needed.
   (a subject behind a 303 verifies; a document whose `id` is the redirect target does not). The two
   `CidDocumentReadingTest` ones fail against the previous code.
 
-- [ ] **R-30 · `LWSSubMapper` trusts the WebID attribute too far.** `Low` · security · `S` · *verified (first point)*
+- [x] **R-30 · `LWSSubMapper` trusts the WebID attribute too far.** `Low` · security · `S` · *verified (first point)*
   `openid/LWSSubMapper.java:144-199`. A value pointing into this realm's own hosted namespace for a
   *different* user (`{issuer}/lws/cid/<victim-id>`) passes `isDereferenceableUrl`, and the victim's hosted
   CID then vouches for this issuer — full impersonation, prevented today only by the `ADMIN_EDIT`
@@ -889,6 +889,19 @@ is needed.
   **Do:** refuse values under `{issuer}/lws/cid/` other than the user's own; warn at runtime if the
   attribute is user-editable (UserProfileProvider); encode the id; enforce the limit; tie userinfo to the
   ID Token flag.
+  **Done.** `LWSSubMapper.problem` refuses a value that is not an absolute http(s) URL, is over 255
+  characters or not ASCII, or is in the realm's own URL space (issuer's scheme, host, default-port and
+  path prefix, compared case-insensitively after `normalize()`) unless it is the user's own hosted WebID;
+  `sharedWithAnotherUser` refuses one any other user holds (raw or trimmed, via
+  `searchForUserByUserAttributeStream`). Each falls back to the hosted WebID with a warning, as an
+  unusable value already did. `warnIfUserEditable` reads the `UPConfig` — a declared attribute with a
+  `user` edit permission, or an undeclared one under `ENABLED` — at most every ten minutes per realm and
+  attribute; it warns rather than refuses, since refusing would change existing subjects, and the
+  uniqueness check already stops a user taking a WebID another holds. `CidEndpoint.documentUrl`
+  percent-encodes the id as one path segment and is used by the endpoint, `ThisRealm` and the mapper.
+  Userinfo's `sub` follows `id.token.claim`; the *Add to userinfo* property is gone. Tests in
+  `LWSSubMapperTest`; `anotherUsersHostedDocumentIsNotASubject` describes what the previous code
+  accepted.
 
 - [ ] **R-31 · SAML: a wrapped document is certified.** `Low` · security (defence in depth) · `S` · *demonstrated*
   `findSignedElement` (`SamlCredentialVerifier.java:322-335`) searches the whole document for a signed

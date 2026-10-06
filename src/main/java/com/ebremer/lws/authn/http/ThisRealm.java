@@ -123,7 +123,7 @@ public final class ThisRealm {
             return new OutboundHttp.Fetched(404, "application/json", null);
         }
         String contentType = RdfContentNegotiation.best(RdfParsing.ACCEPT);
-        String webId = prefix + user.getId();
+        String webId = CidEndpoint.documentUrl(issuer, providerId, cidPath, user.getId());
         return new OutboundHttp.Fetched(200, contentType, renderer.render(user, issuer, webId, contentType));
     }
 }
