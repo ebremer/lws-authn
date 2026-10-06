@@ -24,9 +24,12 @@ import java.security.spec.ECGenParameterSpec;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 
 import javax.xml.crypto.dsig.CanonicalizationMethod;
 import javax.xml.crypto.dsig.DigestMethod;
@@ -53,6 +56,7 @@ import org.bouncycastle.asn1.x500.X500Name;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
+import org.keycloak.models.IdentityProviderModel;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 
@@ -483,6 +487,127 @@ class SamlVerifierTest {
         SamlVerificationResult omitted = new SamlCredentialVerifier().verify(signed(xml.replace(responseIssuer,
                 "\"><samlp:Status>")), idpCert, AUDIENCE);
         assertTrue(omitted.isValid(), () -> String.valueOf(omitted.getErrors()));
+    }
+
+    // ------------------------------------------------------- trust out of band (R-25)
+
+    private static final String ISSUER = "https://idp.example";
+
+    private static IdentityProviderModel identityProvider(String alias, String providerId, String entityId,
+                                                          boolean enabled, X509Certificate... certificates)
+            throws Exception {
+        IdentityProviderModel model = new IdentityProviderModel();
+        model.setAlias(alias);
+        model.setProviderId(providerId);
+        model.setEnabled(enabled);
+        List<String> encoded = new ArrayList<>();
+        for (X509Certificate certificate : certificates) {
+            encoded.add(Base64.getEncoder().encodeToString(certificate.getEncoded()));
+        }
+        model.setConfig(new HashMap<>(Map.of("idpEntityId", entityId, "signingCertificate", String.join(",", encoded))));
+        return model;
+    }
+
+    private static SamlTrust realm(IdentityProviderModel... identityProviders) {
+        return new RealmIdentityProviders(() -> Stream.of(identityProviders));
+    }
+
+    private static SamlVerificationResult verify(String xml, SamlTrust trust) {
+        return new SamlCredentialVerifier().verify(xml, trust, AUDIENCE, null, null, false);
+    }
+
+    private static String fingerprint(X509Certificate certificate) throws Exception {
+        byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(certificate.getEncoded());
+        return java.util.HexFormat.ofDelimiter(":").withUpperCase().formatHex(digest);
+    }
+
+    /**
+     * The suite: "there must be a trust relationship with the issuing identity provider … established
+     * out-of-band". A realm's SAML identity provider is one: an entity ID and its signing certificates.
+     */
+    @Test
+    void trustComesFromTheIdentityProviderForTheIssuer() throws Exception {
+        SamlVerificationResult r = verify(signedResponse(ALICE),
+                realm(identityProvider("partner-idp", "saml", ISSUER, true, idpCert)));
+        assertTrue(r.isValid(), () -> String.valueOf(r.getErrors()));
+        assertEquals("identity-provider", r.getTrustSource());
+        assertEquals("partner-idp", r.getIdentityProvider());
+        assertEquals(fingerprint(idpCert), r.getCertificateSha256());
+        assertEquals(Boolean.TRUE, r.getChecks().get("trustedCertificateFound"));
+    }
+
+    /**
+     * The hazard R-25 names: a relying party trying each certificate it trusts accepts IdP A signing an
+     * assertion that says IdP B issued it, with B's user as the subject. Bound by entity ID, A's
+     * certificate is not one trusted for B.
+     */
+    @Test
+    void aCertificateTrustedForOneIssuerDoesNotVouchForAnother() throws Exception {
+        String signedByA = signedResponse(ALICE); // Issuer is ISSUER, signed with A's key
+        SamlTrust realm = realm(
+                identityProvider("idp-a", "saml", "https://idp-a.example", true, idpCert),
+                identityProvider("idp-b", "saml", ISSUER, true, selfSigned(rsa())));
+        SamlVerificationResult r = verify(signedByA, realm);
+        assertFalse(r.isValid());
+        assertEquals(Boolean.FALSE, r.getChecks().get("signatureValid"));
+
+        // A caller handing over A's certificate gets "valid" — and the result says whose certificate it was.
+        SamlVerificationResult supplied = new SamlCredentialVerifier().verify(signedByA, idpCert, AUDIENCE);
+        assertTrue(supplied.isValid());
+        assertEquals("request", supplied.getTrustSource());
+        assertNull(supplied.getIdentityProvider());
+        assertEquals(fingerprint(idpCert), supplied.getCertificateSha256());
+    }
+
+    /** Only enabled SAML identity providers whose IdP entity ID is the issuer count. */
+    @Test
+    void anIssuerNoIdentityProviderNamesIsNotTrusted() throws Exception {
+        SamlVerificationResult r = verify(signedResponse(ALICE), realm(
+                identityProvider("elsewhere", "saml", "https://elsewhere.example", true, idpCert),
+                identityProvider("switched-off", "saml", ISSUER, false, idpCert),
+                identityProvider("not-saml", "oidc", ISSUER, true, idpCert)));
+        assertFalse(r.isValid());
+        assertEquals(Boolean.FALSE, r.getChecks().get("trustedCertificateFound"));
+        assertNull(r.getTrustSource());
+    }
+
+    /** An IdP rotating keys has several certificates; each is tried, and the one that verified is named. */
+    @Test
+    void aRotatingIdentityProviderTriesEachCertificate() throws Exception {
+        X509Certificate retired = certificate(idpKeyPair, -172_800_000L, -86_400_000L); // same key, expired
+        SamlVerificationResult r = verify(signedResponse(ALICE), realm(identityProvider("partner-idp", "saml", ISSUER,
+                true, retired, selfSigned(rsa()), idpCert)));
+        assertTrue(r.isValid(), () -> String.valueOf(r.getErrors()));
+        assertEquals(fingerprint(idpCert), r.getCertificateSha256());
+
+        SamlVerificationResult onlyRetired = verify(signedResponse(ALICE),
+                realm(identityProvider("partner-idp", "saml", ISSUER, true, retired)));
+        assertFalse(onlyRetired.isValid(), "an expired certificate is not a trust anchor");
+        assertEquals(Boolean.FALSE, onlyRetired.getChecks().get("certificateValid"));
+    }
+
+    /**
+     * A caller can say which issuer and which Recipient it expects. A supplied certificate is otherwise
+     * bound to no issuer, and Profiles §4.1.4.3 says to "Verify that the Recipient attribute … matches".
+     */
+    @Test
+    void theExpectedIssuerAndRecipientAreEnforced() throws Exception {
+        SamlTrust supplied = SamlTrust.certificate(idpCert);
+        String xml = signedResponse(ALICE);
+        SamlVerificationResult both = new SamlCredentialVerifier().verify(xml, supplied, AUDIENCE, ISSUER, AUDIENCE, false);
+        assertTrue(both.isValid(), () -> String.valueOf(both.getErrors()));
+        assertEquals(Boolean.TRUE, both.getChecks().get("issuerMatched"));
+        assertEquals(Boolean.TRUE, both.getChecks().get("recipientMatched"));
+
+        SamlVerificationResult issuer = new SamlCredentialVerifier().verify(xml, supplied, AUDIENCE,
+                "https://other-idp.example", null, false);
+        assertFalse(issuer.isValid());
+        assertEquals(Boolean.FALSE, issuer.getChecks().get("issuerMatched"));
+
+        SamlVerificationResult recipient = new SamlCredentialVerifier().verify(xml, supplied, AUDIENCE, null,
+                "https://other-app.example/SAML", false);
+        assertFalse(recipient.isValid());
+        assertEquals(Boolean.FALSE, recipient.getChecks().get("recipientMatched"));
     }
 
     /** XXE: a credential containing a DOCTYPE / external entity must be rejected at parse time. */

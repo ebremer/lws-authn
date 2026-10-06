@@ -34,6 +34,11 @@ Identifiers 1.0 §3.3, which that suite cites normatively for selecting a key.
 > **Callers of `/lws-ssi-cid/verify` must pass `audience`** — the authorization server they verify for —
 > unless the deployment sets `audience` (R-16); without either the endpoint answers `400`.
 >
+> **`/lws-saml/verify` no longer requires `certificate`** (R-25). A request without one used to be a
+> `400`; it is now verified against the realm's SAML identity providers, and is `valid: false` when
+> none of them is the assertion's issuer. Its signatures, `<Conditions>` and structure are also checked
+> more strictly (R-21, R-22) — see below.
+>
 > For a server running an older build, [INSTALL §16](INSTALL.md#upgrading-a-deployment-that-predates-the-october-2026-review)
 > has a step-by-step upgrade: what to check and change first, then a deploy in `public` mode followed by
 > a switch back to `bearer`.
@@ -167,6 +172,19 @@ realm under the default `bearer` access mode, before any signature is checked.
 
 ### Added
 
+- **SAML trust from the realm's identity providers** (R-25). The suite says the trust relationship with
+  the issuing IdP is "established out-of-band", and `/lws-saml/verify` took it from the caller, per
+  request, binding the certificate to no issuer — so a relying party that tried each certificate it
+  trusted accepted IdP A signing an assertion that named IdP B, with a B user as the subject. Now a
+  request **without** `certificate` is checked against the realm's enabled SAML identity providers whose
+  IdP entity ID is the assertion's `<Issuer>` (`trustedCertificateFound`), trying each configured
+  signing certificate in turn, so keys can rotate. Every result reports where its certificate came from
+  (`trustSource`: `identity-provider` or `request`), the identity provider's alias, and the
+  certificate's SHA-256 fingerprint (`certificateSha256`). New optional parameters `issuer` and
+  `recipient` require the `<Issuer>` and the bearer `Recipient` — the LWS client identifier — to be
+  the ones the caller expects (`issuerMatched`, `recipientMatched`); `recipient` is the half of P1-M2
+  that was checked off without being done. A new setting, `request-certificates=false`, refuses
+  certificates in requests altogether, leaving the realm's identity providers as the only trust.
 - **Controlled identifier documents without an `@context`, or served as `application/cid`, verify**
   (R-19). CID 1.0 §4.2.1 lets a document leave out `@context` and requires a consumer to supply the
   CID context; processed without one, every term was undefined and the document failed in both JWT

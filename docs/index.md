@@ -33,7 +33,7 @@ Keycloak's SAML library for XML signature validation.
 |-------|-----------------|------------|-------------------------------|----------|----------------|
 | OpenID Connect | OP + CID host + verifier | ID Token (JWT); `sub` = WebID | OIDC Discovery on `iss` (found via the CID service) | `/realms/{realm}/lws` | `…token-type:id_token` |
 | Self-signed CID | CID host + verifier | self-issued JWT; `sub`==`iss`==`client_id`, an HTTPS URI, `did:key` or `did:web` | the `authentication` method the `kid` names, in the subject's CID or DID document (`publicKeyJwk` or `publicKeyMultibase`) | `/realms/{realm}/lws-ssi-cid` | `…token-type:jwt` |
-| SAML 2.0 | SAML IdP + verifier | signed SAML `<Response>`; subject = `<NameID>` | **out-of-band** IdP certificate | `/realms/{realm}/lws-saml` | `…token-type:saml2` |
+| SAML 2.0 | SAML IdP + verifier | signed SAML `<Response>`; subject = `<NameID>` | **out-of-band**: the realm's SAML identity provider for the issuer, or a supplied certificate | `/realms/{realm}/lws-saml` | `…token-type:saml2` |
 
 The suites are independent; deploy the single JAR and use any of them.
 
@@ -61,7 +61,7 @@ The suites are independent; deploy the single JAR and use any of them.
 
 | Component | Keycloak SPI | Purpose |
 |-----------|--------------|---------|
-| `saml.resource.SamlResourceProvider` | `RealmResourceProvider` (`lws-saml`) | Verifies a signed SAML 2.0 Response against a supplied (out-of-band) IdP certificate. |
+| `saml.resource.SamlResourceProvider` | `RealmResourceProvider` (`lws-saml`) | Verifies a signed SAML 2.0 Response against the realm's SAML identity provider for its issuer, or a supplied IdP certificate — out-of-band trust either way. |
 | `saml.verify.SamlCredentialVerifier` | — | Validate the XML signature → read `<NameID>`/`<Issuer>` → enforce the validity window and audience. |
 
 The OpenID and self-signed-CID suites serialize CIDs with Jena as JSON-LD / Turtle / N-Triples / RDF/XML.

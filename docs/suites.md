@@ -119,8 +119,8 @@ for a `did:key` subject, **[`did:key` identity walkthrough](walkthrough-did-key.
 ## SAML 2.0 suite
 
 The credential is a signed SAML 2.0 `<Response>`; the subject is the `<NameID>`. Trust is **out of
-band**: the verifier validates the assertion's XML signature against a pre-configured IdP certificate —
-no CID and no discovery, so this suite uses neither Jena nor a CID endpoint.
+band**: the verifier validates the assertion's XML signature against a certificate established ahead of
+time — no CID and no discovery, so this suite uses neither Jena nor a CID endpoint.
 
 Keycloak is a full SAML 2.0 IdP; to issue LWS SAML credentials, set up a SAML client and arrange for
 the `<NameID>` to carry the user's WebID. The `<NameID>` must be a URI — an LWS subject "MUST be a URI"
@@ -128,22 +128,33 @@ the `<NameID>` to carry the user's WebID. The `<NameID>` must be a URI — an LW
 the IdP's entity URI (`issuerWellFormed`). The realm's SAML signing certificate is published at
 `…/realms/{realm}/protocol/saml/descriptor`.
 
-`POST …/lws-saml/verify` — validates a signed SAML Response. Supply the trusted IdP certificate (since
-trust is out-of-band):
+`POST …/lws-saml/verify` — validates a signed SAML Response. The trusted IdP certificate comes from
+one of two places, and the result says which (`trustSource`) and gives the certificate's SHA-256
+fingerprint (`certificateSha256`):
+
+- **the realm's SAML identity providers** — send no `certificate`. Configure the IdP under *Identity
+  providers → SAML v2.0* with its entity ID and signing certificate; the verifier trusts the
+  certificates of the enabled SAML identity providers whose IdP entity ID is the assertion's `<Issuer>`,
+  so one IdP's key cannot vouch for another's assertion. Several certificates are tried in turn, for
+  key rotation.
+- **a certificate in the request** — `certificate`, the caller's own trust decision, which binds it to
+  no issuer unless `issuer` is also sent. The `request-certificates=false` setting turns this off.
 
 | Param | |
 |---|---|
 | `credential` | the SAML Response (raw XML or base64-encoded XML) |
-| `certificate` | the trusted IdP signing certificate, PEM-encoded (required) |
-| `audience` | optional audience the assertion must be restricted to |
+| `certificate` | optional: the trusted IdP signing certificate, PEM-encoded. Without it, the realm's SAML identity providers are the trust |
+| `audience` | optional audience every `<AudienceRestriction>` must name |
+| `issuer` | optional `<Issuer>` the assertion must name |
+| `recipient` | optional bearer `Recipient` — the LWS client identifier — the assertion must name |
 | `allowExpiredCertificate` | `true` to accept an IdP certificate outside its own validity period. Off by default — an expired certificate is not a trust anchor. Only for offline analysis of an old credential. |
 
 ```bash
 curl -X POST https://keycloak.example/realms/myrealm/lws-saml/verify \
   -H "Authorization: Bearer $CALLER_ACCESS_TOKEN" \
   --data-urlencode "credential=$SAML_RESPONSE" \
-  --data-urlencode "certificate=$IDP_CERT_PEM" \
-  --data-urlencode "audience=https://app.example/SAML"
+  --data-urlencode "audience=https://app.example/SAML" \
+  --data-urlencode "recipient=https://app.example/SAML"
 ```
 
 The verifier additionally requires the Response's `<samlp:StatusCode>` to be

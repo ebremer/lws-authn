@@ -119,6 +119,7 @@ A shared secret is shown only as `secret=(set)`.
 | Audience to require when the request names none — for `lws-ssi-cid`, which needs one, the target authorization server | `audience` | `lws.authn.audience` | `LWS_AUTHN_AUDIENCE` | — |
 | `Cache-Control: max-age` on a served CID | `cid-cache-seconds` | `lws.authn.cid.cacheSeconds` | `LWS_AUTHN_CID_CACHE_SECONDS` | `300` |
 | CID requests per minute, per caller | `cid-rate-limit` | `lws.authn.cid.rateLimit` | `LWS_AUTHN_CID_RATE_LIMIT` | `600` |
+| `lws-saml` only: accept an IdP certificate in the request (`certificate`). `false` leaves the realm's SAML identity providers as the only trust | `request-certificates` | `lws.authn.saml.requestCertificates` | `LWS_AUTHN_SAML_REQUEST_CERTIFICATES` | `true` |
 
 Plus the four verify-access settings in the table above.
 

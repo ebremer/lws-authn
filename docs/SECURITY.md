@@ -38,12 +38,14 @@ refuse, or that reaches beyond the verifier:
 
 **Out of scope** — real, but not bugs in this project:
 
-- **The SAML verifier trusts the certificate the caller supplies.** That is the suite's model: SAML
-  trust is established out of band, so `POST …/lws-saml/verify` answers "is this Response signed by
-  *that* certificate", not "does this deployment trust that IdP". Anyone can therefore get
-  `"valid": true` for an assertion they signed themselves with a certificate they also supplied. That
-  is the API doing its job. Treating its answer as a deployment-level trust decision is a relying-party
-  bug — see `COMPLIANCE.md`.
+- **The SAML verifier trusts a certificate the caller supplies, when one is supplied.** SAML trust is
+  established out of band, so given a `certificate`, `POST …/lws-saml/verify` answers "is this Response
+  signed by *that* certificate", not "does this deployment trust that IdP" — and says so, with
+  `trustSource: request` and the certificate's fingerprint. Anyone can therefore get `"valid": true` for
+  an assertion they signed themselves with a certificate they also supplied. That is the API doing its
+  job; treating that answer as a deployment-level trust decision is a relying-party bug. Without a
+  certificate the realm's SAML identity providers decide, and `request-certificates=false` makes that
+  the only way — see `COMPLIANCE.md`.
 - **Identifier enumeration on `cid/{userId}`.** A controlled identifier is a URL other people
   dereference; an identity document that needed a credential would not be dereferenceable. The ids are
   random UUIDs and the endpoint is rate limited. See `CidEndpoint`.

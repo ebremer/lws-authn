@@ -38,6 +38,16 @@ import java.security.spec.ECGenParameterSpec;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import javax.xml.crypto.dsig.CanonicalizationMethod;
+import javax.xml.crypto.dsig.DigestMethod;
+import javax.xml.crypto.dsig.Reference;
+import javax.xml.crypto.dsig.SignatureMethod;
+import javax.xml.crypto.dsig.SignedInfo;
+import javax.xml.crypto.dsig.Transform;
+import javax.xml.crypto.dsig.XMLSignatureFactory;
+import javax.xml.crypto.dsig.dom.DOMSignContext;
+import javax.xml.crypto.dsig.spec.C14NMethodParameterSpec;
+import javax.xml.crypto.dsig.spec.TransformParameterSpec;
 import java.util.Base64;
 import java.util.Date;
 import java.util.List;
@@ -373,13 +383,60 @@ class LwsAuthIT {
         assertTrue(jsonld.contains("/lws-ssi-cid/cid/" + uid), jsonld);
     }
 
-    /** The SAML endpoint mounts (so keycloak-saml-core resolved at runtime) and demands a cert. */
+    /**
+     * The SAML endpoint mounts. Without a certificate it no longer refuses the request (R-25): trust
+     * comes from the realm's SAML identity providers, and a credential they do not vouch for is invalid.
+     */
     @Test
     void samlEndpointMounted() throws Exception {
         HttpResponse<String> r = postForm(base + "/realms/" + REALM + "/lws-saml/verify",
                 Map.of("credential", "<samlp:Response/>"), accessToken());
-        assertEquals(400, r.statusCode());
-        assertTrue(r.body().contains("certificate"), r.body());
+        assertEquals(200, r.statusCode(), r.body());
+        assertFalse(JSON.readTree(r.body()).get("valid").asBoolean(), r.body());
+    }
+
+    /**
+     * R-25 and R-22, inside the server. A SAML identity provider configured in the realm is the
+     * out-of-band trust the suite means: a Response its key signed, naming its entity ID as the issuer,
+     * verifies with no certificate in the request — through Keycloak's identity-provider storage and the
+     * server's own XML-DSig provider and JVM policy, which no unit test reaches. One naming an issuer no
+     * identity provider has is not trusted, whoever signed it.
+     */
+    @Test
+    void aSamlCredentialIsTrustedThroughTheRealmsIdentityProvider() throws Exception {
+        String admin = adminToken();
+        KeyPairGenerator g = KeyPairGenerator.getInstance("RSA");
+        g.initialize(2048);
+        KeyPair idp = g.generateKeyPair();
+        String alias = "lws-it-saml-" + System.nanoTime();
+        String entityId = "https://" + alias + ".example/idp";
+        String instances = base + "/admin/realms/" + REALM + "/identity-provider/instances";
+        HttpResponse<String> created = sendJson("POST", instances, "{\"alias\":\"" + alias + "\",\"providerId\":\"saml\","
+                + "\"enabled\":true,\"config\":{\"idpEntityId\":\"" + entityId + "\","
+                + "\"singleSignOnServiceUrl\":\"https://" + alias + ".example/sso\","
+                + "\"signingCertificate\":\"" + Base64.getEncoder().encodeToString(selfSigned(idp).getEncoded())
+                + "\"}}", admin);
+        assertEquals(201, created.statusCode(), created.body());
+        try {
+            String verify = base + "/realms/" + REALM + "/lws-saml/verify";
+            HttpResponse<String> r = postForm(verify, Map.of("credential",
+                    signedSamlResponse(entityId, "https://id.example/alice", idp.getPrivate()),
+                    "audience", SAML_AUDIENCE, "recipient", SAML_AUDIENCE), accessToken());
+            assertEquals(200, r.statusCode(), r.body());
+            JsonNode result = JSON.readTree(r.body());
+            assertTrue(result.get("valid").asBoolean(), r.body());
+            assertEquals("identity-provider", result.get("trustSource").asText(), r.body());
+            assertEquals(alias, result.get("identityProvider").asText(), r.body());
+            assertEquals("https://id.example/alice", result.get("subject").asText(), r.body());
+
+            JsonNode unknown = JSON.readTree(postForm(verify, Map.of("credential",
+                    signedSamlResponse("https://no-such-idp.example", "https://id.example/alice", idp.getPrivate()),
+                    "audience", SAML_AUDIENCE), accessToken()).body());
+            assertFalse(unknown.get("valid").asBoolean(), unknown.toString());
+            assertFalse(unknown.get("checks").get("trustedCertificateFound").asBoolean(), unknown.toString());
+        } finally {
+            sendJson("DELETE", instances + "/" + alias, "", admin);
+        }
     }
 
     /**
@@ -404,9 +461,7 @@ class LwsAuthIT {
      */
     @Test
     void onlyAHolderOfTheVerifierRoleMayVerify() throws Exception {
-        String admin = JSON.readTree(postForm(base + "/realms/master/protocol/openid-connect/token",
-                Map.of("grant_type", "password", "client_id", "admin-cli", "username", keycloak.getAdminUsername(),
-                        "password", keycloak.getAdminPassword()), null).body()).get("access_token").asText();
+        String admin = adminToken();
         String username = "caller-" + System.nanoTime();
         String password = "pw-" + username;
         HttpResponse<String> created = sendJson("POST", base + "/admin/realms/" + REALM + "/users",
@@ -453,7 +508,7 @@ class LwsAuthIT {
             assertFalse(JSON.readTree(r.body()).get("valid").asBoolean(), r.body());
         }
 
-        // SAML too, which needs a certificate to get as far as rejecting the credential.
+        // SAML too, here with a certificate in the request; without one, the realm's identity providers answer.
         HttpResponse<String> saml = postForm(base + "/realms/" + REALM + "/lws-saml/verify",
                 Map.of("credential", "<samlp:Response/>", "certificate", selfSignedPem()), accessToken());
         assertEquals(200, saml.statusCode(), saml.body());
@@ -873,6 +928,13 @@ class LwsAuthIT {
                 .get("access_token").asText();
     }
 
+    /** A token for the master realm's administrator, for the admin REST API. */
+    private String adminToken() throws Exception {
+        return JSON.readTree(postForm(base + "/realms/master/protocol/openid-connect/token",
+                Map.of("grant_type", "password", "client_id", "admin-cli", "username", keycloak.getAdminUsername(),
+                        "password", keycloak.getAdminPassword()), null).body()).get("access_token").asText();
+    }
+
     private static HttpResponse<String> sendJson(String method, String url, String json, String bearer)
             throws Exception {
         return HTTP.send(HttpRequest.newBuilder(URI.create(url))
@@ -899,18 +961,67 @@ class LwsAuthIT {
     private static String selfSignedPem() throws Exception {
         KeyPairGenerator g = KeyPairGenerator.getInstance("RSA");
         g.initialize(2048);
-        KeyPair kp = g.generateKeyPair();
-        long now = System.currentTimeMillis();
-        X500Name dn = new X500Name("CN=lws-authn-it");
-        ContentSigner signer = new JcaContentSignerBuilder("SHA256withRSA").build(kp.getPrivate());
-        X509Certificate certificate = new JcaX509CertificateConverter().getCertificate(
-                new JcaX509v3CertificateBuilder(dn, BigInteger.valueOf(now),
-                        new Date(now - 1000L), new Date(now + 86_400_000L), dn, kp.getPublic()).build(signer));
+        X509Certificate certificate = selfSigned(g.generateKeyPair());
         // Encoded here rather than with Keycloak's PemUtils: that needs CryptoIntegration to have been
         // initialised, which happens inside the server, not in this JVM.
         return "-----BEGIN CERTIFICATE-----\n"
                 + Base64.getMimeEncoder(64, new byte[]{'\n'}).encodeToString(certificate.getEncoded())
                 + "\n-----END CERTIFICATE-----";
+    }
+
+    private static X509Certificate selfSigned(KeyPair kp) throws Exception {
+        long now = System.currentTimeMillis();
+        X500Name dn = new X500Name("CN=lws-authn-it");
+        ContentSigner signer = new JcaContentSignerBuilder("SHA256withRSA").build(kp.getPrivate());
+        return new JcaX509CertificateConverter().getCertificate(
+                new JcaX509v3CertificateBuilder(dn, BigInteger.valueOf(now),
+                        new Date(now - 1000L), new Date(now + 86_400_000L), dn, kp.getPublic()).build(signer));
+    }
+
+    /** The SAML audience and bearer Recipient — the LWS client identifier — of every IT assertion. */
+    private static final String SAML_AUDIENCE = "https://app.example/SAML";
+
+    /**
+     * A SAML Response as an IdP sends one: a bearer assertion from {@code issuer} about {@code nameId},
+     * signed with an enveloped RSA-SHA256 signature, exclusive canonicalization, and SHA-256 digest.
+     */
+    private static String signedSamlResponse(String issuer, String nameId, PrivateKey key) throws Exception {
+        java.time.Instant now = java.time.Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
+        String saml = "urn:oasis:names:tc:SAML:2.0:assertion";
+        String xml = "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"" + saml
+                + "\" ID=\"r1\" Version=\"2.0\" IssueInstant=\"" + now + "\">"
+                + "<samlp:Status><samlp:StatusCode Value=\"urn:oasis:names:tc:SAML:2.0:status:Success\"/></samlp:Status>"
+                + "<saml:Assertion ID=\"a1\" Version=\"2.0\" IssueInstant=\"" + now + "\">"
+                + "<saml:Issuer>" + issuer + "</saml:Issuer>"
+                + "<saml:Subject><saml:NameID>" + nameId + "</saml:NameID>"
+                + "<saml:SubjectConfirmation Method=\"urn:oasis:names:tc:SAML:2.0:cm:bearer\">"
+                + "<saml:SubjectConfirmationData Recipient=\"" + SAML_AUDIENCE + "\" NotOnOrAfter=\""
+                + now.plusSeconds(300) + "\"/></saml:SubjectConfirmation></saml:Subject>"
+                + "<saml:Conditions NotBefore=\"" + now.minusSeconds(60) + "\" NotOnOrAfter=\"" + now.plusSeconds(300) + "\">"
+                + "<saml:AudienceRestriction><saml:Audience>" + SAML_AUDIENCE + "</saml:Audience></saml:AudienceRestriction>"
+                + "</saml:Conditions>"
+                + "<saml:AuthnStatement AuthnInstant=\"" + now + "\"><saml:AuthnContext><saml:AuthnContextClassRef>"
+                + "urn:oasis:names:tc:SAML:2.0:ac:classes:unspecified</saml:AuthnContextClassRef></saml:AuthnContext>"
+                + "</saml:AuthnStatement></saml:Assertion></samlp:Response>";
+        javax.xml.parsers.DocumentBuilderFactory dbf = javax.xml.parsers.DocumentBuilderFactory.newInstance();
+        dbf.setNamespaceAware(true);
+        org.w3c.dom.Document doc = dbf.newDocumentBuilder()
+                .parse(new java.io.ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
+        org.w3c.dom.Element assertion = (org.w3c.dom.Element) doc.getElementsByTagNameNS(saml, "Assertion").item(0);
+        assertion.setIdAttribute("ID", true);
+        XMLSignatureFactory fac = XMLSignatureFactory.getInstance("DOM");
+        Reference reference = fac.newReference("#a1", fac.newDigestMethod(DigestMethod.SHA256, null),
+                List.of(fac.newTransform(Transform.ENVELOPED, (TransformParameterSpec) null),
+                        fac.newTransform(CanonicalizationMethod.EXCLUSIVE, (C14NMethodParameterSpec) null)),
+                null, null);
+        SignedInfo signedInfo = fac.newSignedInfo(
+                fac.newCanonicalizationMethod(CanonicalizationMethod.EXCLUSIVE, (C14NMethodParameterSpec) null),
+                fac.newSignatureMethod(SignatureMethod.RSA_SHA256, null), List.of(reference));
+        fac.newXMLSignature(signedInfo, null).sign(new DOMSignContext(key, assertion));
+        java.io.StringWriter out = new java.io.StringWriter();
+        javax.xml.transform.TransformerFactory.newInstance().newTransformer().transform(
+                new javax.xml.transform.dom.DOMSource(doc), new javax.xml.transform.stream.StreamResult(out));
+        return out.toString();
     }
 
     private static String mintDidKeyP256() throws Exception {

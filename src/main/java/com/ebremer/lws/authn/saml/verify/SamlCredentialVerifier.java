@@ -85,30 +85,30 @@ public class SamlCredentialVerifier {
      */
     public SamlVerificationResult verify(String credential, X509Certificate idpCertificate, String expectedAudience,
                                          boolean allowExpiredCertificate) {
+        return verify(credential, SamlTrust.certificate(idpCertificate), expectedAudience, null, null,
+                allowExpiredCertificate);
+    }
+
+    /**
+     * @param credential              the SAML 2.0 Response, as XML or base64-encoded XML
+     * @param trust                   the IdP certificates trusted for the assertion's issuer (established
+     *                                out of band): one the caller supplied, or the realm's SAML identity
+     *                                providers'
+     * @param expectedAudience        optional audience every {@code <AudienceRestriction>} must name
+     * @param expectedIssuer          optional {@code <Issuer>} the assertion must name
+     * @param expectedRecipient       optional bearer {@code Recipient} — the LWS client identifier — the
+     *                                assertion must name
+     * @param allowExpiredCertificate accept a signing certificate that is expired or not yet valid.
+     *                                Only for offline analysis of an old credential; never in a
+     *                                deployment that treats the result as a live authentication.
+     */
+    public SamlVerificationResult verify(String credential, SamlTrust trust, String expectedAudience,
+                                         String expectedIssuer, String expectedRecipient,
+                                         boolean allowExpiredCertificate) {
         SamlVerificationResult result = new SamlVerificationResult();
         result.setTraceId(Trace.newId());
         result.setTokenType(SamlConstants.TOKEN_TYPE_SAML2);
         try {
-            // --- the trust anchor itself ---
-            // A signature is only as good as the certificate it is checked against. An expired or
-            // not-yet-valid IdP certificate is not a trust anchor, and accepting one silently keeps a
-            // retired signing key usable forever.
-            boolean certificateValid = certificateCurrentlyValid(idpCertificate);
-            result.check("certificateValid", certificateValid);
-            if (!certificateValid && !allowExpiredCertificate) {
-                result.error("The supplied IdP certificate is expired or not yet valid");
-                return result.fail();
-            }
-
-            // ...and its key one worth trusting: an XML-DSig provider that allows them verifies a 512-bit
-            // RSA signature as readily as any other (R-22).
-            String weakKey = SamlSignatures.keyProblem(idpCertificate.getPublicKey());
-            result.check("certificateKeyStrong", weakKey == null);
-            if (weakKey != null) {
-                result.error("The supplied IdP certificate holds " + weakKey);
-                return result.fail();
-            }
-
             Document doc = parseSecurely(toXmlBytes(credential));
 
             // --- the Response and its one assertion ---
@@ -199,16 +199,74 @@ public class SamlCredentialVerifier {
                 result.error("Signature is outside SAML Core §5.4's profile: " + algorithms);
                 return result.fail();
             }
-            boolean signatureValid = true;
-            for (int i = 0; i < signatures.size() && signatureValid; i++) {
-                signatureValid = SamlSignatures.validate(signatures.get(i), signedElements.get(i),
-                        idpCertificate.getPublicKey());
-            }
-            result.check("signatureValid", signatureValid);
-            if (!signatureValid) {
-                result.error("XML signature is not valid for the supplied IdP certificate");
+
+            // --- trust (R-25) ---
+            // The certificates trusted for the issuer the assertion names: asked before the signature is
+            // known good, because the answer decides which keys may check it. Nothing else of the
+            // assertion is read until one of them has.
+            Element claimedIssuer = firstChild(assertion, NS, "Issuer");
+            List<SamlTrust.TrustedCertificate> candidates =
+                    trust.certificatesFor(claimedIssuer == null ? null : claimedIssuer.getTextContent().trim());
+            result.check("trustedCertificateFound", !candidates.isEmpty());
+            if (candidates.isEmpty()) {
+                result.error("No certificate is trusted to sign for the assertion's <Issuer>: no enabled SAML "
+                        + "identity provider of this realm has it as its entity ID");
                 return result.fail();
             }
+            // Each certificate in turn — an IdP may have several while it rotates keys — skipping one that
+            // is not a trust anchor: expired or not yet valid, which would keep a retired key usable
+            // forever, or holding a key an XML-DSig provider would verify as readily as any other at
+            // 512 bits (R-22). The first that every signature validates against is the one.
+            SamlTrust.TrustedCertificate chosen = null;
+            boolean anyExpired = false;
+            boolean anyWeak = false;
+            boolean anyTried = false;
+            for (SamlTrust.TrustedCertificate candidate : candidates) {
+                X509Certificate certificate = candidate.certificate();
+                if (SamlSignatures.keyProblem(certificate.getPublicKey()) != null) {
+                    anyWeak = true;
+                    continue;
+                }
+                if (!certificateCurrentlyValid(certificate) && !allowExpiredCertificate) {
+                    anyExpired = true;
+                    continue;
+                }
+                anyTried = true;
+                boolean all = true;
+                for (int i = 0; i < signatures.size() && all; i++) {
+                    all = SamlSignatures.validate(signatures.get(i), signedElements.get(i), certificate.getPublicKey());
+                }
+                if (all) {
+                    chosen = candidate;
+                    break;
+                }
+            }
+            if (chosen == null) {
+                if (anyTried) {
+                    result.check("signatureValid", false);
+                    result.error(candidates.size() == 1
+                            ? "XML signature is not valid for the " + describe(candidates.get(0))
+                            : "XML signature is not valid for any certificate trusted for the issuer");
+                } else if (anyExpired) {
+                    result.check("certificateValid", false);
+                    result.error(candidates.size() == 1
+                            ? "The " + describe(candidates.get(0)) + " is expired or not yet valid"
+                            : "No certificate trusted for the issuer is both current and strong enough");
+                } else {
+                    result.check("certificateKeyStrong", false);
+                    result.error(candidates.size() == 1
+                            ? "The " + describe(candidates.get(0)) + " holds "
+                                    + SamlSignatures.keyProblem(candidates.get(0).certificate().getPublicKey())
+                            : "Every certificate trusted for the issuer holds a key too weak to trust");
+                }
+                return result.fail();
+            }
+            result.check("certificateValid", certificateCurrentlyValid(chosen.certificate()));
+            result.check("certificateKeyStrong", true);
+            result.check("signatureValid", true);
+            result.setTrustSource(chosen.source());
+            result.setIdentityProvider(chosen.identityProvider());
+            result.setCertificateSha256(sha256Fingerprint(chosen.certificate()));
 
             // --- claims, read only from the covered assertion ---
 
@@ -273,6 +331,17 @@ public class SamlCredentialVerifier {
                 }
             }
 
+            // The issuer the caller expects, when it says: a caller-supplied certificate is otherwise bound
+            // to no issuer at all (R-25).
+            if (expectedIssuer != null && !expectedIssuer.isBlank()) {
+                boolean issuerMatched = expectedIssuer.trim().equals(issuerValue);
+                result.check("issuerMatched", issuerMatched);
+                if (!issuerMatched) {
+                    result.error("The assertion's <Issuer> is not the expected <" + expectedIssuer.trim() + ">");
+                    return result.fail();
+                }
+            }
+
             // IssueInstant is required on both (SAML Core §2.3.3, §3.2.2), and one in the future was not
             // written by a clock keeping time: an IssueInstant in 2099 used to verify (R-22).
             boolean issueInstantValid = notInFuture(attr(assertion, "IssueInstant"))
@@ -313,6 +382,18 @@ public class SamlCredentialVerifier {
             }
             result.setRecipient(recipient);
             result.setClient(recipient); // the suite puts the LWS client identifier in Recipient
+            // SAML Profiles §4.1.4.3: "Verify that the Recipient attribute in any bearer
+            // <SubjectConfirmationData> matches" where it was delivered. Only the caller knows that, and
+            // it can now say (R-25; the half of P1-M2 that was never done).
+            if (expectedRecipient != null && !expectedRecipient.isBlank()) {
+                boolean recipientMatched = expectedRecipient.trim().equals(recipient);
+                result.check("recipientMatched", recipientMatched);
+                if (!recipientMatched) {
+                    result.error("<SubjectConfirmationData> Recipient is not the expected <"
+                            + expectedRecipient.trim() + ">");
+                    return result.fail();
+                }
+            }
 
             String scdNotOnOrAfter = attr(scd, "NotOnOrAfter");
             if (scdNotOnOrAfter == null || scdNotOnOrAfter.isBlank()) {
@@ -421,6 +502,28 @@ public class SamlCredentialVerifier {
                 | java.security.cert.CertificateNotYetValidException e) {
             return false;
         }
+    }
+
+    /** How an error names a trusted certificate. */
+    private static String describe(SamlTrust.TrustedCertificate trusted) {
+        return trusted.identityProvider() == null ? "supplied IdP certificate"
+                : "certificate of identity provider '" + trusted.identityProvider() + "'";
+    }
+
+    /**
+     * The certificate's SHA-256 fingerprint, as {@code openssl x509 -noout -fingerprint -sha256} prints
+     * it — colon-separated uppercase hex — so a caller can compare it with the certificate it meant.
+     */
+    static String sha256Fingerprint(X509Certificate certificate) throws Exception {
+        byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(certificate.getEncoded());
+        StringBuilder out = new StringBuilder(digest.length * 3);
+        for (byte b : digest) {
+            if (out.length() > 0) {
+                out.append(':');
+            }
+            out.append(String.format("%02X", b));
+        }
+        return out.toString();
     }
 
     /** True iff a {@code <samlp:Response>} reports {@code …:status:Success}. */

@@ -181,6 +181,21 @@ class SettingsTest {
                 "an explicit parameter still wins");
     }
 
+    /** R-25: SAML certificates in the request are accepted unless the deployment says otherwise. */
+    @Test
+    void requestCertificatesCanBeTurnedOff() {
+        EndpointSettings byDefault = EndpointSettings.from("lws-saml", scope());
+        assertTrue(byDefault.acceptsRequestCertificates());
+        assertTrue(byDefault.describe().contains("request-certificates=true"), byDefault.describe());
+
+        EndpointSettings off = EndpointSettings.from("lws-saml", scope("request-certificates", "false"));
+        assertFalse(off.acceptsRequestCertificates());
+        assertTrue(off.describe().contains("request-certificates=false"), off.describe());
+
+        assertFalse(EndpointSettings.from("lws", scope()).describe().contains("request-certificates"),
+                "a SAML setting is not reported for the other suites");
+    }
+
     @Test
     void anEndpointCanBeTurnedOff() {
         assertFalse(EndpointSettings.from("lws-saml", scope("enabled", "false")).isEnabled(null));

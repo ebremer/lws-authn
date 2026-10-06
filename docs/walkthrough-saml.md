@@ -17,7 +17,7 @@ validates the assertion's XML signature against a *pre-configured* IdP certifica
 |-------|------|
 | **Keycloak + `lws-authn`** | SAML 2.0 IdP that issues signed assertions, **and** a verifier. |
 | **A SAML SP / client app** | Initiates SAML login and receives the assertion. |
-| **An LWS server** | The verifier — validates the assertion's signature against the IdP certificate it holds out-of-band, and reads the subject from `<NameID>`. |
+| **An LWS server** | The verifier — validates the assertion's signature against the IdP certificate it holds out-of-band, and reads the subject from `<NameID>`. `lws-authn` holds it as a SAML identity provider in the realm, or takes it from the caller. |
 
 **The idea:** the subject (controlled identifier / WebID) is carried in `<Subject><NameID>`, the
 issuer in `<Issuer>`. Because the spec leaves trust out-of-band, the verifier must already hold the
@@ -51,9 +51,19 @@ The `<NameID>` has to be a URI: LWS core says the subject "MUST be a URI", and t
 username or an email address (`subjectIsUri`). Keycloak's `<Issuer>` is the realm URL, an entity URI,
 as the verifier requires (`issuerWellFormed`).
 
-## 2. Obtain the IdP signing certificate (out-of-band)
+## 2. Establish trust in the IdP (out-of-band)
 
-The realm publishes its SAML metadata, including the signing certificate, at the descriptor endpoint:
+The verifier needs the IdP's signing certificate ahead of time. Either give it to the realm that does
+the verifying, once, or send it with each request.
+
+**In the realm (recommended).** Add the IdP under *Identity providers → SAML v2.0* in the realm whose
+`…/lws-saml/verify` you call, with the IdP's entity ID — `$KC/realms/$REALM` for a Keycloak IdP — and
+its signing certificate (or import its metadata from the descriptor below). Leave it enabled. The
+verifier then trusts that certificate for assertions whose `<Issuer>` is that entity ID, and for no
+other issuer.
+
+**With each request.** The realm publishes its SAML metadata, including the signing certificate, at
+the descriptor endpoint:
 
 ```bash
 KC=https://keycloak.example; REALM=myrealm
@@ -65,7 +75,9 @@ openssl x509 -in idp.pem -noout -subject -issuer      # sanity-check it parses
 ```
 
 A verifier (or LWS server) obtains this certificate once, ahead of time — that is the "out-of-band"
-trust establishment the spec refers to.
+trust establishment the spec refers to. Sending it to `lws-authn` makes the trust decision yours: the
+result can only say that this certificate signed the credential. A deployment can refuse certificates
+in requests with `request-certificates=false`.
 
 ## 3. Obtain a signed SAML Response
 
@@ -79,9 +91,12 @@ test SP can capture it. Save the base64 (or decoded XML) to `response.b64`.
 curl -s -X POST "$KC/realms/$REALM/lws-saml/verify" \
   -H "Authorization: Bearer $CALLER_ACCESS_TOKEN" \
   --data-urlencode "credential@response.b64" \
-  --data-urlencode "certificate@idp.pem" \
-  --data-urlencode "audience=https://app.example/SAML" | jq
+  --data-urlencode "audience=https://app.example/SAML" \
+  --data-urlencode "recipient=https://app.example/SAML" | jq
 ```
+
+With the certificate in the request instead, add `--data-urlencode "certificate@idp.pem"`, and
+`--data-urlencode "issuer=$KC/realms/$REALM"` so that the certificate is bound to the IdP you meant.
 
 > `Authorization` identifies **you**, the caller: the `…/verify` endpoints are authenticated by
 > default, and the caller must hold the realm role `lws-verifier`. The credential being checked always
@@ -110,14 +125,21 @@ credential, none of which `<Conditions>` implies on its own:
   "recipient": "https://app.example/SAML",
   "notBefore": "2026-…Z",
   "notOnOrAfter": "2026-…Z",
+  "trustSource": "identity-provider",
+  "identityProvider": "keycloak-idp",
+  "certificateSha256": "3A:F1:…:9C",
   "checks": {
     "signaturePresent": true,
+    "trustedCertificateFound": true,
     "signatureValid": true,
     "withinValidityWindow": true,
     "audienceMatched": true
   }
 }
 ```
+
+`trustSource` says where the certificate came from — `identity-provider`, or `request` when you sent
+it — and `certificateSha256` which one it was, as `openssl x509 -noout -fingerprint -sha256` prints it.
 
 The verifier: validates the enveloped XML signature against the supplied certificate, reads the
 subject from `<NameID>` (a URI, its `Format` reported as `subjectFormat`) and the issuer from
@@ -136,8 +158,10 @@ the credential is presented as a bearer token (`Authorization: Bearer …`) with
 ## Notes
 
 - **Out-of-band trust.** This suite adds no discovery — the verifier must already trust the IdP's
-  certificate (e.g. pinned, or taken from the realm metadata as above). Rotating the IdP's SAML key
-  means re-distributing the certificate.
+  certificate: configured on a SAML identity provider in the realm, or pinned by the caller. Rotating
+  the IdP's SAML key means adding the new certificate to the identity provider (both are tried until
+  the old one is removed) or re-distributing it to callers. An identity provider that loads its keys
+  from a metadata URL at login, with no certificate configured, gives the verifier none.
 - **What is validated.** Every XML-DSig signature on the Response or the assertion, against the
   supplied certificate, under SAML Core §5.4's profile — one reference, to the signed element; only the
   enveloped-signature and exclusive-canonicalization transforms; SHA-2 — and that the certificate is

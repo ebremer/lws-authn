@@ -752,7 +752,7 @@ is needed.
   — and `LWSCredentialVerifierTest` the first two through the OpenID one; all fail against the previous
   code, with a fractional `exp` as the control.
 
-- [ ] **R-25 · SAML trust is "out of band" in the suite but supplied per request here**
+- [x] **R-25 · SAML trust is "out of band" in the suite but supplied per request here**
   (challenges COMPLIANCE divergence 5). `Medium` · security/design · `M` · *verified*
   The suite: "there must be a trust relationship with the issuing identity provider … established
   out-of-band". `SamlResourceProvider.java:105-114` takes the certificate from the request, nothing binds
@@ -766,6 +766,25 @@ is needed.
   which also handles rotation); a setting that disables caller-supplied certificates; always report the
   certificate's SHA-256 thumbprint and the trust source; optional `expected_issuer` and
   `expected_recipient` parameters. Rewrite divergence 5 accordingly.
+  **Done.** `saml/verify/SamlTrust` says which certificates may sign for an issuer, asked with the
+  assertion's unverified `<Issuer>` before any signature is checked: `SamlTrust.certificate` (the
+  request's, for any issuer) or `RealmIdentityProviders` (enabled `saml` providers whose
+  `getIdpEntityId()` is the issuer, each of `getSigningCertificates()`, decoded with the JDK because
+  Keycloak's `PemUtils` needs its crypto provider initialised). The verifier tries each — skipping an
+  expired one (unless `allowExpiredCertificate`) or a weak one — and the first every signature validates
+  against is reported: `trustSource`, `identityProvider`, `certificateSha256` (as `openssl x509
+  -fingerprint -sha256` prints it), new check `trustedCertificateFound`. Parameters are `issuer` and
+  `recipient`, matching `audience` and the result's field names, rather than `expected_…`
+  (`issuerMatched`, `recipientMatched`). Setting `request-certificates` (default `true`, so existing
+  callers keep working); with it off, a `certificate` is a `400`. A request without `certificate` is no
+  longer a `400`. Divergence 5 and the SAML section of `COMPLIANCE.md`, `SECURITY.md`, `suites.md`,
+  `configuration.md`, `limitations.md` and the SAML walkthrough are rewritten. Five tests in
+  `SamlVerifierTest` (issuer binding, unknown or disabled or non-SAML IdPs, rotation, expected issuer and
+  recipient) and one in `SettingsTest`; they use API that did not exist before, so they were not run
+  against the previous code. `LwsAuthIT.aSamlCredentialIsTrustedThroughTheRealmsIdentityProvider`
+  creates a SAML IdP over the admin API and verifies a Response with no certificate — the first test of
+  a real signed Response inside the server — and `samlEndpointMounted` now expects `200`/`valid: false`.
+  Not done: an IdP that only has a metadata descriptor URL, and no certificate configured, offers none.
 
 ---
 

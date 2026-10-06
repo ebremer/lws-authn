@@ -11,6 +11,7 @@ import org.jboss.logging.Logger;
 import org.keycloak.Config;
 import org.keycloak.models.RealmModel;
 
+import com.ebremer.lws.authn.saml.SamlConstants;
 import com.ebremer.lws.authn.verify.RateLimiter;
 import com.ebremer.lws.authn.verify.VerifyAccess;
 
@@ -29,6 +30,7 @@ import com.ebremer.lws.authn.verify.VerifyAccess;
  *   <tr><td>{@code audience}</td><td>{@code lws.authn.audience}</td><td>{@code LWS_AUTHN_AUDIENCE}</td><td>none</td></tr>
  *   <tr><td>{@code cid-cache-seconds}</td><td>{@code lws.authn.cid.cacheSeconds}</td><td>{@code LWS_AUTHN_CID_CACHE_SECONDS}</td><td>{@code 300}</td></tr>
  *   <tr><td>{@code cid-rate-limit}</td><td>{@code lws.authn.cid.rateLimit}</td><td>{@code LWS_AUTHN_CID_RATE_LIMIT}</td><td>{@code 600}</td></tr>
+ *   <tr><td>{@code request-certificates}</td><td>{@code lws.authn.saml.requestCertificates}</td><td>{@code LWS_AUTHN_SAML_REQUEST_CERTIFICATES}</td><td>{@code true}</td></tr>
  * </table>
  *
  * <p>{@code enabled} additionally honours a per-realm override, which is the only one of these that
@@ -60,15 +62,18 @@ public final class EndpointSettings {
     private final long cidCacheSeconds;
     private final VerifyAccess verifyAccess;
     private final RateLimiter cidLimiter;
+    private final boolean requestCertificates;
 
     private EndpointSettings(String providerId, boolean enabled, String defaultAudience,
-                             long cidCacheSeconds, int cidRateLimit, VerifyAccess verifyAccess) {
+                             long cidCacheSeconds, int cidRateLimit, VerifyAccess verifyAccess,
+                             boolean requestCertificates) {
         this.providerId = providerId;
         this.enabled = enabled;
         this.defaultAudience = defaultAudience;
         this.cidCacheSeconds = cidCacheSeconds;
         this.verifyAccess = verifyAccess;
         this.cidLimiter = cidRateLimit > 0 ? new RateLimiter(cidRateLimit) : null;
+        this.requestCertificates = requestCertificates;
     }
 
     /**
@@ -105,8 +110,10 @@ public final class EndpointSettings {
                 "lws.authn.cid.cacheSeconds", "LWS_AUTHN_CID_CACHE_SECONDS", DEFAULT_CID_CACHE_SECONDS));
         int cidRateLimit = Math.max(0, Settings.getInt(scope, "cid-rate-limit",
                 "lws.authn.cid.rateLimit", "LWS_AUTHN_CID_RATE_LIMIT", DEFAULT_CID_RATE_LIMIT));
+        boolean requestCertificates = Settings.getBoolean(scope, "request-certificates",
+                "lws.authn.saml.requestCertificates", "LWS_AUTHN_SAML_REQUEST_CERTIFICATES", true);
         return new EndpointSettings(providerId, enabled, blankToNull(audience), cache, cidRateLimit,
-                VerifyAccess.from(scope));
+                VerifyAccess.from(scope), requestCertificates);
     }
 
     /** The provider id these settings belong to ({@code lws}, {@code lws-saml}, ...). */
@@ -158,6 +165,18 @@ public final class EndpointSettings {
         return cidCacheSeconds;
     }
 
+    /**
+     * Whether the SAML verifier accepts an IdP certificate in the request, as {@code certificate}.
+     *
+     * <p>The SAML suite establishes trust "out-of-band". A certificate in the request is the caller's
+     * trust decision, and the result can only say that this certificate signed the credential; with
+     * this off, trust comes only from the realm's SAML identity providers, which bind each certificate to
+     * an IdP's entity ID (R-25). On by default, as it always was.</p>
+     */
+    public boolean acceptsRequestCertificates() {
+        return requestCertificates;
+    }
+
     /** The access policy for this suite's {@code verify} endpoint. */
     public VerifyAccess getVerifyAccess() {
         return verifyAccess;
@@ -171,7 +190,9 @@ public final class EndpointSettings {
         return "enabled=" + enabled + ", " + verifyAccess.describe()
                 + ", audience=" + (defaultAudience == null ? "(none)" : defaultAudience)
                 + ", cid-cache-seconds=" + cidCacheSeconds
-                + ", cid-rate-limit=" + (cidLimiter == null ? "off" : cidLimiter.getPermitsPerMinute() + "/min");
+                + ", cid-rate-limit=" + (cidLimiter == null ? "off" : cidLimiter.getPermitsPerMinute() + "/min")
+                + (SamlConstants.RESOURCE_PROVIDER_ID.equals(providerId)
+                        ? ", request-certificates=" + requestCertificates : "");
     }
 
     /**

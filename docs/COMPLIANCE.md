@@ -52,7 +52,7 @@ notifications, search and access grants live in `lws-server`.
 |---|---|---|---|---|---|
 | OpenID Connect | OP + CID host + verifier | ID Token (JWT), `sub` = WebID | OIDC Discovery on `iss`, found via the CID service | `/realms/{realm}/lws` | `…token-type:id_token` |
 | Self-signed CID | CID host + verifier | self-issued JWT, `sub`==`iss`==`client_id`: an HTTPS URI, `did:key` or `did:web` | the `authentication` method `kid` names in the subject's CID or DID document (`JsonWebKey` or `Multikey`) | `/realms/{realm}/lws-ssi-cid` | `…token-type:jwt` |
-| SAML 2.0 | verifier | signed SAML 2.0 Response | out-of-band IdP certificate supplied by the caller | `/realms/{realm}/lws-saml` | `…token-type:saml2` |
+| SAML 2.0 | verifier | signed SAML 2.0 Response | out of band: the realm's SAML identity provider whose entity ID is the `<Issuer>`, or a certificate the caller supplies | `/realms/{realm}/lws-saml` | `…token-type:saml2` |
 
 SPI surface: three `RealmResourceProviderFactory` ids (`lws`, `lws-ssi-cid`, `lws-saml`) plus the OIDC
 `ProtocolMapper` `lws-webid-sub-mapper`.
@@ -69,7 +69,7 @@ suite to be associated with a token type URI.
 |---|---|---|---|
 | subject REQUIRED, a URI | `subjectPresent` | `selfIssued` | `NameID` from the covered assertion, an absolute URI (`subjectIsUri`) |
 | issuer REQUIRED, a URI | `issuerPresent` + `issuerWellFormed` | `selfIssued` | `issuerPresent` + `issuerWellFormed` |
-| client REQUIRED | `clientPresent` (`azp`) | `selfIssued` (`client_id`) | `recipientPresent` |
+| client REQUIRED | `clientPresent` (`azp`) | `selfIssued` (`client_id`) | `recipientPresent`; `recipientMatched` when one is given |
 | audience restriction | `audiencePresent` always; `audienceMatched` when one is given | `audiencePresent` + `audienceMatched`, both always | `audiencePresent` + `audienceMatched` |
 | signed (§4.2) | `signatureValid` | `signatureValid` | `signatureValid` |
 | token type URI (§4.3) | reported as `tokenType` on every result | | |
@@ -227,11 +227,27 @@ conjunction" (§2.5.1.4). A `<OneTimeUse>` assertion is valid and reported as `o
 XML is parsed with DTDs **disallowed** and external entities disabled, independent of any caller or
 library configuration.
 
-**Deferred to the relying party — read this.** SAML trust is out of band, so **the caller supplies the
-certificate**. This endpoint answers *"is this Response signed by the certificate you gave me"*, not
-*"does this deployment trust that IdP"*. Anyone can therefore obtain `"valid": true` for an assertion
-they signed themselves with a certificate they also supplied. That is the API behaving correctly.
-**Pin the expected certificate on your side**; do not treat this endpoint as a trust decision.
+**Trust.** The suite: "there must be a trust relationship with the issuing identity provider … established
+out-of-band". It comes from one of two places, and every result says which (`trustSource`), and the
+SHA-256 fingerprint of the certificate that verified it (`certificateSha256`):
+
+- **The realm's SAML identity providers** (`trustSource: identity-provider`, with the alias as
+  `identityProvider`), when the request carries no `certificate`. The certificates trusted are the
+  configured signing certificates of the enabled SAML identity providers whose IdP entity ID is the
+  assertion's `<Issuer>` (`trustedCertificateFound`), tried in turn, so a key being rotated still
+  verifies. Each certificate is bound to one issuer: one IdP's key cannot vouch for an assertion that
+  names another as its issuer. Here `"valid": true` is this deployment's trust decision, as it is for
+  the OpenID and self-signed suites.
+- **A certificate the caller supplies** (`trustSource: request`), unless the deployment turns this off
+  with `request-certificates=false`. Then the endpoint answers *"is this Response signed by the
+  certificate you gave me"*, not *"does this deployment trust that IdP"*, and nothing binds the
+  certificate to the `<Issuer>` unless the caller passes `issuer` (`issuerMatched`). Anyone can obtain
+  `"valid": true` for an assertion they signed with a certificate they also supplied. **Pin the expected
+  certificate on your side** — compare `certificateSha256` — and pass `issuer`.
+
+Either way, `recipient` binds the bearer `Recipient` — the LWS client identifier — to the one the
+caller expects (`recipientMatched`), as SAML Profiles §4.1.4.3 requires of whoever received the
+Response.
 
 ---
 
@@ -281,7 +297,7 @@ Each is a decision, not an oversight; each names where the reasoning lives.
 | 2 | **OpenID: audience binding is optional per request** | Core RECOMMENDS an audience restriction naming the authorization server, and OpenID Connect binds an ID Token to a relying party, not to an authorization server: requiring a match would reject conforming ID Tokens. `aud` must be present (OpenID Connect Core §2); matching it is enforced when the request passes `client_id` or `audience`, or the deployment configures `audience` (**P3-6**). The **self-signed CID** suite is different: there "the `aud` claim MUST include the target authorization server", every conforming credential names one, and the match is required — a request with no target is refused (**R-16**). SAML follows the request and the configuration, as OpenID does. |
 | 3 | **Replay protection is off by default** | No suite mandates it, and a verify endpoint is legitimately asked about the same live credential repeatedly. Opt in per caller (**P2-8**). |
 | 4 | **`cid/{userId}` is unauthenticated** | A controlled identifier is a URL others dereference; an identity document requiring a credential would not be dereferenceable. Enumeration is bounded — random-UUID ids, a uniform response shape, and a rate limit — not closed (**P3-7**). |
-| 5 | **The SAML verifier trusts the caller's certificate** | The suite's own model: SAML trust is out of band. See the suite section above. |
+| 5 | **The SAML verifier can trust a certificate the caller supplies** | SAML trust is out of band, and a relying party may hold it rather than this deployment. By default the realm's SAML identity providers are the trust — each certificate bound to its IdP's entity ID — and a caller may instead supply one; the result names the source and the certificate's fingerprint, and `request-certificates=false` turns the second off (**R-25**). See the suite section above. |
 | 6 | **Fetch happens before the signature is known good** | Required by the specification's cold-trust algorithm and unavoidable. The exposure is addressed instead: authenticated endpoints, rate limiting, SSRF vetting at resolution time, bounded timeouts and response size, and a per-host circuit breaker (**P0-3**, **P0-5**). The same applies to a `did:web` subject. |
 | 7 | **Only `did:key` and `did:web` are resolved** | The self-signed CID suite mandates no DID method. These two need no ledger and no third-party resolver; any other is refused by name rather than resolved through a service this provider would have to trust (**S-2**). |
 | 8 | **DID documents are read as JSON, not processed as JSON-LD** | DID 1.1 is a Candidate Recommendation and its JSON-LD context is not published at a stable URL, so there is no definition to bundle, and contexts are never fetched (see *Supported formats*). The structure the verifier reads — `id`, `authentication`, `verificationMethod`, `type`, `controller`, key material — is fixed by DID 1.1 and CID 1.0 rather than by the context (**S-3**). |
