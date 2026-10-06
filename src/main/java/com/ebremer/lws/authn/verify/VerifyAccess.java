@@ -58,8 +58,9 @@ import com.ebremer.lws.authn.http.JsonResponses;
  * what it has always meant — so {@code public} mode is exactly backwards compatible.</p>
  *
  * <p>Configuration is read from the provider's {@link Config.Scope} first, then a system property, then
- * an environment variable, so a deployment can configure it either through {@code kc.sh build} options
- * or through the environment alone:</p>
+ * an environment variable, so a deployment can configure it either through provider options — in
+ * {@code keycloak.conf} or on {@code kc.sh start}, not {@code kc.sh build} — or through the environment
+ * alone:</p>
  * <table>
  *   <caption>Settings</caption>
  *   <tr><th>Scope key</th><th>System property</th><th>Environment</th><th>Default</th></tr>
@@ -163,6 +164,14 @@ public final class VerifyAccess {
 
     public Mode getMode() {
         return mode;
+    }
+
+    /** The access settings in force, for the startup log; says whether a secret is set, never what it is. */
+    public String describe() {
+        return "access=" + mode.name().toLowerCase(Locale.ROOT)
+                + (mode == Mode.BEARER ? ", role=" + (requiredRole == null ? ANY_USER : requiredRole) : "")
+                + (mode == Mode.SECRET ? ", secret=(set)" : "")
+                + ", rate-limit=" + (limiter == null ? "off" : limiter.getPermitsPerMinute() + "/min");
     }
 
     /** The realm role a {@code bearer} caller must hold, or {@code null} if any user of the realm may call. */

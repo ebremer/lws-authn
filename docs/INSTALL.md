@@ -317,9 +317,10 @@ You opt specific hosts back in with a comma-separated list, via **any** of:
 
 - environment variable `LWS_AUTHN_ALLOWED_INTERNAL_HOSTS`,
 - JVM system property `lws.authn.allowedInternalHosts`, or
-- the build-time provider option
-  `kc.sh build --spi-realm-restapi-extension--lws--allowed-internal-hosts=…` (set it on any one of the
-  three providers; it is a server-wide setting).
+- the provider option `spi-realm-restapi-extension--lws--allowed-internal-hosts=…` in `keycloak.conf`,
+  or `--spi-realm-restapi-extension--lws--allowed-internal-hosts=…` on `kc.sh start` (set it on any one
+  of the three providers; it is a server-wide setting). **Not on `kc.sh build`** — see the note in
+  [step 9d](#9d-decide-who-may-call-verify).
 
 We wire the environment variable into the systemd unit in the next steps. For a single-box install
 where the server can't reach its own public IP, set it to your hostname (and/or `127.0.0.1`); leave
@@ -351,9 +352,22 @@ good, since that is the order the specification's cold-trust algorithm requires.
 | Required realm role (mode `bearer`; `*` for any user) | `LWS_AUTHN_VERIFY_ROLE` | `lws.authn.verify.role` | `lws-verifier` |
 | Requests per minute, per caller | `LWS_AUTHN_VERIFY_RATE_LIMIT` | `lws.authn.verify.rateLimit` | `60` |
 
-The same settings are available as build-time provider options, one per provider id, e.g.
-`kc.sh build --spi-realm-restapi-extension--lws--access=public`. The environment variables need no
-rebuild, so they are what the systemd unit below uses.
+The same settings are available as provider options, one per provider id: in `keycloak.conf`
+(`spi-realm-restapi-extension--lws--access=public`) or on `kc.sh start`
+(`--spi-realm-restapi-extension--lws--access=public`). The environment variables need neither, so they
+are what the systemd unit below uses.
+
+> **These are runtime options. Do not pass them to `kc.sh build`.** Keycloak keeps only build-time
+> options from a build — for a provider, the keys ending in `-provider`, `-enabled` or
+> `-provider-default` — and drops the rest with nothing more than "run time options were found, but
+> will be ignored during build time" in the build's output. A `role` or `audience` given to `kc.sh
+> build` is simply not set, and the server starts without it. To see what is actually in force, look
+> for these lines in the startup log, one per provider and one for the server-wide settings:
+>
+> ```
+> lws-authn provider 'lws' settings in force: enabled=true, access=bearer, role=lws-verifier, rate-limit=60/min, …
+> lws-authn server-wide settings in force: allowed-internal-hosts=[…], http-timeout-millis=5000, …
+> ```
 
 - **`bearer`** — the caller presents a Keycloak access token for the realm **and holds the realm role
   `lws-verifier`** (or the one `LWS_AUTHN_VERIFY_ROLE` names). In each realm that serves `/verify`,
@@ -379,7 +393,8 @@ rebuild, so they are what the systemd unit below uses.
 
 Every setting is read from the provider's configuration first, then a system property, then an
 environment variable, then a compiled-in default — so the environment variables in the unit file below
-need no `kc.sh build`.
+need no `kc.sh build`. (A provider option belongs in `keycloak.conf` or on `kc.sh start`, never on
+`kc.sh build`; see the note in [step 9d](#9d-decide-who-may-call-verify).)
 
 | Setting | Environment variable | System property | Provider option | Default |
 |---|---|---|---|---|
@@ -389,13 +404,16 @@ need no `kc.sh build`.
 | CID requests per minute, per caller | `LWS_AUTHN_CID_RATE_LIMIT` | `lws.authn.cid.rateLimit` | `cid-rate-limit` | `600` |
 | Outbound fetch timeout (ms) | `LWS_AUTHN_HTTP_TIMEOUT_MILLIS` | `lws.authn.http.timeoutMillis` | `http-timeout-millis` | `5000` |
 | Outbound response cap (bytes) | `LWS_AUTHN_HTTP_MAX_RESPONSE_BYTES` | `lws.authn.http.maxResponseBytes` | `http-max-response-bytes` | `262144` |
+| Outbound fetch deadline, whole exchange (ms) | `LWS_AUTHN_HTTP_DEADLINE_MILLIS` | `lws.authn.http.deadlineMillis` | `http-deadline-millis` | `10000` |
+| Outbound fetches one caller may have in flight | `LWS_AUTHN_HTTP_MAX_CONCURRENT_PER_CALLER` | `lws.authn.http.maxConcurrentPerCaller` | `http-max-concurrent-per-caller` | `4` |
 | Clock skew on `exp`/`nbf`/`<Conditions>` (s) | `LWS_AUTHN_CLOCK_SKEW_SECONDS` | `lws.authn.clockSkewSeconds` | `clock-skew-seconds` | `60` |
 
-The last three are server-wide: set them on any one provider and all three use them. Out-of-range
+The last five are server-wide: set them on any one provider and all three use them. Out-of-range
 values are clamped rather than honoured.
 
-**Turning a suite off.** `LWS_AUTHN_ENABLED=false` (or `--spi-realm-restapi-extension--lws-saml--enabled=false`
-for just one) makes that suite's endpoints answer `404`. For one realm only, set the realm attribute
+**Turning a suite off.** `LWS_AUTHN_ENABLED=false` makes the suites' endpoints answer `404`. For just
+one, `--spi-realm-restapi-extension--lws-saml--enabled=false` — the one provider option that *is*
+build-time, so it goes on `kc.sh build`, and Keycloak then does not load that provider at all. For one realm only, set the realm attribute
 `lws.authn.<providerId>.enabled` — for example:
 
 ```bash
@@ -708,7 +726,11 @@ If `subjectDereferenced` is `false`, the server couldn't fetch its own WebID —
 - **SSRF allow-list** — empty unless the server must dereference its own documents over an internal
   address, in which case it lists exactly those hosts.
 - **`/verify` access** — left at `bearer`, or set to `public` only behind a network restriction that
-  makes it unreachable from the internet ([step 9d](#9d-decide-who-may-call-verify)).
+  makes it unreachable from the internet ([step 9d](#9d-decide-who-may-call-verify)). In `bearer` mode
+  the `lws-verifier` role exists and is held only by the services that verify credentials.
+- **Settings in force** — the startup log's `lws-authn provider '…' settings in force` and `lws-authn
+  server-wide settings in force` lines show the access mode, role, audience and allow-list you meant.
+  A provider option passed to `kc.sh build` instead of `kc.sh start` is silently absent from them.
 - **User attributes are admin-only** — the realm's unmanaged attribute policy is `ADMIN_EDIT`, not
   `ENABLED` ([step 9f](#9f-make-user-attributes-admin-only-do-not-skip-this)). `lws_jwk` is the signing
   key an identity publishes and the WebID attribute becomes a credential's `sub`; a user who can write

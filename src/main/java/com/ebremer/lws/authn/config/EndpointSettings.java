@@ -163,6 +163,31 @@ public final class EndpointSettings {
         return verifyAccess;
     }
 
+    /**
+     * This provider's settings in force, for the startup log (R-12). No secret is included, only whether
+     * one is set.
+     */
+    public String describe() {
+        return "enabled=" + enabled + ", " + verifyAccess.describe()
+                + ", audience=" + (defaultAudience == null ? "(none)" : defaultAudience)
+                + ", cid-cache-seconds=" + cidCacheSeconds
+                + ", cid-rate-limit=" + (cidLimiter == null ? "off" : cidLimiter.getPermitsPerMinute() + "/min");
+    }
+
+    /**
+     * Logs what is in force — this provider's settings and, once, the server-wide ones. Called from each
+     * factory's {@code postInit}, after every provider has contributed to {@link ServerSettings}.
+     *
+     * <p>A setting given to {@code kc.sh build} rather than {@code kc.sh start} never arrives — Keycloak
+     * keeps only build-time options from a build and warns, once, in the build's output — so a
+     * {@code role} or {@code audience} an operator believes is set can be silently absent. This line is
+     * where to check (R-12).</p>
+     */
+    public void logEffective() {
+        log.infof("lws-authn provider '%s' settings in force: %s", providerId, describe());
+        ServerSettings.logOnce();
+    }
+
     /** The rate limiter for this suite's {@code cid/{userId}} endpoint, or {@code null} when off. */
     public RateLimiter getCidLimiter() {
         return cidLimiter;

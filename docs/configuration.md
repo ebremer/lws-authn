@@ -54,9 +54,11 @@ which no header can spoof. Set `rate-limit` to `0` to turn both off.
 > (`proxy-trusted-addresses=127.0.0.1`); [INSTALL step 12](INSTALL.md#12-terminate-tls-with-nginx--certbot)
 > does both.
 
-Set the mode with either `kc.sh build --spi-realm-restapi-extension--lws--access=public` (repeat per
-provider id: `lws`, `lws-ssi-cid`, `lws-saml`) or, with no rebuild, the environment
-variable `LWS_AUTHN_VERIFY_ACCESS=public`.
+Set the mode in `keycloak.conf` (`spi-realm-restapi-extension--lws--access=public`, repeated per
+provider id: `lws`, `lws-ssi-cid`, `lws-saml`), on `kc.sh start`
+(`--spi-realm-restapi-extension--lws--access=public`), or with the environment variable
+`LWS_AUTHN_VERIFY_ACCESS=public` — **not on `kc.sh build`**, which drops it; see
+[Runtime, not build time](#runtime-not-build-time).
 
 ### What each status means
 
@@ -84,10 +86,30 @@ whichever endpoint and whichever status produced it.
 ## Configuration reference
 
 Every setting is read from the provider's `Config.Scope` first, then a system property, then an
-environment variable, then a compiled-in default. `Config.Scope` is the supported surface
-(`kc.sh build --spi-realm-restapi-extension--<provider>--<key>=<value>`, where `<provider>` is `lws`,
-`lws-ssi-cid` or `lws-saml`) and the only one that can differ per provider; the
-environment variable is what a container deployment can set without rebuilding the image.
+environment variable, then a compiled-in default. `Config.Scope` is the supported surface —
+`spi-realm-restapi-extension--<provider>--<key>=<value>` in `keycloak.conf`, or the same with a leading
+`--` on `kc.sh start`, where `<provider>` is `lws`, `lws-ssi-cid` or `lws-saml` — and the only one that
+can differ per provider; the environment variable is what a container deployment can set without
+rebuilding the image.
+
+### Runtime, not build time
+
+Every setting here except `enabled` is a **runtime** option. Keycloak keeps only build-time options
+from `kc.sh build` — for a provider, the keys ending in `-provider`, `-enabled` or `-provider-default` —
+and drops anything else with no more than "run time options were found, but will be ignored during
+build time" in the build's output. A `role`, `audience` or `allowed-internal-hosts` given to `kc.sh
+build` is therefore simply not set, and the server starts without it. Put them in `keycloak.conf`, on
+`kc.sh start`, or in the environment.
+
+To see what is actually in force, read the startup log. Each provider logs one line and the server-wide
+settings one more:
+
+```
+lws-authn provider 'lws' settings in force: enabled=true, access=bearer, role=lws-verifier, rate-limit=60/min, audience=(none), cid-cache-seconds=300, cid-rate-limit=600/min
+lws-authn server-wide settings in force: allowed-internal-hosts=[], http-timeout-millis=5000, http-deadline-millis=10000, http-max-response-bytes=262144, http-max-concurrent-per-caller=4, clock-skew-seconds=60
+```
+
+A shared secret is shown only as `secret=(set)`.
 
 **Per provider:**
 

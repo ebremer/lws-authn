@@ -12,6 +12,7 @@ import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.jboss.logging.Logger;
 import org.keycloak.Config;
@@ -193,9 +194,33 @@ public final class ServerSettings {
         return clockSkewSeconds;
     }
 
+    /**
+     * The server-wide settings in force, for the startup log (R-12). Keycloak drops a runtime option
+     * given to {@code kc.sh build} with no more than a warning, so the settings an operator meant and
+     * the settings in force can differ silently; this is how to tell.
+     */
+    public static String describe() {
+        return "allowed-internal-hosts=" + allowedInternalHosts()
+                + ", http-timeout-millis=" + httpTimeoutMillis
+                + ", http-deadline-millis=" + httpDeadlineMillis
+                + ", http-max-response-bytes=" + maxResponseBytes
+                + ", http-max-concurrent-per-caller=" + httpMaxConcurrentPerCaller
+                + ", clock-skew-seconds=" + clockSkewSeconds;
+    }
+
+    /** Logs {@link #describe()} once per server start, however many providers ask. */
+    public static void logOnce() {
+        if (logged.compareAndSet(false, true)) {
+            log.infof("lws-authn server-wide settings in force: %s", describe());
+        }
+    }
+
+    private static final AtomicBoolean logged = new AtomicBoolean();
+
     /** Restores the compiled-in defaults. For tests; a running server never needs it. */
     public static synchronized void reset() {
         contributed.clear();
+        logged.set(false);
         allowedInternalHosts = null;
         httpTimeoutMillis = DEFAULT_HTTP_TIMEOUT_MILLIS;
         maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES;

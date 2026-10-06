@@ -204,4 +204,24 @@ class SettingsTest {
     void aRateLimitOfZeroTurnsTheCidLimiterOff() {
         assertNull(EndpointSettings.from("lws", scope("cid-rate-limit", "0")).getCidLimiter());
     }
+
+    /**
+     * R-12. A runtime option given to {@code kc.sh build} is dropped with no more than a warning in the
+     * build's output, so the startup log says what is actually in force — and must not say a secret.
+     */
+    @Test
+    void describesWhatIsInForceWithoutTheSecret() {
+        String described = EndpointSettings.from("lws", scope("access", "secret", "secret", "hunter2",
+                "audience", "https://as.example", "rate-limit", "30", "cid-rate-limit", "0")).describe();
+        assertTrue(described.contains("access=secret"), described);
+        assertTrue(described.contains("secret=(set)"), described);
+        assertFalse(described.contains("hunter2"), described);
+        assertTrue(described.contains("audience=https://as.example"), described);
+        assertTrue(described.contains("rate-limit=30/min"), described);
+        assertTrue(described.contains("cid-rate-limit=off"), described);
+
+        String bearer = EndpointSettings.from("lws", scope()).describe();
+        assertTrue(bearer.contains("access=bearer, role=lws-verifier"), bearer);
+        assertTrue(ServerSettings.describe().contains("http-deadline-millis=10000"), ServerSettings.describe());
+    }
 }

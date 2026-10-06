@@ -436,7 +436,7 @@ is needed.
   `bearer` deployment, which is why the CHANGELOG's upgrade box leads with it — including the live one
   (R-15).
 
-- [ ] **R-12 · Runtime options documented as `kc.sh build` flags are silently ignored by Keycloak.**
+- [x] **R-12 · Runtime options documented as `kc.sh build` flags are silently ignored by Keycloak.**
   `Medium` · security/docs · `S` · *verified in the docs; Keycloak behaviour checked in its CLI bytecode*
   `docs/configuration.md:41-43, 70-74` and `docs/INSTALL.md:317-320, 348-350` tell operators to pass
   `--spi-realm-restapi-extension--lws--access=…` (and `allowed-internal-hosts`, `role`, `audience`, …) to
@@ -447,6 +447,17 @@ is needed.
   **Do:** document these as `kc.sh start` options, `keycloak.conf` entries or `KC_SPI_…` environment
   variables; add a line to the INSTALL checklist that verifies the effective value (the provider could
   log its effective settings at `postInit`).
+  **Done.** Every `kc.sh build --spi-…` in `configuration.md` and `INSTALL.md` (§9c, §9d, §9e) is now a
+  `keycloak.conf` entry or a `kc.sh start` option, with a "Runtime, not build time" section saying why
+  and what Keycloak prints; the one genuinely build-time key, `enabled`, says so. Each factory's
+  `postInit` now calls `EndpointSettings.logEffective()`, which logs `lws-authn provider '<id>' settings
+  in force: …` (access, role, rate limit, audience, CID cache and rate limit; a secret only as
+  `secret=(set)`) and, once per start, `ServerSettings.describe()`. INSTALL §14 gains a checklist line
+  to read them. `INSTALL.md` §9e also lists the two server-wide settings R-01 added. The `Settings` and
+  `VerifyAccess` javadoc no longer say `kc.sh build`. `SettingsTest.describesWhatIsInForceWithoutTheSecret`.
+  Not done: `KC_SPI_…` environment variables are not documented — the provider's own `LWS_AUTHN_*`
+  variables already cover configuration from the environment, and the exact `KC_SPI_` spelling for the
+  `--`-separated keys was not checked against Keycloak here.
 
 - [ ] **R-13 · The production install's "fast path" leaves a known-password user and a wildcard-redirect client.**
   `Medium` · security/docs · `S` · *verified*

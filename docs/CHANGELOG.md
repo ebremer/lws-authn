@@ -140,6 +140,14 @@ realm under the default `bearer` access mode, before any signature is checked.
   until the token expired; it is now checked against the user's current role mappings, which also
   admits a holder whose token is a lightweight one carrying no role claim. The demo realm grants
   `alice` the role, and the demo scripts grant it to the user they verify as.
+- **The documentation no longer tells you to configure the provider at `kc.sh build`** (R-12).
+  `configuration.md` and `INSTALL.md` gave every provider option — `access`, `role`, `audience`,
+  `allowed-internal-hosts` — as a `kc.sh build` flag. Keycloak keeps only build-time options from a
+  build and drops the rest with one line in the build output, so an operator who followed the docs ran
+  without the `role` or `audience` they had set, and nothing said so. They are now documented as
+  `keycloak.conf` entries or `kc.sh start` options (or the `LWS_AUTHN_*` environment variables, which
+  were always fine), and each provider logs the settings actually in force at startup, a secret only
+  as `secret=(set)`. **If you set any provider option on `kc.sh build`, move it, and check the log.**
 
 ### Added
 

@@ -15,8 +15,9 @@ import org.keycloak.Config;
  * environment variable, then a compiled-in default.
  *
  * <p>All three sources exist because a Keycloak extension is configured in three different situations.
- * {@code Config.Scope} is the supported surface — {@code kc.sh build --spi-realm-restapi-extension--
- * <provider>--<key>=<value>} — and is the only one that can differ per provider. A system property
+ * {@code Config.Scope} is the supported surface — {@code spi-realm-restapi-extension--<provider>--<key>}
+ * in {@code keycloak.conf} or on {@code kc.sh start}, never on {@code kc.sh build}, which drops runtime
+ * options (R-12) — and is the only one that can differ per provider. A system property
  * suits a test or a one-off {@code kc.sh start -D…}. An environment variable is what a container
  * deployment can set without rebuilding the image, which is how this provider was configured before it
  * read its scope at all; keeping it means an existing deployment's settings still apply.</p>
