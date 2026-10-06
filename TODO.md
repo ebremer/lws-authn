@@ -1,5 +1,806 @@
 # TODO — `lws-authn`
 
+Prioritized backlog from a **full code review** of this repository on **6 October 2026**, including an
+evaluation against the **W3C Linked Web Storage specifications as they stood on 5 October 2026**.
+
+- **Code reviewed:** `master` at `edda85b` (version `0.3.0-SNAPSHOT`), every file under `src/`,
+  `pom.xml`, CI, Docker, scripts, the demo realm and `docs/`.
+- **Specification baseline:** `w3c/lws-protocol` at `ef02548` (5 October 2026) — see
+  [Specification baseline](#specification-baseline-5-october-2026).
+- **Tree state:** `mvn clean package` green on JDK 25 (GraalVM CE 25.0.4) — **179 unit tests, 0
+  failures**. `LwsAuthIT` was **not** run (no Docker in the review environment). GitHub CI is green on
+  `master` at `edda85b`; **every pull-request run since 1 October fails** (R-40).
+- **Method:** five parallel review slices (OpenID suite; self-signed CID suite with DIDs and JOSE;
+  SAML suite; network/HTTP/config/RDF infrastructure; build, CI, tests and docs). Most findings were
+  reproduced with throwaway probes against the built JAR and Keycloak 26.7.4's own classes. Every
+  `High` item and every P0/P1 item was re-checked against the source while compiling this file.
+
+Each item says **where**, **what is wrong** (quoting the specification for conformance items), **how it
+fails**, and **what to do**. Tags: severity `High` / `Medium` / `Low` / `Info`; effort `S` (hours) /
+`M` (a day or two) / `L` (more); confidence *demonstrated* (reproduced with a probe), *verified* (traced
+end to end in the code) or *plausible* (not fully traced).
+
+Item ids are **`R-nn`** so they cannot collide with the ids of the earlier reviews (`P0-1` … `P6-8`,
+`S-1` … `S-18`), which code comments, tests, `CHANGELOG.md` and `COMPLIANCE.md` cite. Those reviews are
+kept, unchanged, in the [Archive](#archive--reviews-of-2-to-30-september-2026) at the end of this file;
+the four items they left open are carried forward here (R-15, R-43, R-50, W-1).
+
+---
+
+## Summary
+
+**Conformance.** Nothing in the specifications changed between the last review (`9b03b32`, 28
+September) and 5 October that bears on this provider: the one new commit, `ef02548`, makes JSON Patch
+the baseline `PATCH` format, which is storage-server business. The authentication text in core and in
+the OpenID, SAML and self-signed CID suites is the text of 21 September. **But the code is not fully
+compliant with that text**, and `docs/COMPLIANCE.md` overstates it in places. MUST-level gaps found:
+
+| Suite | Gap | Item |
+|---|---|---|
+| Self-signed CID | "The `aud` claim MUST include the target authorization server" is only checked when an audience is configured or supplied; otherwise any `aud` — including `[""]` — passes | R-16 |
+| OpenID | `aud` and `iat` are REQUIRED ID Token claims (OIDC Core §2, incorporated through §3.1.3.7) and are not enforced | R-17 |
+| OpenID, SSI-CID | "a valid controlled identifier document with an `id` value equal to the subject identifier": the topmost `id` is not checked on the JSON-LD/RDF path (only "some triple is about `sub`"); valid CIDs with no `@context`, or served as `application/cid`, are refused | R-18, R-19 |
+| SSI-CID | CID 1.0 §2.2 revocation/expiry fail open on a non-string or multi-valued `revoked`/`expires` | R-06 |
+| SAML | Core §4.1 "subject … MUST be a URI", "issuer … MUST be a URI": NameID and Issuer are never checked | R-20 |
+| SAML | SAML Core §2.5.1: multiple `<AudienceRestriction>` are ANDed, and an unknown condition MUST make the assertion invalid; both fail open | R-21 |
+| SAML | "the signature … MUST be validated as described in SAML Core, section 5": §5.4.2's single `<ds:Reference>` and §5.4.4's transform restrictions are not enforced — a signature that excludes `<Subject>` by XPath transform verifies with a substituted subject | R-22 |
+
+**Security.** Four `High` denial-of-service issues are reachable by **any user of the realm** — the
+default `bearer` access mode requires no role — and run before any signature is checked: no overall
+fetch deadline (R-01), a circuit breaker that an attacker can hold open against any host (R-02),
+quadratic CPU in DID/CID key handling (R-03), and a 95 MB allocation from an 8-byte RDF-Thrift body
+(R-04). The two controls meant to contain abuse are themselves weak: the breaker is the lever in R-02,
+and the rate-limit key is spoofable behind the documented reverse proxy (R-10). Separately, a realm
+**access token verifies as an LWS ID Token credential** (R-05), and plain `http` is accepted for every
+key-bearing fetch (R-07).
+
+**Operations.** Keycloak 26.7.5 (30 September, 14 security fixes) and 26.8.0 are out (R-14); the docs
+tell operators to set runtime options at `kc.sh build`, where Keycloak silently drops them — including
+`role` and `audience` (R-12); and the dependency-review CI job fails every pull request (every run since 1 October), so
+Dependabot updates are stuck (R-40).
+
+**Counts:** 15 items in P0, 10 in P1, 14 in P2, 12 in P3, 7 watch items.
+
+---
+
+## Specification baseline (5 October 2026)
+
+| Document | Latest published version on 5 October 2026 | Editor's draft |
+|---|---|---|
+| Linked Web Storage Protocol 1.0 (core) | W3C Working Draft **21 September 2026** | `ef02548`; authentication text unchanged since 21 September |
+| LWS 1.0 Authn Suite: Self-signed Identity (Controlled Identifiers) | W3C Working Draft **21 September 2026** | unchanged since 21 September |
+| LWS 1.0 Authn Suite: OpenID Connect | W3C Working Draft 3 August 2026 | unchanged |
+| LWS 1.0 Authn Suite: SAML 2.0 | W3C Working Draft 3 August 2026 | unchanged |
+| LWS 1.0 Authn Suite: Self-signed Identity using did:key | **Discontinued Draft, 29 September 2026** | discontinued 18 September in favour of the self-signed CID suite |
+| Linked Web Storage Vocabulary | W3C Group Note Draft 14 July 2026 | — |
+| Controlled Identifiers (CID) 1.0 | W3C Recommendation, 15 May 2025 | — |
+| Decentralized Identifiers (DIDs) 1.1 | W3C Candidate Recommendation Snapshot, 5 March 2026 | context URL still answers `300` |
+
+Commits since the last review (`9b03b32`): only `ef02548` (#255, JSON Patch baseline for `PATCH` —
+storage-side). Open pull requests that could matter here later, none merged: #256 (RFC 9728 protected
+resource metadata for authorization-server discovery — storage/AS side), #96 (a Web-CID profile for
+agent identification). See *Watch*.
+
+---
+
+## Compliance matrix (as of 5 October 2026)
+
+✅ meets · ⚠️ partial · ❌ gap · — not applicable. Line numbers are at `edda85b`.
+
+### Core — Authentication credential data model (LWS core, WD 21 September 2026)
+
+| Requirement | OpenID | Self-signed CID | SAML |
+|---|---|---|---|
+| subject REQUIRED, "MUST be a URI" | ✅ `sub` required; must dereference as http(s) | ✅ only http(s), `did:key`, `did:web` resolve | ❌ NameID any string (R-20) |
+| issuer REQUIRED, "MUST be a URI" | ✅ required; `https` not enforced (R-07) | ✅ equals `sub` | ❌ Issuer any string (R-20) |
+| client REQUIRED, "SHOULD be a URI" | ✅ `azp` required | ✅ `client_id` required | ✅ `Recipient` required |
+| audience restriction RECOMMENDED | ✅ optional, checked when asked | see suite (MUST) | ✅ always required (stricter; R-39) |
+| "MUST be signed"; asymmetric RECOMMENDED | ✅ HS\* never accepted | ✅ HS\* never accepted | ✅ signature required |
+| suite token type URI | ✅ `…token-type:id_token` | ✅ `…token-type:jwt` | ✅ `…token-type:saml2` |
+
+Core *Authorization* (authorization-server metadata, token exchange, access tokens, storage-side
+validation) — **not applicable**: this provider is not an authorization server (COMPLIANCE divergence 9).
+
+### OpenID Connect suite (WD 3 August 2026)
+
+| Requirement | Status | Evidence / item |
+|---|---|---|
+| "MUST NOT use `none`" | ✅ | `LWSCredentialVerifier.java:101-107` |
+| `sub` / `iss` / `azp` carry subject / issuer / client | ✅ | `:125-146` |
+| "Any audience restriction … MUST use the `aud` claim" | ✅ | only `aud` is read |
+| "the validator MUST dereference the `sub`" | ✅ | `:150`; no caching (R-26) |
+| "MUST be formatted as a valid controlled identifier document with an `id` value equal to the subject identifier" | ⚠️ | topmost `id` unchecked on the processor path (R-18); context-less and `application/cid` documents refused (R-19) |
+| locate a service with `serviceEndpoint` = `iss` and type `lws:OpenIdProvider` | ✅ | parameterized SPARQL, `:412-422` |
+| "MUST perform OpenID Connect Discovery to locate the public portion of the JWK" | ⚠️ | discovered `issuer` matched exactly ✅; `https` not required (R-07); key selection ignores `use`/`alg`, RSA size (R-27) |
+| "MUST be validated as described by OpenID Connect Core Section 3.1.3.7" | ⚠️ | issuer ✅, signature ✅, `exp` ✅; `aud` ∋ client only when the caller passes `client_id`; `aud`/`iat` REQUIRED by Core §2 not enforced (R-17); ES\* signature length (R-24); nonce/acr/auth_time not applicable |
+| token type `urn:ietf:params:oauth:token-type:id_token` | ✅ | `LWSConstants.java:43` |
+| Security considerations (RFC 9700; OIDC Core §16) | ❌ | access tokens accepted as ID Tokens (R-05) |
+| Privacy: verifiers "encouraged to cache controlled identifier documents" | ❌ | three fetches per verification (R-26) |
+
+### Self-signed Identity using Controlled Identifiers (WD 21 September 2026)
+
+| Requirement | Status | Evidence / item |
+|---|---|---|
+| "MUST NOT use `none`" / "MUST reject any tokens using … `none`" | ✅ | `SelfSignedCidVerifier.java:134-140` |
+| `sub`, `iss`, `client_id` "MUST all use the same URI value" | ✅ | `:158-164` |
+| "The `aud` claim MUST include the target authorization server" | ❌ | unchecked without a configured or supplied audience; `[""]` counts as present (R-16) |
+| "MUST include an `exp`" / "MUST include an `iat`" | ✅ | `JwsChecks.java:142-157`, `:274-280`; future `iat` accepted (R-28) |
+| "the verifier MUST dereference the `sub`" | ⚠️ | ✅ https, `did:key`, `did:web`; cleartext `http` accepted (R-07) |
+| valid CID with `id` equal to the subject | ⚠️ | R-18, R-19; `subjectIdMatches` reported `true` unconditionally (`:352`) |
+| "MUST validate all claims described by the authentication credential data model" | ✅ | |
+| "MUST use the `kid` … to identify a verification method" per CID 1.0 §3.3 | ⚠️ | `authentication` only, in-document references, controller = subject ✅; id-less methods selectable, kid precedence (R-23) |
+| signature "MUST be validated as described in RFC 7515, Section 5.2" | ⚠️ | non-canonical base64url header bypasses the `crit` check; ES\* length not enforced (R-24) |
+| "current time is before … `exp`"; leeway MAY | ✅ | 60 s, configurable |
+| token type `urn:ietf:params:oauth:token-type:jwt` | ✅ | `SsiCidConstants.java:74` |
+| DID subjects (DID 1.1 §5.1.2) | ✅ | `did:key` local, `did:web` over guarded HTTPS; other methods refused by name (divergence 7) |
+| CID 1.0 §2.2: a revoked method "MUST NOT be used" | ⚠️ | fails open (R-06) |
+| CID 1.0 §2.2: method `id`/`type`/`controller` REQUIRED; "MUST NOT contain multiple verification material properties" | ⚠️ | R-23 |
+| Privacy: cache controlled identifier documents | ❌ | R-26 |
+
+### SAML 2.0 suite (WD 3 August 2026)
+
+| Requirement | Status | Evidence / item |
+|---|---|---|
+| "SAML tokens used as authentication credentials MUST be signed" | ✅ | `SamlCredentialVerifier.java:114-119` |
+| `saml:NameID` / `saml:Issuer` / `Recipient` carry subject / issuer / client | ✅ | all three required; not URI-checked (R-20) |
+| "Any audience restriction … MUST use the `saml:Audience` assertion" | ⚠️ | only `saml:Audience` read ✅; restrictions OR-ed instead of AND-ed (R-21) |
+| trust relationship with the issuing IdP, "established out-of-band" | ⚠️ | caller supplies the certificate per request (divergence 5, challenged in R-25) |
+| signature "MUST be validated as described in SAML Core, section 5" | ⚠️ | Reference must be `#ID` ✅, claims read only from the covered element ✅; single Reference, transforms, algorithms not enforced (R-22) |
+| token type `urn:ietf:params:oauth:token-type:saml2` | ✅ | `SamlConstants.java:28` |
+| SAML2-SEC (incorporated): XXE, Status, certificate validity | ✅ | DTDs disallowed `:338-349`; Status `:103-111`; certificate window `:91-96` |
+| SAML Core §2.5.1.1: unknown conditions → Invalid/Indeterminate → "MUST be rejected" | ❌ | R-21 |
+
+### Documents this provider publishes
+
+| Document | Status | Notes |
+|---|---|---|
+| OpenID CID (`/lws/cid/{id}`) | ✅ | matches the suite's example; named `#openid-provider` service; negotiation, `Vary`, `ETag`, `Cache-Control` |
+| Self-signed CID (`/lws-ssi-cid/cid/{id}`) | ⚠️ | matches the suite's example; private JWK members refused; duplicate method ids possible (R-33) |
+
+---
+
+## P0 — Security: fix before the verify endpoints face untrusted callers
+
+"Untrusted" includes every user of the realm: the default `bearer` mode accepts any realm access token
+(R-11), and every item from R-01 to R-04 runs **before** a signature is checked, so no valid credential
+is needed.
+
+- [ ] **R-01 · Outbound fetches have no overall deadline; a trickling or endless response stalls every
+  verification server-wide.** `High` · security/DoS · `M` · *demonstrated*
+  `net/OutboundHttp.java:98-113` sets only connect, pool-wait and per-read socket timeouts; the guarded
+  client is one static pool of 16 connections, 4 per route (`:72-73`). Socket timeout is per read, so a
+  server sending one byte every 4.9 s never trips the 5 s default. When the 256 KiB cap trips, Keycloak's
+  `SafeInputStream` throws and try-with-resources `close()` **drains the rest of the body**. Probes: an
+  endless chunked body was still being read after 15 s and 1.1 GB with a 2 s timeout; 16 trickling
+  fetches exhausted the pool, and a fetch to a healthy host then failed with
+  `ConnectionPoolTimeoutException`.
+  **Do:** a hard per-request deadline (schedule `abort()` on the request); on cap overflow
+  `abortConnection()` instead of `close()`; refuse an oversized `Content-Length` before reading; bound
+  concurrent fetches per target host and per caller. Add trickle and endless-body tests to
+  `OutboundHttpClientTest` (its `keepsTheResponseSizeCap` never sends an oversized body).
+
+- [ ] **R-02 · Any caller can hold the per-host circuit breaker open, and it re-arms itself.**
+  `High` · security/DoS · `S` · *verified + demonstrated*
+  `OutboundHttp.java:194-239`. `recordFailure` runs on failures that say nothing about the host's
+  health — any non-200 (a 404 for a path the attacker chose), a wrong `Content-Type`, a parse error, a
+  `subjectIdMatches` mismatch — and also when the breaker itself refuses the call: `requireClosedCircuit`
+  throws `HostUnavailableException`, the verifier's `catch (Exception)` calls `recordFailure` again, and
+  every failure pushes `windowEndsAt` another 10 s out. Five unsigned JWTs with
+  `sub=https://<this-keycloak>/realms/r/lws/cid/nope` take down verification of every hosted-WebID
+  credential for as long as any traffic arrives at least every 10 s; `iss=https://accounts.google.com/x`
+  does the same to a third-party OP. Without an attacker: all self-dereferences come from Keycloak's own
+  address, share one `cid-rate-limit` bucket, and the resulting `429`s count as failures. JWKS failures
+  are recorded against the discovery host, so a failing JWKS host never trips its own breaker.
+  **Do:** count only transport failures (connect error, timeout, 5xx); never count a refusal by the
+  breaker itself; don't extend the window while open (half-open after it lapses); key on
+  scheme+host+port; use a per-URL negative cache for 404s; record JWKS failures against the JWKS host.
+
+- [ ] **R-03 · Quadratic CPU in DID/CID key handling: one request can burn minutes.**
+  `High` · security/DoS · `M` · *demonstrated*
+  - `did/DidKey.java:343-362` — `base58Decode` is O(n²) `BigInteger` arithmetic with no length cap;
+    `decodeMultibase` (`:144`) is reached for any `publicKeyMultibase` and any `did:key`. A
+    250 000-character value took **18 s**, and fits under the 256 KiB response cap.
+  - `ssicid/verify/SelfSignedCidVerifier.java:644-705` — the SPARQL has four `OPTIONAL`s and returns the
+    cross product of multi-valued `publicKeyJwk`/`publicKeyMultibase`/`revoked`/`expiration`; `seen` is
+    updated only on success, so a failing method is re-decoded on every row. A **36 KiB** Turtle CID took
+    **271 s**; growth is quadratic, so 256 KiB means hours.
+  - Reference resolution re-walks the whole document per string reference (`findById`, `:822-841`):
+    a 163 KiB `did:web` document with 8 000 unresolvable references took 30 s.
+  **Do:** cap multibase length before decoding (a public key is ≈ 50–140 characters) and cap DID
+  length; mark a method `seen` whether accepted or rejected; select optional values per method and
+  refuse a method with more than one; resolve references through one id→node index; overall work budget
+  per verification.
+
+- [ ] **R-04 · The RDF parser accepts any syntax Jena knows, including binary RDF-Thrift: 8 bytes → 95 MB.**
+  `High` · security/DoS · `S` · *demonstrated*
+  `rdf/RdfParsing.java:76-84` and `:116-129` gate on `RDFLanguages.contentTypeToLang(ct) != null`, so a
+  `sub` served as `application/rdf+thrift` (also TriG, N3, RDF/JSON, TriX, RDF-Protobuf) is parsed. The
+  body `1C 18 E5 80 80 2D` — valid UTF-8, so it survives `asString()` — makes libthrift allocate ~94 MB
+  and return an empty model without error; 64 concurrent parses on a 1 GB heap produced 33
+  `OutOfMemoryError`s, which can land on any server thread.
+  **Do:** accept exactly the syntaxes the `Accept` header asks for (Turtle, N-Triples, RDF/XML, JSON-LD,
+  plus `application/json` and `application/cid` — R-19) and throw `UnsupportedSyntaxException` for
+  everything else; consider excluding the Thrift/Protobuf readers from the shaded JAR.
+
+- [ ] **R-05 · A realm access token verifies as an LWS ID Token credential (token substitution).**
+  `Medium` · security · `S` · *verified*
+  `jose/JwsChecks.java:133` accepts `typ: at+jwt` — the RFC 9068 marker that says "this is an access
+  token" — for both JWT suites, defeating the explicit typing RFC 8725 §3.11 exists for. And Keycloak
+  puts `typ: JWT` in the header of access **and** ID tokens alike; only the payload `typ` claim (`Bearer`
+  vs `ID`) tells them apart, and the verifier never reads it. `LWSSubMapper` writes the WebID into
+  access tokens by default (`openid/LWSSubMapper.java:75`, `:115`; `examples/lws-demo-realm.json:43`
+  sets `access.token.claim: true`), so a realm access token carries a WebID `sub`, `iss`, `azp`, `exp` —
+  everything `/lws/verify` checks. A resource server that received a user's access token can replay it
+  to an authorization server that verifies through this endpoint without `client_id`, and get
+  `valid: true`.
+  **Do:** remove `at+jwt` from the accepted types; in the OpenID verifier reject a payload `typ` that is
+  present and not `ID`; default the mapper's access-token inclusion to off and say why in its help text
+  and the demo realm. Add a negative test (`LwsAuthIT`: mint an access token, expect `typeIsJwt` or a
+  new `tokenIsIdToken` check to fail).
+
+- [ ] **R-06 · Revocation and expiry of a verification method fail open.**
+  `Medium` · security/spec-conformance · `S` · *verified*
+  CID 1.0 §2.2: a revoked method "MUST NOT be used". On the JSON path (every `did:web` document, and the
+  compact fallback) `firstText` (`SelfSignedCidVerifier.java:844-852`) returns `null` for any non-string
+  value, which then means "never revoked": a JSON-LD value object
+  `{"@value":"2000-01-01T00:00:00Z","@type":"xsd:dateTime"}`, an array or a number leaves the key usable
+  (`:584-585`). On the RDF path `lexical` (`:859-861`) ignores an IRI value, and with two
+  `sec:expiration` values (2000 and 2999) the first SPARQL row wins and the method stays active. This
+  contradicts the code's own rule at `:587`: "An unreadable revocation date is not evidence that the key
+  was never revoked."
+  **Do:** a present `revoked`/`expires` that is not exactly one parseable date-time string or literal
+  makes the method unusable, on both paths. Tests for each shape.
+
+- [ ] **R-07 · Plain `http` is accepted for every key-bearing fetch.**
+  `Medium` · security/spec-conformance · `S` · *verified*
+  `net/SsrfGuard.java:68` allows `http` and `https`; neither verifier checks the scheme of `sub`, `iss`,
+  the discovery URL or `jwks_uri`. OpenID Connect Core §2: `iss` "is a case-sensitive URL using the
+  https scheme"; Discovery 1.0 §3: `jwks_uri` "MUST use the https scheme"; the self-signed CID suite and
+  `COMPLIANCE.md` speak of "HTTPS URIs". Anyone on the network path between Keycloak and an `http`
+  subject, issuer or JWKS host can substitute keys and forge credentials for that identity. (`did:web`
+  already forces `https`.)
+  **Do:** require `https` for all four in both suites, and require `iss` to have no query or fragment;
+  allow `http` only for hosts in `allowed-internal-hosts` (the demos and `LwsAuthIT` need it) and say so
+  in `hardening.md`.
+
+- [ ] **R-08 · SSRF guard: special-purpose and address-embedding IPv6/IPv4 ranges pass.**
+  `Medium` · security · `S` · *demonstrated (classification)*
+  `net/SsrfGuard.java:133-158` relies on `InetAddress.is*` predicates plus a few ranges. Allowed today:
+  NAT64 `64:ff9b::/96` (e.g. `64:ff9b::a9fe:a9fe` → 169.254.169.254) and `64:ff9b:1::/48`;
+  IPv4-compatible `::127.0.0.1`; SIIT `::ffff:0:a.b.c.d`; 6to4 `2002::/16`; Teredo `2001::/32`;
+  `100::/64`; `192.0.0.0/24`; `198.18.0.0/15`; `240.0.0.0/4`; `255.255.255.255`; the documentation
+  ranges. NAT64 is real on IPv6-only cloud subnets with DNS64, where it reaches private IPv4 in the VPC.
+  `hardening.md` claims "reserved" addresses are blocked.
+  **Do:** unwrap the embedded IPv4 address of NAT64, compatible, SIIT, 6to4 and Teredo addresses and
+  re-check it; block the listed ranges — or better, allow only global unicast (IPv6 `2000::/3` minus the
+  IANA special-purpose registry). Extend `SsrfGuardTest` with each case.
+
+- [ ] **R-09 · `StackOverflowError` from attacker-controlled nesting escapes every handler.**
+  `Medium` · robustness/DoS · `S` · *demonstrated*
+  The verifiers catch `Exception`, not `Error`, so each of these returns a `500` with an ERROR stack
+  trace instead of `valid: false`, and skips the breaker bookkeeping:
+  - SAML: 50 000 nested elements inside a signed assertion's `<Advice>` (≈ 350 KB) overflow in Keycloak's
+    `XMLSignatureUtil` *before* signature validation on JDK 21, whose default `jdk.xml.maxElementDepth`
+    is 0 (the Dockerfile builds on Temurin 21). JDK 25's default of 100 blocks it.
+  - RDF: 12 000 levels of `[<p>` in Turtle (168 KB) or deeply nested JSON-LD under the size cap
+    (`RdfParsing.java:174-187` catches only `RuntimeException`).
+  - DIDs: the `(?:[…]|%XX)*` alternation in `did/Dids.java:65` recurses per character; a ~2 000-char DID
+    overflows.
+  **Do:** set `jdk.xml.maxElementDepth` (e.g. 64) on the SAML `DocumentBuilderFactory`; pre-scan RDF and
+  JSON for nesting depth; cap DID length and use possessive quantifiers or a hand scanner; cap the
+  `credential` form parameter's length; catch `StackOverflowError` around parsing as a last resort.
+
+- [ ] **R-10 · The rate-limit key is spoofable behind the documented reverse proxy.**
+  `Medium` · security/docs · `S` · *plausible (Quarkus forwarded-header parsing not run)*
+  `verify/VerifyAccess.java:246-254` keys buckets on `ClientConnection.getRemoteAddr()`. `INSTALL.md:564`
+  configures nginx with `$proxy_add_x_forwarded_for`, which *appends* to a client-supplied header; with
+  `proxy-headers=xforwarded` Keycloak takes the left-most entry, which the client controls, so a random
+  `X-Forwarded-For` per request is a fresh bucket each time. Without `proxy-headers`, every caller shares
+  the proxy's one bucket. IPv6 callers get a bucket per /128, so a /64 is unlimited. R-01 to R-04 make
+  this limit the main thing standing between a realm user and an outage.
+  **Do:** document `proxy_set_header X-Forwarded-For $remote_addr;` plus `proxy-trusted-addresses`;
+  bucket IPv6 by /64; add a per-*authenticated-principal* limit in `bearer` mode, which no header can spoof.
+
+- [ ] **R-11 · Default access mode admits every realm user, and the role check reads stale claims.**
+  `Medium` · security/decision · `S` · *verified*
+  `VerifyAccess.java:171-184`: `bearer` mode authenticates any access token issued by the realm, for any
+  client, with no audience check; `role` is unset by default, so any user — including a self-registered
+  one, or the demo `alice` (R-13) — can drive outbound fetches. The role is read from the token's
+  claims, so a revoked role keeps working until the token expires.
+  **Decide:** require `role` (refuse to start the verify endpoints in `bearer` mode without one, or deny
+  by default), and/or require tokens issued to a configured client. At minimum, `configuration.md` and
+  `hardening.md` must say that `role` is effectively mandatory on any realm with untrusted users.
+
+- [ ] **R-12 · Runtime options documented as `kc.sh build` flags are silently ignored by Keycloak.**
+  `Medium` · security/docs · `S` · *verified in the docs; Keycloak behaviour checked in its CLI bytecode*
+  `docs/configuration.md:41-43, 70-74` and `docs/INSTALL.md:317-320, 348-350` tell operators to pass
+  `--spi-realm-restapi-extension--lws--access=…` (and `allowed-internal-hosts`, `role`, `audience`, …) to
+  **`kc.sh build`**. Keycloak treats only SPI keys ending in `-provider`, `-enabled` or
+  `-provider-default` as build-time; for anything else it logs "run time options were found, but will
+  be ignored during build time" and does not persist it. An operator who sets `role` or `audience` that
+  way runs without that control, with no error.
+  **Do:** document these as `kc.sh start` options, `keycloak.conf` entries or `KC_SPI_…` environment
+  variables; add a line to the INSTALL checklist that verifies the effective value (the provider could
+  log its effective settings at `postInit`).
+
+- [ ] **R-13 · The production install's "fast path" leaves a known-password user and a wildcard-redirect client.**
+  `Medium` · security/docs · `S` · *verified*
+  `docs/INSTALL.md:605-617` runs `scripts/lws-demo.sh` against the production server without setting
+  `PASSWORD`, which creates realm `lws-demo`, user `alice`/`alice` and public client `lws-app` with
+  `redirectUris: ["*"]`, `webOrigins: ["*"]` and the password grant; the production checklist
+  (`:681-700`) never says to remove them. Anyone can mint alice's token — enough for the
+  bearer-protected `/verify` (R-11) — and the wildcard redirect is an authorization-code theft vector.
+  **Do:** require `PASSWORD` in the fast path; add "delete the `lws-demo` realm" to §14; label the demo
+  realm JSON as demo-only and give it brute-force protection.
+
+- [ ] **R-14 · Upgrade Keycloak: 26.7.4 is missing 14 security fixes.**
+  `Medium` · dependency · `S` · *verified*
+  Keycloak **26.7.5** (30 September 2026) fixes 14 security issues, including CVE-2026-18217 (SAML
+  Redirect Binding parameter pollution), CVE-2026-89298 and CVE-2026-88770; **26.8.0** followed on 1
+  October. `pom.xml:20`, `Dockerfile:13`, `LwsAuthIT.java:98` and nine docs pages pin 26.7.4, and
+  `INSTALL.md:52` says the server version "**Must match**" `keycloak.version`, which discourages operators
+  from taking patch releases.
+  **Do:** move to 26.7.5 now (re-run the POM's provided/relocated-library check, as S-17 did); evaluate
+  26.8.0 separately; reword to "same 26.x minor; apply patch releases"; put the version in one place
+  (it is hard-coded in 17 files).
+
+- [ ] **R-15 · The live deployment still runs pre-P0 code** (carried forward from **P0-10**).
+  `High` · operations · `M` · *not re-verified from here*
+  Unchanged from P0-10: `https://ebremer.com/auth` predates the P0–P3 work. The upgrade is breaking
+  (authenticated verify endpoints, `Authorization` meaning the caller, `azp`/`iat`/`kid` required) and
+  will be more so after this review's P1 items. **Do:** as P0-10 says — stage it with
+  `LWS_AUTHN_VERIFY_ACCESS=public`, confirm live traffic verifies, then tighten — but deploy a build that
+  already contains R-01 to R-05, R-11 and R-14, since the deployment is internet-facing.
+
+---
+
+## P1 — Specification conformance (MUST-level, as of 5 October 2026)
+
+- [ ] **R-16 · Self-signed CID: "The `aud` claim MUST include the target authorization server" is not enforced
+  by default** (challenges COMPLIANCE divergence 2). `Medium` · spec-conformance · `S` · *verified*
+  `SelfSignedCidVerifier.java:283-297`: with no `audience` form parameter and no configured `audience`,
+  only presence is checked — `aud: ["https://evil.example"]` returns `valid: true`, and so does `aud: [""]`;
+  the `checks` object simply has no `audienceMatched`. Divergence 2 argues from core's *RECOMMENDED*
+  audience, but in this suite it is a MUST, and a conforming credential always names its target, so
+  requiring a match can never reject one. A credential minted for authorization server A is therefore
+  accepted on behalf of B — exactly the replay the requirement exists to stop.
+  **Do:** for `lws-ssi-cid`, refuse a verification with no known target (`400`, or `valid: false` with
+  `audienceMatched: false` and a clear error), or at the very least never return `valid: true` without
+  `audienceMatched`; reject blank `aud` values. Rewrite divergence 2 per suite. Breaking — CHANGELOG.
+
+- [ ] **R-17 · OpenID: `aud` and `iat` are REQUIRED ID Token claims and are not enforced.**
+  `Medium` · spec-conformance · `S` · *verified*
+  `LWSCredentialVerifier.java:217-243` reads `aud` only when the caller passes `client_id` or `audience`,
+  and never reads `iat`; a token with neither validates. OpenID Connect Core §2 lists `aud` and `iat` as
+  REQUIRED and says `aud` "MUST contain the OAuth 2.0 client_id of the Relying Party"; §3.1.3.7 step 3,
+  incorporated by the suite ("MUST be validated as described by …"), is a MUST. The self-signed suite
+  already checks both (`audiencePresent`, `issuedAtPresent`). Divergence 2's reasoning covers *matching*
+  an audience, not its *presence*.
+  **Do:** always require a non-empty `aud` and an `iat`; reject `iat` beyond `now + skew` (R-28).
+  Consider `aud ∋ azp` by default with an opt-out (some providers issue cross-client tokens where they
+  differ). Fix the stale step numbering in the comment at `:217-220` (errata set 2 renumbered §3.1.3.7
+  and made `azp` handling SHOULD/MAY).
+
+- [ ] **R-18 · "a valid controlled identifier document with an `id` value equal to the subject identifier"
+  is only loosely checked, in both JWT suites.** `Medium` · spec-conformance · `S` · *demonstrated*
+  On the JSON-LD/RDF path the check is "some triple has `sub` as its subject"
+  (`LWSCredentialVerifier.java:293-303`): a document whose topmost `id` is `https://other.example/doc`,
+  nesting `{"id": sub, "service": …}` under `alsoKnownAs`, verifies; so does a bare `@graph`. In the
+  self-signed verifier `subjectIdMatches` is reported `true` unconditionally (`SelfSignedCidVerifier.java:352`),
+  and a mismatch caught by the compact fallback is reported as `subjectDereferenced: false` ("Failed to
+  dereference") and counted against the host's breaker (R-02). CID 1.0: "If `controllerDocument.id` does
+  not match the `controllerDocumentUrl`, an error MUST be raised." The comment at `:293-297` and
+  `COMPLIANCE.md` ("on *both* the RDF and the JSON-LD path") claim the stronger check.
+  **Do:** for JSON(-LD) bodies read the topmost `id`/`@id` from the raw JSON (resolved against the
+  document URL) and require it to equal `sub` before RDF processing; report `subjectIdMatches` from what
+  was actually compared; keep "fetch failed" and "wrong document" as distinct checks.
+
+- [ ] **R-19 · Valid CIDs with no `@context`, or served as `application/cid`, are refused.**
+  `Medium` · spec-conformance/interop · `S` · *demonstrated*
+  CID 1.0 §4.2.1: "Implementations that do not intend to use JSON-LD MAY choose to not include an
+  `@context`", and a consumer "MUST inject or append an `@context` property with a value of
+  `https://www.w3.org/ns/cid/v1`". JSON-LD processing of a context-less document (CID 1.0's own Example 22
+  shape) yields an empty — non-null — model, so the compact fallback never runs: the OpenID suite fails
+  `subjectIdMatches`, the self-signed suite `verificationMethodFound`. CID 1.0 Appendix A registers
+  `application/cid`, which `RdfParsing.requireSupported` (`:76-84`) refuses as "not an RDF syntax"; neither
+  verifier's `Accept` header names it. Also: the compact fallback (`LWSCredentialVerifier.java:348-395`)
+  turns a `type` array into `""` and reads only `serviceEndpoint[0]`, so adding one unbundled context to
+  an otherwise valid CID changes the verdict.
+  **Do:** inject the CID context when `@context` is absent; treat `application/cid` as JSON-LD and add it
+  (and `application/json`) to `Accept`; make the fallback handle `type`/`serviceEndpoint` arrays like the
+  processor path. Optionally offer `application/cid` from the CID endpoints.
+
+- [ ] **R-20 · SAML: subject and issuer are not validated as URIs.**
+  `Medium` · spec-conformance · `S` · *demonstrated*
+  LWS core §4.1: subject "MUST be a URI", issuer "MUST be a URI". `SamlCredentialVerifier.java:144-166`
+  accepts `NameID=alice` (the unit tests use exactly that), an email-format NameID, and `Issuer=idp`.
+  SAML Profiles §4.1.4.2: the Issuer's `Format` "MUST be omitted or have a value of
+  `urn:oasis:names:tc:SAML:2.0:nameid-format:entity`". `NameQualifier`/`SPNameQualifier` are dropped.
+  `COMPLIANCE.md`'s core table implies these are enforced.
+  **Do:** require an absolute URI for both (as `LWSSubMapper` already does for the WebID); reject an
+  Issuer `Format` other than absent or `entity`; report the NameID `Format`. Fix the tests' fixtures.
+
+- [ ] **R-21 · SAML `<Conditions>` processing fails open.**
+  `Medium` · spec-conformance/security · `S` · *demonstrated*
+  `SamlCredentialVerifier.java:394-402` flattens every `<Audience>` of every `<AudienceRestriction>`
+  into one list; `:213` evaluates only the first `<Conditions>`; other condition elements are ignored.
+  SAML Core §2.5.1.4: "multiple `<AudienceRestriction>` elements … each MUST be evaluated independently …
+  [they] form a conjunction". §2.5.1.1: a condition that is not understood makes the assertion
+  Indeterminate, and "An assertion that is determined to be Invalid or Indeterminate MUST be rejected".
+  Demonstrated `valid: true` for restrictions `[app]` AND `[https://only-this-one.example]` with
+  `audience=app`; for an `xsi:type` custom `<Condition>`; for two `<ProxyRestriction>`s (at most one is
+  allowed); and with a second, expired `<Conditions>`.
+  **Do:** every `AudienceRestriction` must contain the expected audience; reject unknown conditions,
+  duplicate `OneTimeUse`/`ProxyRestriction`, and more than one `<Conditions>`; report `OneTimeUse` (or
+  reject it unless replay protection is on — R-34).
+
+- [ ] **R-22 · SAML: SAML Core §5 signature processing is not enforced.**
+  `Medium` · security/spec-conformance · `M` · *demonstrated*
+  The suite: the signature "MUST be validated as described in SAML Core, section 5". `:120` delegates
+  to Keycloak's `AssertionUtil.isSignatureValid`, which does not apply §5's profile:
+  - §5.4.2 "Signatures MUST contain a single `<ds:Reference>`" — two References verify;
+  - §5.4.4: a verifier allowing other transforms "MUST ensure that no content of the SAML message is
+    excluded from the signature" — an assertion signed with an XPath filter
+    `not(ancestor-or-self::saml:Subject)`, whose NameID was then changed to a victim's, returned
+    `valid: true, subject=…/victim` under both the JDK and Santuario providers;
+  - algorithms and key sizes are whatever the XML-DSig provider and JVM policy allow — with Santuario
+    registered, `rsa-sha1` and a 512-bit RSA IdP key verify; the JDK policy accepts RSA-1024;
+  - SAML Core §4.1.2: a relying party "MUST NOT process any assertion with a major assertion version
+    number not supported" — `Version="3.0"` verifies; `IssueInstant` in 2099 verifies; a signed Response
+    whose `Issuer` differs from its assertion's verifies (Profiles §4.1.4.2 requires both to be the IdP);
+    an inner assertion signature by a *different* key is ignored (Profiles §4.1.4.3 "Verify any
+    signatures present").
+  **Do:** validate the direct-child `ds:Signature` with JSR-105 directly (`KeySelector.singletonKeySelector`
+  on the trusted key): exactly one Reference with `URI = "#" + ID`; transforms ⊆ {enveloped-signature,
+  exc-c14n}; allow-listed SignatureMethod (RSA-SHA256+, RSA-PSS, ECDSA-SHA256+) and DigestMethod (SHA-256+);
+  RSA ≥ 2048, EC ≥ P-256; validate every signature present; require `Version="2.0"`,
+  `IssueInstant ≤ now + skew`, equal Issuers. Moving this into the provider also removes the dependency on
+  Keycloak internals for the XSW defence (today the real protection is `SAML2Signature.configureIdAttribute`).
+
+- [ ] **R-23 · Self-signed CID: CID 1.0 verification-method rules are only partly applied.**
+  `Low` · spec-conformance · `S` · *demonstrated*
+  CID 1.0 §2.2: a verification method "MUST include `id`, `type`, `controller`" and "MUST NOT contain
+  multiple verification material properties". Accepted today: a method with no `id`, selectable by its
+  JWK `kid` (§3.3 retrieves by `verificationMethod.id`); a method with both `publicKeyJwk` and
+  `publicKeyMultibase`; several `type` or `controller` values (`SelfSignedCidVerifier.java:565, 578,
+  674, 811-813`). `selectByKid` (`:730-757`) prefers the JWK `kid` over the method-id fragment, which
+  differs from §3.4 fragment resolution when one method's JWK `kid` equals another's fragment (a false
+  negative only); the comment at `SelfSignedControlledIdentifierDocument.java:182` says the opposite
+  order.
+  **Do:** refuse id-less methods and methods with more than one key-material property or `type`/
+  `controller` value; match the method id (absolute, then fragment) before the JWK `kid`; fix the comment.
+
+- [ ] **R-24 · JWS validation per RFC 7515 §5.2 / RFC 7518 §3.4: two strictness gaps.**
+  `Low` · spec-conformance · `S` · *demonstrated*
+  - `JwsChecks.criticalHeaders` (`:47-76`) decodes the header with the strict JDK decoder and reports
+    "no `crit`" when that fails, while Keycloak's `Base64Url.decode` truncates at `=` and maps `+`/`/`. A
+    signed header carrying `crit: ["urn:x"]` encoded with a trailing `=junk` returned `valid: true` with
+    `noUnsupportedCriticalHeaders: true`. §5.2 step 2: decode "following the restriction that no line
+    breaks, whitespace, or other additional characters have been used"; on failure the JWS "MUST be
+    rejected". (Only the signer can produce this, so it is a conformance gap, not an exploit.)
+  - Keycloak's ECDSA verifier converts R‖S to DER by copying the first `len` bytes and ignoring the rest,
+    so an 80-byte ES256 signature verifies in production while the unit-test path rejects it. RFC 7518
+    §3.4: "The JWS Signature value MUST be a 64-octet sequence. If it is not … the validation has failed."
+  - RFC 7519 NumericDate must be a JSON number; `exp` as a string or float is accepted.
+  **Do:** require all three segments to match `[A-Za-z0-9_-]*` and fail on an undecodable header; check
+  the ES\* signature length before calling the provider (both JWT suites); reject non-integer dates.
+
+- [ ] **R-25 · SAML trust is "out of band" in the suite but supplied per request here**
+  (challenges COMPLIANCE divergence 5). `Medium` · security/design · `M` · *verified*
+  The suite: "there must be a trust relationship with the issuing identity provider … established
+  out-of-band". `SamlResourceProvider.java:105-114` takes the certificate from the request, nothing binds
+  it to the reported `<Issuer>`, and the result does not say which certificate was used. A relying party
+  that tries each trusted IdP certificate in turn accepts IdP-A signing `Issuer=https://idp-b.example`
+  with a B user's NameID. `valid: true` therefore means "a trust decision was made" for the OpenID and
+  CID suites but "this certificate signed it" for SAML. The Recipient also cannot be bound to an expected
+  value — the half of **P1-M2** that was checked off while still outstanding.
+  **Do:** when no `certificate` is passed, resolve trust from the realm's SAML identity providers
+  (`SAMLIdentityProviderConfig.getIdpEntityId()` matched to `<Issuer>`, then `getSigningCertificates()`,
+  which also handles rotation); a setting that disables caller-supplied certificates; always report the
+  certificate's SHA-256 thumbprint and the trust source; optional `expected_issuer` and
+  `expected_recipient` parameters. Rewrite divergence 5 accordingly.
+
+---
+
+## P2 — Hardening, interoperability and SHOULD-level
+
+- [ ] **R-26 · Cache discovery, JWKS and CID documents; stop calling ourselves over HTTP.**
+  `Medium` · performance/privacy · `M` · *verified*
+  Every OpenID verification makes three fetches and every HTTPS self-signed one makes one, with no cache
+  (`LWSCredentialVerifier.java:262-324, 425-485`). Both suites' privacy sections: "Verifiers are
+  encouraged to cache controlled identifier documents to reduce unnecessary network requests and the
+  associated metadata leakage." For this realm's own tokens Keycloak makes three loopback HTTP calls while
+  holding a worker thread, which also feeds R-02's shared bucket.
+  **Do:** bounded, TTL-limited caches for discovery and JWKS (refresh on an unknown `kid`, rate-limited)
+  and for CIDs (honour `Cache-Control`); short-circuit `iss` equal to this realm's issuer to the local key
+  store and user lookup.
+
+- [ ] **R-27 · Key selection and key strength.** `Low` · security-hardening · `S` · *verified*
+  - OpenID JWKS selection (`LWSCredentialVerifier.java:456-475`) ignores `use`/`key_ops` (verifies with a
+    `use: enc` key) and the JWK's `alg`; with no `kid` it tries only the first type-compatible key (breaks
+    during rotation; OIDC Core §10.1 requires `kid` when the set has several keys); one unparseable key
+    (`oct`, an unsupported curve) throws and aborts the whole loop; `id_token_signing_alg_values_supported`
+    is not consulted (§3.1.3.7 step 7, SHOULD).
+  - No RSA minimum size in either JWT suite. RFC 7518 §3.3: "A key of size 2048 bits or larger MUST be
+    used with these algorithms."
+  - Ed25519 (`did/DidKey.java:284-296`): the small-order identity point is accepted — with it,
+    `(R = identity, S = 0)` verifies **any** message, so that `did:key` is forgeable by anyone — and a
+    non-canonical `y ≥ p` encoding passes the canonical re-encode check, giving one point two `did:key`
+    identifiers (RFC 8032 §5.1.3: decoding fails for `y ≥ p`). *Demonstrated against the JDK verifier.*
+  **Do:** filter on `use`/`key_ops`/`alg`; try/continue per key; try all candidates when `kid` is absent;
+  enforce RSA ≥ 2048; reject small-order and non-canonical Ed25519 points.
+
+- [ ] **R-28 · Time-claim hardening.** `Low` · security-hardening · `S` · *demonstrated*
+  Accepted today in both JWT suites: `iat` ten years in the future, `iat > exp`, and `exp` in 9999 (no
+  lifetime bound). **P1-C1** proposed rejecting a future `iat` and a configurable maximum credential age;
+  only `iat` presence was implemented. **Do:** reject `iat > now + skew` and `iat > exp`; optional
+  `max-credential-lifetime-seconds` on `exp − iat`.
+
+- [ ] **R-29 · Follow (or explicitly refuse) redirects when dereferencing a subject.**
+  `Low` · interop/docs · `S` · *verified*
+  Redirects are disabled outright (`OutboundHttp.java:137`, P0-6), so a WebID that answers `303 See Other`
+  (the httpRange-14 pattern) or redirects http→https fails as "did not return a controlled identifier
+  document". Since `GuardedDnsResolver` vets every connection, following up to three redirects with
+  `SsrfGuard` re-checked per hop — keeping the original `sub` as the required `id` — is safe. **Do:**
+  implement that, or list "redirects are not followed" as a divergence in `COMPLIANCE.md`.
+
+- [ ] **R-30 · `LWSSubMapper` trusts the WebID attribute too far.** `Low` · security · `S` · *verified (first point)*
+  `openid/LWSSubMapper.java:144-199`. A value pointing into this realm's own hosted namespace for a
+  *different* user (`{issuer}/lws/cid/<victim-id>`) passes `isDereferenceableUrl`, and the victim's hosted
+  CID then vouches for this issuer — full impersonation, prevented today only by the `ADMIN_EDIT`
+  deployment policy. Also: no uniqueness check (OIDC Core §2: `sub` is "never reassigned"); no 255-ASCII
+  limit; `user.getId()` concatenated without percent-encoding (custom user storage ids); separate include
+  flags can make the ID Token's and userinfo's `sub` differ (OIDC Core §5.3.2 "MUST exactly match").
+  **Do:** refuse values under `{issuer}/lws/cid/` other than the user's own; warn at runtime if the
+  attribute is user-editable (UserProfileProvider); encode the id; enforce the limit; tie userinfo to the
+  ID Token flag.
+
+- [ ] **R-31 · SAML: a wrapped document is certified.** `Low` · security (defence in depth) · `S` · *demonstrated*
+  `findSignedElement` (`SamlCredentialVerifier.java:322-335`) searches the whole document for a signed
+  assertion. An unsigned Response whose direct-child Assertion is forged, with the genuine signed
+  assertion moved into `<samlp:Extensions>`, returns `valid: true, subject=<genuine>`. The verifier's own
+  output is right, but it vouches for a credential that a consumer re-parsing it (e.g. `lws-server`
+  during an RFC 8693 exchange) would read as the forged subject. `SamlVerifierTest.signatureWrappingDefeated`
+  (`:99-109`) asserts `valid: true` for a document carrying a forged sibling assertion. `verifiedAssertion` (`:289`) matches `Response` by local name only.
+  **Do:** the signed assertion must be the root or a direct child of a root `samlp:Response`; reject any
+  other `Assertion`/`EncryptedAssertion` anywhere; check the namespace; flip the test.
+
+- [ ] **R-32 · SAML behaviours that are stricter than the profile, or undocumented.** `Info` · docs · `S`
+  Exactly one `<SubjectConfirmation>` is required (Profiles allows several, "at least one bearer");
+  `NotBefore` on `<SubjectConfirmationData>` is accepted though Profiles says it "MUST NOT" be present;
+  `InResponseTo`/`Address` are ignored; `EncryptedAssertion`/`EncryptedID` and DEFLATE input are
+  unsupported (fails closed, not in COMPLIANCE); `Base64.getMimeDecoder` (`:356`) silently skips
+  characters outside the alphabet. **Do:** document each in COMPLIANCE, or align with the profile.
+
+- [ ] **R-33 · The served self-signed CID can publish duplicate method ids.** `Low` · correctness · `S` · *demonstrated*
+  `ssicid/cid/SelfSignedControlledIdentifierDocument.java:184-187`: the positional `#key-<n>` fallback can
+  collide with a real `kid` (a JWK with `kid: "key-2"` followed by one without a `kid`), and two JWKs
+  with the same `kid` collide outright; in RDF the two methods merge into one node with two
+  `publicKeyJwk`, and after a Turtle round trip only one key is collected, so tokens signed with the
+  other fail. **Do:** de-duplicate ids; refuse or log duplicate `kid`s.
+
+- [ ] **R-34 · Replay protection cannot be turned on, though COMPLIANCE says it can.**
+  `Low` · docs/maintainability · `S` · *verified*
+  `ReplayCache` is never instantiated in `src/main`; `SsiCidResourceProvider.java:164` always uses the
+  null-cache constructor; no setting enables it. `COMPLIANCE.md` lists `notReplayed` as optional and
+  divergence 3 says "Opt in per caller (P2-8)". Its TTL also ignores the token's `exp`, so with a short
+  window a token is replayable once the window passes. `ReplayCache.java:70` contains a raw NUL byte, so
+  git treats the file as binary (`-text`), `grep` skips it and `text=auto` does not apply.
+  **Do:** wire a factory-level cache to a documented setting with TTL = max(window, `exp` − now + skew),
+  or delete the class and the claims; write `'\0'` as an escape either way.
+
+- [ ] **R-35 · Configuration precedence and validation.** `Low` · correctness/config · `S` · *demonstrated*
+  - A scope value is overwritten by another provider's system-property/environment fallback
+    (`config/ServerSettings.java:185-217`): `lws` scope `http-timeout-millis=1000` plus
+    `-Dlws.authn.http.timeoutMillis=60000` yields 60 000, contradicting "scope first"; the result depends
+    on factory init order. **Do:** apply every provider's scope values first, then fall back once.
+  - Bad values silently become defaults: `enabled=flase` → `true`; `rate-limit=-1` → limiting **off**;
+    `http-timeout-millis=99999999999` → 5 000 rather than the clamp. **Do:** warn on every fallback, and
+    treat a negative rate limit as invalid, not "off".
+  - The scope key `enabled` is also Keycloak's own provider switch: with `…--lws-saml--enabled=false`
+    Keycloak never loads the factory, so a realm attribute cannot re-enable it (contrary to
+    `configuration.md` and `SettingsTest.aRealmAttributeOverridesTheProviderWideFlagInBothDirections`),
+    the 404 is Keycloak's rather than the documented JSON shape, and server-wide settings given only to
+    that provider are lost. **Do:** rename the key (e.g. `serve`) or document the interaction.
+  - IPv6 allow-list entries written `[::1]`, or hosts with a trailing dot, never match (fails closed).
+  - `lws.authn.http.mode` / `LWS_AUTHN_HTTP_MODE` is read outside `Settings` and is undocumented; the
+    guarded client ignores JVM proxy settings, so a deployment that needs an egress proxy must fall back
+    to the unguarded session client. **Do:** document it; consider explicit proxy support that keeps the
+    guard.
+
+- [ ] **R-36 · HTTP details.** `Low` · spec-conformance · `S` · *verified*
+  `VerifyAccess.java:216-219` always sends `error="invalid_token"`, even when no `Authorization` header
+  was sent (RFC 6750 §3.1: SHOULD NOT include an error code then), and RFC 6750 §3 forbids `"` and `\` in
+  `error_description`, so a configured role name could make the header non-compliant. `429`s carry no
+  `Retry-After` (`VerifyAccess.java:155-158`, `CidEndpoint.java:92-95`). The public CID `GET` has no CORS
+  headers, so browser-based verifiers cannot read it — `Access-Control-Allow-Origin: *` plus
+  `Access-Control-Expose-Headers: ETag` is safe for a credential-free document (leave the verify
+  endpoints without CORS). `RateLimiter` uses the wall clock (`:57, 69-73`): a backwards clock step keeps
+  an empty bucket empty until the clock catches up — use `System.nanoTime()`.
+
+- [ ] **R-37 · `did:web` edge cases.** `Info` · robustness · `S` · *verified*
+  `Dids.java:213-218` accepts `.`, `..` and `%2F` path segments
+  (`did:web:example.com:..:..:etc` → `https://example.com/../../etc/did.json`; the `id` check prevents
+  impersonation, but these should be refused), and single-label hosts such as `localhost` pass
+  `isDomainName` although the method requires a fully qualified domain name.
+
+- [ ] **R-38 · `PublicJwk` does not know AKP's private member.** `Info` · security · `S`
+  `PublicJwk.PRIVATE_MEMBERS` lacks `priv` (the `AKP` key type, which Keycloak 26.7.4's `JWKParser` now
+  parses), so such a key would be trimmed rather than refused, and its `pub` dropped. Add `priv`, and
+  refuse unknown key types explicitly. (Also: `JwsSignatures`, used outside Keycloak, treats EdDSA as
+  Ed25519 only while Keycloak also verifies Ed448; a `did:key` is decoded twice per verification.)
+
+- [ ] **R-39 · SAML always requires an `<AudienceRestriction>`** (challenges divergence 2 from the other
+  side). `Info` · docs · `S`
+  With no `audience` requested, `SamlCredentialVerifier.java:243-249` still rejects an assertion with no
+  restriction, although core makes audience RECOMMENDED and the SAML suite explicitly contemplates "an
+  authentication credential with no audience restrictions". Defensible (Profiles §4.1.4.2 requires one
+  for Web SSO), but it should be stated as a SAML-specific choice in COMPLIANCE, not covered by
+  divergence 2's "optional per request".
+
+---
+
+## P3 — Tests, build, CI, packaging and documentation
+
+- [ ] **R-40 · CI: the dependency-review job fails every pull request; updates are stuck.**
+  `Medium` · ci · `S` · *verified (Actions API)*
+  `.github/workflows/ci.yml:126-136` fails with "Dependency review is not supported on this repository.
+  Please ensure that Dependency graph is enabled" on every `pull_request` run (e.g. 36915126459,
+  36914930512). Dependabot PRs #3, #4, #5 and #8 sit open and red, so the SHA-pinned actions are two to
+  three majors behind and runs already warn that Node.js 20 is deprecated. `ubuntu-latest` moves to
+  Ubuntu 26 from 19 October 2026.
+  **Do:** enable the dependency graph (and submit the resolved Maven graph with
+  `maven-dependency-submission-action` — static POM parsing does not see Jena's transitive libraries) or
+  make the job non-blocking until it is; merge the action updates; pin `ubuntu-24.04`; add `concurrency`
+  and `timeout-minutes`; don't run both `push` and `pull_request` for the same branch.
+
+- [ ] **R-41 · Dependabot proposes bumps that break deliberate pins.** `Low` · dependency · `S` · *verified*
+  PR #3 moves `jakarta.ws.rs-api` 3.1.0 → 4.0.0 (an API Keycloak 26 does not provide); PR #4 moves JUnit to
+  6.x (a separate migration, per P4-4); PR #8 moves caffeine to 3.3.0 and jspecify to 1.0.1, breaking the
+  POM's "Jena's version" / "Keycloak's version" rules. **Do:** `ignore` rules for provided APIs and
+  Jena-pinned versions; close #3 and #4 or schedule them deliberately.
+
+- [ ] **R-42 · The shaded JAR bundles four libraries Keycloak also ships, unrelocated.**
+  `Medium` · packaging · `S` · *verified (JAR contents)*
+  | Package | In the JAR | Keycloak 26.7.4 ships |
+  |---|---|---|
+  | `com/google/gson` | 2.14.0 | 2.13.2 |
+  | `org/apache/commons/io` | **2.20.0** — older than Jena's declared 2.22.0 *and* the server's | 2.21.0 |
+  | `org/apache/commons/lang3` | 3.20.0 | 3.20.0 |
+  | `com/google/errorprone` | 2.48.0 | 2.47.0 |
+  The commons-io downgrade is the same nearest-wins mediation problem the POM already pins away for
+  Titanium and Caffeine; it contradicts `docs/build.md`'s two-strategy table, and `banDuplicateClasses`
+  cannot see it because it ignores `provided`.
+  **Do:** pin and relocate (or make `provided` where the server's copy satisfies Jena); add
+  `requireUpperBoundDeps`; add a CI step that fails on unrelocated `com/google/gson` or
+  `org/apache/commons/{io,lang3}` entries in the JAR.
+
+- [ ] **R-43 · The integration test skips silently without Docker; nothing proves it ran**
+  (absorbs **S-15**). `Low` · ci/test · `S` · *verified*
+  `LwsAuthIT.java:151-152` uses `assumeTrue(isDockerAvailable)`, so a broken Docker is 24 skipped tests
+  and a green build, and failsafe reports are not uploaded — so S-15 ("run the two new tests in CI") still
+  cannot be confirmed from outside, although `master` CI is green at `edda85b`. **Do:** a
+  `-Dlws.authn.requireDocker` (set in CI) that fails instead of skipping, or assert `skipped=0` in
+  `target/failsafe-reports`; upload the reports.
+
+- [ ] **R-44 · Test gaps: rules with no negative test.** `Medium` · test-gap · `M` · *verified (grep)*
+  A verifier that wrongly *accepts* is the silent failure mode; each rule below can be deleted today
+  without a test failing.
+  - **OpenID:** tampered signature (`signatureValid`); expired or missing `exp` (`notExpired`); wrong
+    `typ`; CID `id` ≠ `sub`; dereference returning non-200 or an unsupported `Content-Type`;
+    `serviceEndpoint` ≠ `iss` (the existing fixture only changes `type`); `azp` ≠ `client_id` with a
+    correct `aud` (`authorizedPartyMatchesClient`); discovery non-200. The JSON-LD path and the compact
+    fallback are never exercised for OpenID (every OpenID test serves Turtle). `LWSSubMapper` and
+    `ControlledIdentifierDocument` have no unit tests.
+  - **Self-signed CID (`verify()` level):** `alg: none`, `crit`, wrong `typ`; missing `exp`/`iat`/`aud`;
+    future `nbf`; `verificationMethodActive: false` (only tested in the collectors); `subjectIdMatches:
+    false`; `notReplayed`. `did:web` resolution has **no test at all** (non-200, wrong media type,
+    non-object body, `id` mismatch); HTTPS dereference failures; ES384/ES512/RS\*/PS\* through Keycloak's
+    providers in `LwsAuthIT`.
+  - **SAML:** unsigned credential (`signaturePresent`); expired `NotOnOrAfter` and future `NotBefore`;
+    `audienceMatched`/`audiencePresent` (every test passes the matching audience); `singleAssertion`,
+    `signatureCoversSignedElement` by name; empty NameID; SubjectConfirmation count ≠ 1; missing
+    `SubjectConfirmationData`; unparseable timestamps; a not-yet-valid certificate; base64 input. The
+    **signed-Response branch has no test at all**, and `LwsAuthIT` sends only `<samlp:Response/>`, so no
+    real signed Response ever runs through Keycloak's XML-DSig provider and JVM policy (R-22, R-09).
+  - **Access control:** `VerifyAccessTest` covers only parsing; untested are secret-mode match/mismatch,
+    `role` → `403 insufficient_scope`, and rate limit → `429 slow_down` without a challenge.
+  - **Shared:** `JwsChecks.withinValidityWindow` and `typeIsJwtOrAbsent` have no direct tests (skew
+    boundary, `nbf`, zero `exp`); no tests for slow/endless bodies, pool exhaustion, NAT64/6to4/compatible
+    addresses, unrequested RDF syntaxes or nesting depth.
+  - Plus a regression test for each P0/P1 item as it is fixed. `LwsAuthIT` re-implements JWT minting at
+    18 sites instead of using `testsupport/SelfIssuedJwts`.
+
+- [ ] **R-45 · The SBOM does not describe the JAR.** `Medium` · build · `S` · *verified*
+  `target/bom.json` lists 208 components, all `required`; about 180 are Keycloak's `provided` tree
+  (Quarkus, netty, grpc, guava, xmlsec …) plus protobuf-java, which the shade plugin excludes, and none of
+  the relocations are reflected. CI archives it "so what actually shipped can be matched against an
+  advisory", but scanners will attribute Keycloak's CVEs to `lws-authn`. **Do:**
+  `<includeProvidedScope>false</includeProvidedScope>`, account for the shade excludes, `makeBom`.
+
+- [ ] **R-46 · Licence files in the JAR.** `Low` · packaging · `S` · *verified*
+  The Docker-built JAR carries **no licence**: `LICENSE` is outside the build context (`.dockerignore`),
+  `IncludeResourceTransformer` skips a missing file silently, and the Apache transformer drops every other
+  `LICENSE`. The merged `META-INF/NOTICE` reads "Copyright 2006-2026 The Apache Software Foundation" — the
+  transformer's defaults, because only `projectName` is set (`pom.xml:463-465`). Dexx collections
+  (MIT) ships no licence text. **Do:** `!LICENSE` in `.dockerignore` and `COPY LICENSE`; set
+  `organizationName`/`inceptionYear` (or `addHeader=false`); include third-party licence texts.
+
+- [ ] **R-47 · Docker quickstart.** `Low` · security/maintainability · `S` · *verified*
+  `compose.yaml` publishes the port on all interfaces with `admin`/`admin` and a loopback SSRF allow-list
+  — bind `127.0.0.1:8080:8080`. Base images are tag-only (no digest) and Dependabot has no `docker`
+  ecosystem entry.
+
+- [ ] **R-48 · Demo scripts.** `Low` · maintainability · `S` · *verified*
+  Admin API calls use `curl -sS` without `--fail`, so a failed realm/client/user creation still prints
+  "created…"; admin passwords and tokens appear in `curl` argv (visible to `ps`); JSON bodies are built by
+  string interpolation (use `jq -n --arg`); `USERNAME` is the login name under Git Bash, so the scripts
+  create that user instead of `alice`; `ssi-cid-demo.sh:120` exits in `jq` before its friendly `die`.
+
+- [ ] **R-49 · Build hygiene.** `Low` · build · `S`
+  No `project.build.outputTimestamp` (not reproducible); surefire unpinned while failsafe is 3.5.2; no
+  Maven wrapper; no `dependency:analyze`; tests print a JUL "LogManager accessed before…" ERROR (set
+  `java.util.logging.manager` in surefire); the manifest drops `Multi-Release: true`, so RoaringBitmap's
+  `META-INF/versions/11` class is dead weight. Plugin updates: compiler 3.13.0 → 3.16.0, jar 3.4.2 →
+  3.5.1, shade 3.6.0 → 3.6.2, failsafe 3.5.2 → 3.6.0, extra-enforcer-rules 1.12.0 → 1.12.1; libraries:
+  testcontainers-keycloak 4.3.1 → 4.4.0, bcpkix 1.85 → 1.86 (test), commons-codec 1.22.0 → 1.22.1.
+
+- [ ] **R-50 · Tag the 0.2.0 release** (carried forward from **S-13**). `Low` · release · `S`
+  Still only `lws-authn-0.1.0` exists, locally and on `origin`; `e539362` (the 0.2.0 bump, the build
+  deployed to both hellion servers) is untagged. Left for the maintainer.
+
+- [ ] **R-51 · Documentation corrections.** `Low` · docs · `S`
+  - `COMPLIANCE.md`: re-date the review to the 5 October baseline; remove or qualify the claims this
+    review found overstated — `subjectIdMatches` "on *both* the RDF and the JSON-LD path" (R-18), SAML
+    `NameID`/`Issuer` as core subject/issuer URIs (R-20), `notReplayed` "optional" and divergence 3's
+    "opt in per caller" (R-34), divergence 2's reasoning for the self-signed suite (R-16) and for SAML
+    (R-39), divergence 5 (R-25); add "redirects are not followed" (R-29) and the SAML limits (R-32).
+  - Stale comments: `LWSCredentialVerifier.java:256-261` still says JSON-LD "is interpreted directly (see
+    modelFromCompactJsonLd)"; `:217-220` cites pre-errata §3.1.3.7 step numbers (R-17);
+    `SelfSignedControlledIdentifierDocument.java:182` (R-23); `pom.xml:382` says "bundled 1.20" (it is
+    1.22.0).
+  - `CHANGELOG.md` *Versioning* still says "The build now produces `lws-authn-0.2.0.jar`"; no
+    Keep-a-Changelog link references.
+  - `README.md` says every source file carries SPDX; `scripts/*.sh` and the workflows do not.
+  - Document `LWS_AUTHN_HTTP_MODE` (R-35).
+
+---
+
+## Watch — upstream and blocked
+
+- [ ] **W-1 · Bundle the DID 1.1 context** (carried forward from **S-14**). DID 1.1 is still a Candidate
+  Recommendation Snapshot (5 March 2026) and `https://www.w3.org/ns/did/v1.1` still answers `300`.
+  Revisit when it reaches PR/Rec; then consider reading DID documents through the JSON-LD processor
+  (divergence 8).
+- [ ] **W-2 · `w3c/lws-protocol#96` — Web-CID profile for agent identification** (open since March,
+  updated 1 October). If merged it would define how an agent's CID is dereferenced over HTTP — media
+  types, redirects, status codes — which bears directly on R-18, R-19 and R-29.
+- [ ] **W-3 · `w3c/lws-protocol#152`** (an alternative claim for the LWS subject in the OIDC suite) and
+  **#200** (FedCM in the OIDC suite) — either would change the OpenID verifier.
+- [ ] **W-4 · `w3c/lws-protocol#256` — RFC 9728 protected-resource metadata for authorization-server
+  discovery.** Storage/AS side; no change here, but `lws-server` and the walkthroughs would follow it.
+- [ ] **W-5 · Keycloak 26.8.0** (1 October 2026; adds OID4VCI/OID4VP). Separate from R-14's patch
+  upgrade: check the provided/relocated libraries again, as S-17 did.
+- [ ] **W-6 · Re-review cadence.** The authentication suites have been stable since 21 September; the
+  next likely trigger is a new Working Draft of the OpenID or SAML suites (both still at 3 August).
+- [ ] **W-7 · Report an upstream inconsistency.**
+  Core's authorization-server metadata example lists `urn:ietf:params:oauth:token-type:id-token`
+  (hyphen); the OpenID suite, core's own token-request example and RFC 8693 use `…:id_token`. The code
+  uses `id_token`, correctly. File an issue on `w3c/lws-protocol` so `lws-server` does not copy the typo.
+
+---
+
+## Archive — reviews of 2 to 30 September 2026
+
+The backlog below is the previous version of this file, unchanged except that its headings are one
+level deeper and its four open items point to where they are carried forward. It is kept because code
+comments, tests, `CHANGELOG.md` and `COMPLIANCE.md` cite its ids (`P0-3`, `S-2`, …) for the reasoning
+behind decisions. Two of its closed items are reopened in part by this review: **P1-M2**'s
+`expectedRecipient` half was never done (R-25), and **P1-C1**'s future-`iat` and maximum-age
+suggestions were not implemented (R-28).
+
+### Introduction to the previous backlog (2 September 2026)
+
 Prioritized backlog from a full code review of this repository against the **current W3C Linked Web
 Storage drafts** (checked 2 September 2026) and against the normative specifications those drafts
 incorporate by reference (CID 1.0, OpenID Connect Core 1.0, RFC 7515, SAML 2.0 Core, RFC 9110).
@@ -12,7 +813,7 @@ order is roughly "cheapest first".
 failures). Nothing below is a build breakage — these are security, conformance, robustness and
 hygiene gaps.
 
-> ### P0, P1, P2, P3, P4, P5 and P6 are done
+> #### P0, P1, P2, P3, P4, P5 and P6 are done
 >
 > More precisely: every item those bands contained **at review time**, plus **P4-7** and **P6-8**,
 > added afterwards. **One item is open: P0-10** — the live deployment still runs pre-P0 code. It is the
@@ -44,7 +845,7 @@ hygiene gaps.
 > could be verified in any suite. Neither was visible to a unit test — the first needs the real
 > classpath, the second needs Keycloak's crypto providers.
 >
-> ### P3 (all seven items)
+> #### P3 (all seven items)
 >
 > - **A rejected credential is now a `200` with `"valid": false`** on all four suites, not a bare
 >   `401`. A `401` means *the caller* was refused and always carries a challenge. **This is a
@@ -65,7 +866,7 @@ hygiene gaps.
 > - An unrecognised `Content-Type` on a dereferenced document is refused by name instead of being fed
 >   to the Turtle parser.
 >
-> ### P5 (all five items)
+> #### P5 (all five items)
 >
 > - **`LwsAuthIT` went from 10 tests to 23**, and roughly half of the new ones assert a *rejection*.
 >   The host-side server is now a general fixture server, and an `OpenIdFixture` stands up a complete
@@ -80,7 +881,7 @@ hygiene gaps.
 >   CodeQL, `dependency-review-action` on pull requests, Dependabot for the bumps that SHA pinning
 >   would otherwise freeze, SBOM upload, and a JDK 25 job that asserts the class files are still Java 21.
 >
-> ### P6 (all eight items)
+> #### P6 (all eight items)
 >
 > - **`COMPLIANCE.md` is rewritten**, and is now the conformance statement P6-5 asked for rather than
 >   a second overlapping document: per suite, every requirement enforced — naming the field that
@@ -94,7 +895,7 @@ hygiene gaps.
 >   previously only a line in the closing checklist, met after the realm was already configured.
 > - **All 63 source files now carry `SPDX-License-Identifier: Apache-2.0`** (19 did).
 >
-> ### P1 (all 19 items)
+> #### P1 (all 19 items)
 >
 > - **Every verify result now names the LWS `client` and the suite's `tokenType`** (core §4.1, §4.3),
 >   and fails closed when the client identifier is absent. That retired four dead constants.
@@ -112,7 +913,7 @@ hygiene gaps.
 >   parameters now come from the JDK instead of hand-transcribed constants.
 > - **SAML:** `<Issuer>` is required rather than merely recorded.
 >
-> ### P4 (all six items)
+> #### P4 (all six items)
 >
 > - **Libraries Keycloak already ships were bundled unrelocated** — including
 >   `org.glassfish:jakarta.json` 2.0.1, an *older* copy of the same `jakarta.json.*` packages the server
@@ -142,7 +943,7 @@ hygiene gaps.
 >   line; JUnit 6 is a separate migration), testcontainers-keycloak → **4.3.1**, bcpkix → **1.85**.
 >   Version references in the docs, scripts and the IT container image were updated to match.
 >
-> ### P2 (all nine items)
+> #### P2 (all nine items)
 >
 > - **JSON-LD is now processed, not pattern-matched.** The verifiers walked the exact key names this
 >   project emits, so a conforming document from any other implementation — aliased terms, an
@@ -183,7 +984,7 @@ hygiene gaps.
 
 ---
 
-## S — Specification update: the editor's drafts of 21 September 2026
+### S — Specification update: the editor's drafts of 21 September 2026
 
 Reviewed 22 September 2026 against `w3c/lws-protocol` at `3ddc642`. Seven commits have touched the
 drafts since the 0.2.0 baseline (`602ca19`, 21 August 2026); three bear on this provider, and the rest
@@ -293,20 +1094,20 @@ and the deprecation headers
   *Removed* entry and upgrade note say so. `LwsAuthIT.theDiscontinuedDidKeyEndpointIsGone` checks the
   `404`; like S-15's tests, it was written where there is no Docker.
 
-- [ ] **S-13 · Tag the 0.2.0 release.** *Versioning* in `CHANGELOG.md` says to tag each release commit
+- [ ] **S-13 · *(Carried forward as **R-50**.)* Tag the 0.2.0 release.** *Versioning* in `CHANGELOG.md` says to tag each release commit
   `lws-authn-<version>`; `e539362` (the 0.2.0 bump, the build deployed to both hellion servers) has no
   tag. Left for the maintainer.
 
-- [ ] **S-14 · Bundle the DID 1.1 context** once it is published at a stable URL, and consider reading DID
+- [ ] **S-14 · *(Carried forward as **W-1**.)* Bundle the DID 1.1 context** once it is published at a stable URL, and consider reading DID
   documents through the JSON-LD processor like HTTPS subjects' documents (S-3).
 
-- [ ] **S-15 · Run the two new `LwsAuthIT` tests.** They were written where there is no Docker, so they
+- [ ] **S-15 · *(Carried forward as **R-43**.)* Run the two new `LwsAuthIT` tests.** They were written where there is no Docker, so they
   compile and their behaviour was exercised by the local end-to-end run, but CI is the first place they
   will run as written.
 
 ---
 
-## Specification baseline
+### Specification baseline
 
 | Document | Latest published version | Editor's Draft |
 |---|---|---|
@@ -337,7 +1138,7 @@ Facts from those documents that shape the items below:
 
 ---
 
-## P0 — Security (fix before exposing `/verify` on the public internet)
+### P0 — Security (fix before exposing `/verify` on the public internet)
 
 - [x] **P0-1 · The self-signed-CID endpoint publishes whatever is in `lws_jwk`, private keys included.**
   `ssicid/resource/SsiCidResourceProvider.java:82-94` reads every `lws_jwk` attribute value, and
@@ -414,7 +1215,7 @@ Facts from those documents that shape the items below:
   `SubjectConfirmationData` window with the same skew as `<Conditions>`, and require `Recipient`
   (see P1-M2).
 
-- [ ] **P0-10 · The live deployment is still running pre-P0 code, and the upgrade is breaking.**
+- [ ] **P0-10 · *(Carried forward as **R-15**.)* The live deployment is still running pre-P0 code, and the upgrade is breaking.**
   *(Added after the P0–P2 work landed. Not a code defect — the code is fixed; this is the fix not yet
   being where it matters.)* `https://ebremer.com/auth` (realm Halcyon, client `lws-app`) predates all of
   it. Deploying the current JAR changes behaviour in ways that surface as silent `401`s on traffic that
@@ -437,9 +1238,9 @@ Facts from those documents that shape the items below:
 
 ---
 
-## P1 — Specification conformance: MUST-level gaps
+### P1 — Specification conformance: MUST-level gaps
 
-### Cross-cutting (LWS core §4.1 / §4.3)
+#### Cross-cutting (LWS core §4.1 / §4.3)
 
 - [x] **P1-K1 · "client" is REQUIRED by core §4.1, but only two of four suites enforce it.**
   SSI-CID and did:key check `client_id`; the OpenID verifier never reads `azp` (P1-O1) and the SAML
@@ -454,7 +1255,7 @@ Facts from those documents that shape the items below:
   **Do:** emit `token_type` (and `client`) in each `/verify` response so a caller can drive an RFC 8693
   exchange directly — or delete the dead constants. Don't leave them as decoration.
 
-### OpenID Connect suite
+#### OpenID Connect suite
 
 - [x] **P1-O1 · `azp` is a MUST, and is neither produced-as-a-URI nor validated.**
   Spec: *"The ID Token MUST use the `azp` (authorized party) claim for the LWS client identifier."*
@@ -488,7 +1289,7 @@ Facts from those documents that shape the items below:
   JWT verifiers looks at `crit`.
   **Do:** reject any credential with a non-empty `crit` header, via a shared helper (covers O4, C-*, D3).
 
-### Self-signed CID suite *(the 21 August 2026 draft)*
+#### Self-signed CID suite *(the 21 August 2026 draft)*
 
 - [x] **P1-C1 · `iat` is a MUST and is not checked.**
   Spec: *"The JWT MUST include an `iat` (issued at) claim."*
@@ -538,7 +1339,7 @@ Facts from those documents that shape the items below:
   **Do:** hoist `algMatchesKey` into a shared helper and apply it here; also require the JWK's own
   `kty` / `crv` / `alg` / `use` to be consistent with the header algorithm.
 
-### Self-signed `did:key` suite
+#### Self-signed `did:key` suite
 
 - [x] **P1-D1 · `iat` is a MUST and is not checked.** Same gap as P1-C1, in
   `ssididkey/verify/SelfSignedDidKeyVerifier.java:100-117`.
@@ -562,7 +1363,7 @@ Facts from those documents that shape the items below:
   distinct identifier strings can map to the same key.
   **Do:** re-encode the decoded key and require an exact, byte-for-byte match with the input identifier.
 
-### SAML 2.0 suite
+#### SAML 2.0 suite
 
 - [x] **P1-M1 · `saml:Issuer` is a MUST and is not required.**
   Spec: *"The SAML token MUST use the `saml:Issuer` assertion for the LWS issuer identifier."*
@@ -579,7 +1380,7 @@ Facts from those documents that shape the items below:
 
 ---
 
-## P2 — Specification conformance: SHOULD-level, interop and privacy
+### P2 — Specification conformance: SHOULD-level, interop and privacy
 
 - [x] **P2-1 · JSON-LD is pattern-matched, not processed.**
   `openid/verify/LWSCredentialVerifier.java:214-239` and
@@ -636,7 +1437,7 @@ Facts from those documents that shape the items below:
 
 ---
 
-## P3 — Correctness and robustness
+### P3 — Correctness and robustness
 
 - [x] **P3-1 · `/verify` returns 401 with no `WWW-Authenticate` header.**
   All four providers returned `Response.Status.UNAUTHORIZED` for a credential that did not verify.
@@ -722,7 +1523,7 @@ Facts from those documents that shape the items below:
 
 ---
 
-## P4 — Packaging and build
+### P4 — Packaging and build
 
 - [x] **P4-1 · ~~A test-scoped dependency leaks a compile-scope artifact into the production JAR.~~
   This finding was wrong.** The original reading — `org.testcontainers:testcontainers` (test) pulling
@@ -796,7 +1597,7 @@ Facts from those documents that shape the items below:
 
 ---
 
-## P5 — Tests and CI
+### P5 — Tests and CI
 
 - [x] **P5-1 · The verifiers' *network* half is only ever exercised on the happy path.**
   Everything between the outbound fetch and the signature was untested in its failure modes — the
@@ -880,7 +1681,7 @@ Facts from those documents that shape the items below:
 
 ---
 
-## P6 — Documentation
+### P6 — Documentation
 
 - [x] **P6-1 · `COMPLIANCE.md` is stale.** It was dated 2026-07-09, called the suites *"unofficial
   proposals"*, and its "Residual issues" and "Suggested next steps" were the pre-P0 review — every one
