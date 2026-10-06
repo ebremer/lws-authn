@@ -10,7 +10,7 @@
 #
 # The provider is built from this checkout, so the image always carries the code beside it.
 
-ARG KEYCLOAK_VERSION=26.7.5
+ARG KEYCLOAK_VERSION=26.8.0
 
 # ── 1. Build the shaded provider JAR ────────────────────────────────────────────────────────────
 # JDK 21: the release the class files target, and the one CI builds and tests with.

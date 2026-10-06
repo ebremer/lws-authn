@@ -49,14 +49,14 @@ Throughout, replace **`id.example.com`** with your server's public hostname and 
 
 | Component | Version | Notes |
 |-----------|---------|-------|
-| Keycloak server | **26.7.5** or a later 26.7 release | The same 26.x minor as `keycloak.version` in the provider's `pom.xml`, which is the release it is built and tested against. **Apply Keycloak's patch releases as they come** — 26.7.5 fixed fourteen security issues — without waiting for the provider to follow. |
+| Keycloak server | **26.8.0** or a later 26.8 release | The same 26.x minor as `keycloak.version` in the provider's `pom.xml`, which is the release it is built and tested against. **Apply Keycloak's patch releases as they come** — that is where Keycloak's security fixes land — without waiting for the provider to follow. |
 | `lws-authn` provider | **0.3.0-SNAPSHOT** | Unreleased work after 0.2.0, the latest release. Produces `lws-authn-0.3.0-SNAPSHOT.jar`. |
 | JDK (Keycloak runtime) | **21** | Keycloak 26.x is built and tested on OpenJDK 21. |
 | JDK (build) | **21+** | Any JDK ≥ 21 builds it; it compiles to Java 21 bytecode. |
 
 ```bash
 # Handy shell variables used in the commands below
-export KC_VERSION=26.7.5   # or a later 26.7 release
+export KC_VERSION=26.8.0   # or a later 26.8 release
 export PROVIDER_VERSION=0.3.0-SNAPSHOT
 export KC_HOSTNAME=id.example.com     # your public hostname
 ```
@@ -136,7 +136,7 @@ sudo useradd  --system --gid keycloak \
 
 ## 5. Download & install Keycloak
 
-Download the distribution — the 26.7 release the provider is built against (`26.7.5`) or a later 26.7
+Download the distribution — the 26.8 release the provider is built against (`26.8.0`) or a later 26.8
 patch — and unpack it under `/opt`,
 using a version-independent symlink so future upgrades are a one-line switch:
 
@@ -793,10 +793,10 @@ sudo -u keycloak /opt/keycloak/bin/kc.sh build
 sudo systemctl restart keycloak
 ```
 
-**Upgrade Keycloak itself.** A patch release of the same minor (26.7.5 → 26.7.6) needs no new provider
+**Upgrade Keycloak itself.** A patch release of the same minor (26.8.0 → 26.8.1) needs no new provider
 build: install the new distribution (step 5), re-point the `/opt/keycloak` symlink, redeploy the same
 JAR (step 7), `kc.sh build`, restart. Take these as they come — they are where Keycloak's security
-fixes land. A new minor (26.8) needs the provider rebuilt against it: bump `keycloak.version` in
+fixes land. A new minor (26.9) needs the provider rebuilt against it: bump `keycloak.version` in
 `pom.xml`, rebuild (step 6), then as above.
 
 ### Upgrading a deployment that predates the October 2026 review
@@ -819,7 +819,9 @@ traffic that works today. Prepare, then deploy in two steps.
    ([step 9d](#9d-decide-who-may-call-verify)).
 5. **Fix the proxy headers**: nginx sets `X-Forwarded-For $remote_addr`, and `keycloak.conf` has
    `proxy-trusted-addresses` ([steps 9b](#9b-write-keycloakconf) and [12](#12-terminate-tls-with-nginx--certbot)).
-6. **Run Keycloak 26.7.5 or later** — the release this provider is built against.
+6. **Run Keycloak 26.8.0 or a later 26.8 release** — the minor this provider is built against. From 26.7
+   that is a minor upgrade: stop every node, back up the database, and read Keycloak's
+   [migration notes](https://www.keycloak.org/docs/latest/upgrading/) first.
 
 **Deploy, then tighten**
 

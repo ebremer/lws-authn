@@ -955,8 +955,23 @@ is needed.
   **#200** (FedCM in the OIDC suite) — either would change the OpenID verifier.
 - [ ] **W-4 · `w3c/lws-protocol#256` — RFC 9728 protected-resource metadata for authorization-server
   discovery.** Storage/AS side; no change here, but `lws-server` and the walkthroughs would follow it.
-- [ ] **W-5 · Keycloak 26.8.0** (1 October 2026; adds OID4VCI/OID4VP). Separate from R-14's patch
+- [x] **W-5 · Keycloak 26.8.0** (1 October 2026; adds OID4VCI/OID4VP). Separate from R-14's patch
   upgrade: check the provided/relocated libraries again, as S-17 did.
+  **Done** on branch `keycloak-26.8.0` (off `p0-dos-and-token-substitution`). `keycloak.version`
+  26.8.0, and the `Dockerfile` and `LwsAuthIT` fallback with it — `KeycloakVersionPinsTest` failed until
+  they were, as intended. The provider compiles against 26.8.0 unchanged and all 232 unit tests pass;
+  `HttpClientProvider.getHttpClient()` is still there and not deprecated. Libraries, by diffing the
+  JARs of the 26.7.5 and 26.8.0 server distributions: commons-codec 1.21.0 → 1.22.1 (relocated; the
+  provider keeps Jena's 1.22.0), Titanium 1.3.3, commons-collections4 4.5.0 and Caffeine 3.2.4
+  unchanged; of the `provided` ones slf4j-api 2.0.17 → 2.0.18, Parsson 1.1.7 → 1.1.9, jboss-logging
+  3.6.2 → 3.6.3, protobuf 4.33.2 → 4.35.0 (excluded, unused since R-04). Keycloak's POMs declare what
+  they did (Infinispan 16.0.15 still declares Caffeine 3.2.3). From Keycloak's 26.8.0 migration notes,
+  the one item that touches this repo is the deprecation of a client's *Full Scope Allowed*: it now
+  warns at every token issuance, so the demo client (realm JSON and `lws-demo.sh`) has it off — R-11
+  made the role check independent of the token. The experimental Vert.x HTTP client
+  (`http-client:v2`) is not the default and bridges the Apache API the provider uses; revisit when it
+  becomes the default. Docs say "26.8.0 or a later 26.8 release"; INSTALL §16's runbook now says the
+  server upgrade from 26.7 is a minor one. `LwsAuthIT` not run on 26.8.0 (no Docker; R-43).
 - [ ] **W-6 · Re-review cadence.** The authentication suites have been stable since 21 September; the
   next likely trigger is a new Working Draft of the OpenID or SAML suites (both still at 3 August).
 - [ ] **W-7 · Report an upstream inconsistency.**

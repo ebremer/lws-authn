@@ -37,7 +37,7 @@
       "publicClient": true,
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": true,
-      "fullScopeAllowed": true,
+      "fullScopeAllowed": false,
       "protocolMappers": [
         {
           "name": "lws-webid-sub",

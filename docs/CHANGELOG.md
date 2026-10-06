@@ -165,7 +165,7 @@ realm under the default `bearer` access mode, before any signature is checked.
 ### Added
 
 - **A Docker setup for trying the suites** (`Dockerfile`, `compose.yaml`). `docker compose up --build
-  --wait` builds the provider from the checkout into a Keycloak 26.7.5 image and starts it with the
+  --wait` builds the provider from the checkout into a Keycloak 26.8.0 image and starts it with the
   `lws-demo` realm imported, so every demo script runs against it without setup. It is for
   development only. See [Run with Docker](build.md#run-with-docker).
 - **`examples/lws-demo-realm.json` is ready for the self-signed CID suite.** Its user profile sets
@@ -247,15 +247,26 @@ each may reject a document that used to verify. Check your issuers' documents be
   realm and `lws-demo.sh` set it off explicitly. Existing mappers with the switch explicitly on keep
   it; turn it off unless something downstream needs the WebID in the access token. The ID Token and
   userinfo are unchanged.
-- **Built and tested against Keycloak 26.7.5** (was 26.7.3; R-14), released 30 September 2026 with
+- **Built and tested against Keycloak 26.8.0** (was 26.7.3; W-5), released 1 October 2026. **Run the
+  provider on 26.8.0 or a later 26.8 release**; from 26.7 that is a minor upgrade of the server — every
+  node stopped, the database migrated — so read Keycloak's migration notes first. Its security fixes
+  include disabled clients no longer reaching a token's `aud` (CVE-2026-93999) and identity-provider
+  mappers no longer granting admin roles by default (CVE-2026-12388). Nothing in the provider's own
+  code needed to change: the APIs it uses — `HttpClientProvider.getHttpClient()`, the bearer
+  authenticator, the realm-resource and protocol-mapper SPIs — are as they were. Of the libraries it
+  shares with Keycloak or relocates, the server now ships commons-codec 1.22.1 (relocated, so the
+  provider keeps Jena's 1.22.0), and slf4j, Parsson and jboss-logging take patch releases; the POM's
+  table says so. 26.8 deprecates a client's *Full Scope Allowed* switch and warns at every token it
+  issues for one that has it on, so the demo client now has it off: since R-11 the verifier role is
+  read from the user, not the token, and nothing else in the demo needs roles in tokens.
+- **Built and tested against Keycloak 26.7.5** on the way (R-14), released 30 September 2026 with
   fourteen security fixes, among them SAML Redirect Binding parameter pollution (CVE-2026-18217),
-  CVE-2026-89298 and CVE-2026-88770. **Run the provider on 26.7.5 or a later 26.7 release**: the
-  documentation used to say the server "must match" the provider's `keycloak.version`, which only
-  discouraged operators from taking patch releases; it now asks for the same minor. Of the libraries the
-  provider shares with Keycloak or relocates, only Caffeine changed in the server distribution (3.2.3 →
-  3.2.4, the version the provider bundles anyway), so the shading and `provided` decisions stand; the
-  POM's table says so. A unit test now fails if the `Dockerfile` or `LwsAuthIT`'s fallback image
-  disagrees with `keycloak.version`. 26.8.0 is not yet evaluated.
+  CVE-2026-89298 and CVE-2026-88770. The documentation used to say the server "must match" the
+  provider's `keycloak.version`, which only discouraged operators from taking patch releases; it now
+  asks for the same minor. Of the libraries the provider shares with Keycloak or relocates, only
+  Caffeine changed in that server distribution (3.2.3 → 3.2.4, the version the provider bundles anyway).
+  A unit test now fails if the `Dockerfile` or `LwsAuthIT`'s fallback image disagrees with
+  `keycloak.version`.
 - **Built and tested against Keycloak 26.7.4** on the way (was 26.7.3), released 16 September 2026 with six security
   fixes, among them an unauthenticated denial of service through locale caching (CVE-2026-79651) and
   the `impersonation` role reaching a realm administrator (CVE-2026-17526). Run the provider on 26.7.4;

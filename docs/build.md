@@ -8,7 +8,7 @@ nav_order: 2
 ## Run with Docker
 
 The quickest way to try the suites. [`compose.yaml`](https://github.com/ebremer/lws-authn/blob/master/compose.yaml)
-builds the provider from your checkout into a Keycloak 26.7.5 image and starts it with a demo realm
+builds the provider from your checkout into a Keycloak 26.8.0 image and starts it with a demo realm
 already imported. It needs only Docker with Compose: no JDK, Maven or Keycloak install.
 
 ```bash
@@ -83,7 +83,7 @@ build picks one of two strategies deliberately, because the wrong one is a runti
 
 Bundling an unrelocated second copy of a library the server already has puts two implementations of one
 package on the classpath; marking one `provided` when the server's copy is older silently downgrades
-it — Keycloak 26.7.5 runs Titanium 1.3.3 against Jena's 1.7.0. The bundled
+it — Keycloak 26.8.0 runs Titanium 1.3.3 against Jena's 1.7.0. The bundled
 versions are pinned explicitly, because Maven would otherwise resolve the older versions Keycloak's own
 POMs declare (commons-codec 1.11, commons-collections4 4.4, Titanium 1.3.3, Caffeine 3.2.3). The shade
 plugin's comment in `pom.xml` tabulates all three columns.
@@ -123,7 +123,7 @@ are still Java 21, and runs CodeQL. Actions are pinned by commit SHA; Dependabot
 Keycloak loads provider JARs from its `providers/` directory.
 
 ```bash
-# from the project root, with $KC_HOME pointing at your Keycloak 26.7 install (26.7.5 or later)
+# from the project root, with $KC_HOME pointing at your Keycloak 26.8 install (26.8.0 or later)
 cp target/lws-authn-*.jar "$KC_HOME/providers/"   # the one shaded JAR `mvn package` produced
 
 "$KC_HOME/bin/kc.sh" build      # re-augment with the new provider

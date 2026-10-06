@@ -33,7 +33,7 @@ identity is self-describing.
 
 ## Prerequisites
 
-- Keycloak **26.7.5** or a later 26.7 release, with the `lws-authn` provider deployed — see [Build and deploy](build.md) (build
+- Keycloak **26.8.0** or a later 26.8 release, with the `lws-authn` provider deployed — see [Build and deploy](build.md) (build
   → copy `target/lws-authn-<version>.jar` to `providers/` → `kc.sh build` → `kc.sh start`).
 - `curl` and `jq`.
 - For a quick local run: `docker compose up --build --wait` in a checkout — see

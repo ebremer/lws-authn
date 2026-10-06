@@ -11,7 +11,7 @@
 #   6. dereference the resulting WebID (the controlled identifier document)
 #   7. run the credential through the provider's /verify endpoint
 #
-# Requirements: curl, jq, and a running Keycloak 26.7 (26.7.5 or later) with the lws-authn provider deployed
+# Requirements: curl, jq, and a running Keycloak 26.8 (26.8.0 or later) with the lws-authn provider deployed
 # (kc.sh build && kc.sh start). Defaults target `kc.sh start-dev` on http://localhost:8080
 # with the bootstrap admin admin/admin.
 #
@@ -133,6 +133,7 @@ if [ -z "$CLIENT_UUID" ]; then
   "publicClient": true,
   "standardFlowEnabled": false,
   "directAccessGrantsEnabled": true,
+  "fullScopeAllowed": false,
   "protocolMappers": [ $MAPPER ]
 }
 JSON

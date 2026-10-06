@@ -14,7 +14,7 @@
 #   7. mints a self-issued ES256 JWT (sub == iss == client_id == the document URL)
 #   8. runs it through the provider's /lws-ssi-cid/verify endpoint
 #
-# Requirements: curl, jq, openssl, and a running Keycloak 26.7 (26.7.5 or later) with the lws-authn provider deployed.
+# Requirements: curl, jq, openssl, and a running Keycloak 26.8 (26.8.0 or later) with the lws-authn provider deployed.
 # Defaults target `kc.sh start-dev` on http://localhost:8080 with admin/admin.
 #
 # Usage:
