@@ -338,9 +338,7 @@ public class SelfSignedCidVerifier {
             // fetches through a client that follows no redirects and resolves only vetted addresses. It
             // keeps the breaker's books itself: what happens here after the fetch — a 404, the wrong
             // media type, a document that does not parse — says nothing about the host's health (R-02).
-            OutboundHttp.Fetched response = OutboundHttp.fetch(sub,
-                    SsiCidConstants.TURTLE + ", " + SsiCidConstants.JSON_LD + ";q=0.9, "
-                            + SsiCidConstants.N_TRIPLES + ";q=0.8, " + SsiCidConstants.RDF_XML + ";q=0.7", session);
+            OutboundHttp.Fetched response = OutboundHttp.fetch(sub, RdfParsing.ACCEPT, session);
             if (response.status() != 200) {
                 log.debugf("[%s] dereferencing sub <%s> returned HTTP %d", result.getTraceId(), sub,
                         response.status());
@@ -350,12 +348,23 @@ public class SelfSignedCidVerifier {
             }
             String contentType = response.contentType();
             String body = response.body();
+            RdfParsing.requireSupported(contentType);
+            // The suite requires "a valid controlled identifier document with an `id` value equal to the
+            // subject identifier". For a JSON document that is the topmost map's id, read from the JSON
+            // itself (R-18); an RDF syntax has no topmost map, so there the graph must describe sub.
+            boolean json = RdfParsing.isJsonLd(contentType, body);
+            if (json && !sub.equals(RdfParsing.topmostId(body, sub))) {
+                throw new SubjectIdMismatchException();
+            }
             // Processed as real JSON-LD where possible, so a conforming document from another
             // implementation works regardless of how it spells things; the compact reader remains for
             // a document naming a context this provider does not bundle.
             Model model = RdfParsing.parse(body, contentType, sub);
             List<VerificationMethod> methods;
             if (model != null) {
+                if (!json && !model.contains(model.createResource(sub), null, (RDFNode) null)) {
+                    throw new SubjectIdMismatchException();
+                }
                 methods = collectFromRdf(model, sub);
             } else {
                 log.debugf("[%s] sub <%s> is JSON-LD this provider cannot process; reading the compact shape",
@@ -365,6 +374,13 @@ public class SelfSignedCidVerifier {
             result.check("subjectDereferenced", true);
             result.check("subjectIdMatches", true);
             return methods;
+        } catch (SubjectIdMismatchException wrongDocument) {
+            // A document was fetched and read; it is just not this subject's. Reported as that, not as a
+            // failure to dereference, which is a different problem with a different fix.
+            result.check("subjectDereferenced", true);
+            result.check("subjectIdMatches", false);
+            result.error("The document at 'sub' <" + sub + "> is not a controlled identifier document for it");
+            return null;
         } catch (SsrfGuard.InsecureSchemeException insecure) {
             // The suite works with "subject identifiers that use HTTPS URIs as well as DID URIs"; over
             // plain http anyone on the network path could substitute the subject's keys (R-07).
@@ -552,7 +568,8 @@ public class SelfSignedCidVerifier {
         if (doc == null || !doc.isObject()) {
             throw new IOException("controlled identifier document is not a JSON object");
         }
-        String id = firstText(doc, "id", "@id");
+        // Resolved as RdfParsing.topmostId resolves it, so both paths agree on what the id is.
+        String id = RdfParsing.resolveReference(firstText(doc, "id", "@id"), sub);
         if (id == null || !id.equals(sub)) {
             throw new SubjectIdMismatchException();
         }
@@ -566,7 +583,7 @@ public class SelfSignedCidVerifier {
         for (JsonNode entry : authentication.isArray() ? authentication : List.of(authentication)) {
             JsonNode method = null;
             if (entry.isTextual()) {
-                String reference = resolveReference(entry.asText(), id);
+                String reference = RdfParsing.resolveReference(entry.asText(), id);
                 if (reference != null) {
                     if (byId == null) {
                         byId = indexById(doc, id);
@@ -590,9 +607,9 @@ public class SelfSignedCidVerifier {
 
     /** Reads one verification method map; empty if it is not one the subject may authenticate with. */
     private static Optional<VerificationMethod> toVerificationMethod(JsonNode method, String sub, String base) {
-        String type = firstText(method, "type", "@type");
-        String methodId = resolveReference(firstText(method, "id", "@id"), base);
-        String controller = resolveReference(firstText(method, "controller"), base);
+        Set<String> types = texts(method, "type", "@type");
+        String methodId = RdfParsing.resolveReference(firstText(method, "id", "@id"), base);
+        String controller = RdfParsing.resolveReference(firstText(method, "controller"), base);
         if (!sub.equals(controller) || !inSubjectsDocument(methodId, sub)) {
             return Optional.empty();
         }
@@ -606,11 +623,12 @@ public class SelfSignedCidVerifier {
             log.debugf("skipping verification method <%s>: 'revoked'/'expires' is not one xsd:dateTimeStamp", methodId);
             return Optional.empty();
         }
-        if (SsiCidConstants.TYPE_JSON_WEB_KEY.equals(type)) {
+        // A type may be one string or several — JSON-LD allows either, and the processor path reads both.
+        if (types.contains(SsiCidConstants.TYPE_JSON_WEB_KEY)) {
             JsonNode jwk = method.get("publicKeyJwk");
             return fromJwk(methodId, jwk, revoked, expires);
         }
-        if (SsiCidConstants.TYPE_MULTIKEY.equals(type)) {
+        if (types.contains(SsiCidConstants.TYPE_MULTIKEY)) {
             return fromMultibase(methodId, firstText(method, "publicKeyMultibase"), revoked, expires);
         }
         return Optional.empty();
@@ -805,36 +823,6 @@ public class SelfSignedCidVerifier {
     // ---- small helpers ----
 
     /**
-     * Resolves a reference found in a document against the document's {@code id}: an absolute URL or
-     * DID URL as it is, a fragment ({@code #key-1}) appended to the id — DID 1.1 §3.2.1's relative DID
-     * URL — and any other relative reference by RFC 3986 against a hierarchical id.
-     *
-     * @return the absolute form, or {@code null} if there is none
-     */
-    static String resolveReference(String reference, String base) {
-        if (reference == null || reference.isBlank()) {
-            return null;
-        }
-        if (reference.matches("^[A-Za-z][A-Za-z0-9+.-]*:.*")) {
-            return reference;
-        }
-        if (base == null) {
-            return null;
-        }
-        int hash = base.indexOf('#');
-        String document = hash >= 0 ? base.substring(0, hash) : base;
-        if (reference.startsWith("#")) {
-            return document + reference;
-        }
-        try {
-            java.net.URI uri = new java.net.URI(document);
-            return uri.isOpaque() ? null : uri.resolve(reference).toString();
-        } catch (java.net.URISyntaxException | IllegalArgumentException invalid) {
-            return null;
-        }
-    }
-
-    /**
      * True iff a method identifier, when there is one, is a fragment of the subject's own document.
      *
      * <p>CID 1.0 §3.3 takes the document a method lives in from the method's identifier — the URL
@@ -875,7 +863,7 @@ public class SelfSignedCidVerifier {
         while (!pending.isEmpty()) {
             JsonNode node = pending.pop();
             if (node.isObject()) {
-                String resolved = resolveReference(firstText(node, "id", "@id"), base);
+                String resolved = RdfParsing.resolveReference(firstText(node, "id", "@id"), base);
                 if (resolved != null) {
                     byId.putIfAbsent(resolved, node);
                 }
@@ -889,6 +877,24 @@ public class SelfSignedCidVerifier {
             }
         }
         return byId;
+    }
+
+    /** The strings the first of {@code names} present on {@code node} holds: one string, or an array of them. */
+    private static Set<String> texts(JsonNode node, String... names) {
+        for (String name : names) {
+            JsonNode value = node.get(name);
+            if (value == null) {
+                continue;
+            }
+            Set<String> out = new java.util.LinkedHashSet<>();
+            for (JsonNode element : value.isArray() ? value : List.of(value)) {
+                if (element.isTextual()) {
+                    out.add(element.asText());
+                }
+            }
+            return out;
+        }
+        return Set.of();
     }
 
     /** The first of {@code names} present on {@code node} as a string, or {@code null}. */

@@ -90,9 +90,11 @@ and fails closed when the client identifier is absent.
 (`tokenIsIdToken`: Keycloak's access tokens say `Bearer`, and their header is `JWT` like an ID Token's);
 `sub` and `iss` present; `iss` an https URL with no query or fragment, as OpenID Connect Core §2 defines
 an Issuer Identifier (`issuerWellFormed`); `azp` present (`clientPresent`). `sub` is dereferenced over the guarded HTTP
-stack and the document must have an `id` equal to `sub` (`subjectDereferenced`, `subjectIdMatches`) —
-on *both* the RDF and the JSON-LD path; the JSON-LD path used to default a missing `id` to the subject,
-accepting a document that never claimed to describe it. The document must declare a
+stack and the document must have an `id` equal to `sub` (`subjectDereferenced`, `subjectIdMatches`):
+for a JSON document, the `id` of its **topmost map**, read from the JSON before any RDF processing (CID
+1.0: "A controlled identifier document MUST contain an `id` value in the topmost map"); for Turtle,
+N-Triples or RDF/XML, which have no topmost map, the graph must describe `sub`. A document that was
+fetched but is about somebody else fails `subjectIdMatches`, not `subjectDereferenced`. The document must declare a
 `https://www.w3.org/ns/lws#OpenIdProvider` service whose `serviceEndpoint` equals `iss`
 (`openIdProviderServiceLocated`), located by parameterized SPARQL so an attacker-controlled `sub`
 cannot inject. Discovery on `iss` must return a configuration whose `issuer` matches
@@ -122,7 +124,8 @@ token's `at+jwt`;
 `sub == iss == client_id` (`selfIssued`); a `kid` is present (`keyIdPresent`) — no fallback to "the
 only key", because the credential says which key signed it. `sub` is dereferenced — over https; plain
 http only to an allow-listed host — or, for a DID, resolved (below), and the document's `id` must equal
-it (`subjectDereferenced`, `subjectIdMatches`).
+it (`subjectDereferenced`, `subjectIdMatches`) — the topmost map's `id` for a JSON document, as in the
+OpenID suite.
 
 The `kid` then selects a verification method (`verificationMethodFound`), following CID 1.0 §3.3, which
 the suite cites for this step. The method must be:
@@ -204,7 +207,13 @@ they signed themselves with a certificate they also supplied. That is the API be
 ## Supported formats
 
 **RDF syntaxes**, both served and parsed: JSON-LD (`application/ld+json`), Turtle (`text/turtle`),
-N-Triples (`application/n-triples`), RDF/XML (`application/rdf+xml`). Verifiers request Turtle first.
+N-Triples (`application/n-triples`), RDF/XML (`application/rdf+xml`), and **`application/cid`**, CID 1.0
+Appendix A's media type for a controlled identifier document — the JSON-LD body under that name.
+Verifiers request Turtle first, and also accept `application/json`.
+
+A JSON document **without an `@context`** is read in the CID 1.0 context, which CID 1.0 §4.2.1 requires
+of a consumer: "Implementations that do not intend to use JSON-LD MAY choose to not include an
+`@context`", and the consumer "MUST inject or append" `https://www.w3.org/ns/cid/v1`.
 
 JSON-LD is processed by Jena's **JSON-LD 1.1 reader**, so a conforming document verifies whatever shape
 it is written in — aliased terms, an `@graph` wrapper, referenced rather than embedded verification
@@ -216,8 +225,9 @@ unverifiable rather than guessed at, with a key-reading fallback for the standar
 
 A document declaring any other content type is **refused by name**, not handed to the Turtle parser —
 including an RDF syntax this provider does not ask for (TriG, N3, RDF/JSON, the binary RDF-Thrift and
-RDF-Protobuf encodings): the verifiers read exactly the four syntaxes listed above, plus
-`application/json` read as JSON-LD.
+RDF-Protobuf encodings): the verifiers read exactly the syntaxes listed above, plus `application/json`
+read as JSON-LD. The key-reading fallback reads `type` and `serviceEndpoint` arrays as the processor
+does.
 
 **DID documents** are accepted as `application/did+json`, `application/did+ld+json`, `application/did`,
 `application/ld+json` or `application/json` (or undeclared), and read by the JSON rules of the DID

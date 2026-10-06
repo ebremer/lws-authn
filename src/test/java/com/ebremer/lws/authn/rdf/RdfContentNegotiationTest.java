@@ -97,4 +97,12 @@ class RdfContentNegotiationTest {
         assertFalse(RdfContentNegotiation.matches("\"other\"", tag));
         assertFalse(RdfContentNegotiation.matches(null, tag));
     }
+
+    /** R-19. CID 1.0 Appendix A's own media type is served — the JSON-LD body, under that name. */
+    @Test
+    void servesApplicationCidWhenAskedForByName() {
+        assertEquals(RdfContentNegotiation.CID, RdfContentNegotiation.best("application/cid"));
+        assertEquals(RdfContentNegotiation.CID, RdfContentNegotiation.best("application/cid, text/turtle;q=0.5"));
+        assertEquals(RdfContentNegotiation.JSON_LD, RdfContentNegotiation.best("*/*"), "JSON-LD still leads");
+    }
 }

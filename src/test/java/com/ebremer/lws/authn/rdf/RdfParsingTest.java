@@ -7,6 +7,7 @@ package com.ebremer.lws.authn.rdf;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -246,5 +247,55 @@ class RdfParsingTest {
         String json = "{\"@context\":{\"p\":\"" + SUBJECT + "#p\"},\"@id\":\"" + SUBJECT + "\","
                 + "\"p\":\"" + "{[".repeat(100) + "\\\"" + "{[".repeat(100) + "\"}";
         assertEquals(1, assertDoesNotThrow(() -> RdfParsing.parse(json, "application/ld+json", SUBJECT)).size());
+    }
+
+    /** R-19. CID 1.0 Appendix A's media type is JSON-LD in the CID context, and is read as that. */
+    @Test
+    void readsApplicationCidAsJsonLd() {
+        assertDoesNotThrow(() -> RdfParsing.requireSupported("application/cid; charset=utf-8"));
+        assertTrue(RdfParsing.isJsonLd("application/cid", COMPACT_OPENID));
+        assertTrue(declaresProvider(RdfParsing.parse(COMPACT_OPENID, "application/cid", SUBJECT)));
+    }
+
+    /**
+     * R-19. CID 1.0 §4.2.1: a consumer "MUST inject or append an {@code @context}" when a document has
+     * none. Without it every term was undefined and the graph came out empty.
+     */
+    @Test
+    void readsADocumentWithoutAContextInTheCidContext() {
+        String contextless = COMPACT_OPENID.replace("\"@context\":[\"https://www.w3.org/ns/cid/v1\"],", "");
+        assertFalse(contextless.contains("@context"));
+        assertTrue(declaresProvider(RdfParsing.parse(contextless, "application/ld+json", SUBJECT)));
+        assertTrue(declaresProvider(RdfParsing.parse(contextless, "application/json", SUBJECT)));
+        // a context of its own is left alone: here, one that defines nothing the document uses
+        String own = COMPACT_OPENID.replace("[\"https://www.w3.org/ns/cid/v1\"]", "{\"x\":\"https://x.example/\"}");
+        assertFalse(declaresProvider(RdfParsing.parse(own, "application/ld+json", SUBJECT)));
+    }
+
+    /** Everything the verifiers ask for is something they read. */
+    @Test
+    void everyTypeTheVerifiersAcceptIsOneTheyRead() {
+        for (String range : RdfParsing.ACCEPT.split(",")) {
+            String type = range.split(";")[0].trim();
+            assertDoesNotThrow(() -> RdfParsing.requireSupported(type), type);
+        }
+        assertTrue(RdfParsing.ACCEPT.contains("application/cid"));
+        assertTrue(RdfParsing.ACCEPT.contains("application/json"));
+    }
+
+    /** R-18. The topmost map's id, resolved against the document's URL. */
+    @Test
+    void readsTheTopmostId() throws Exception {
+        assertEquals(SUBJECT, RdfParsing.topmostId(COMPACT_OPENID, SUBJECT));
+        assertEquals(SUBJECT, RdfParsing.topmostId("{\"@id\":\"" + SUBJECT + "\"}", SUBJECT));
+        assertEquals(SUBJECT, RdfParsing.topmostId("{\"id\":\"end-user\"}", SUBJECT), "a relative id resolves");
+        assertNull(RdfParsing.topmostId("{\"id\":\"\"}", SUBJECT), "an empty id names nothing");
+        assertEquals(SUBJECT + "#me", RdfParsing.topmostId("{\"id\":\"#me\"}", SUBJECT));
+        assertEquals("https://other.example/doc", RdfParsing.topmostId(
+                "{\"id\":\"https://other.example/doc\",\"alsoKnownAs\":[{\"id\":\"" + SUBJECT + "\"}]}", SUBJECT));
+        assertNull(RdfParsing.topmostId("{\"@graph\":[{\"id\":\"" + SUBJECT + "\"}]}", SUBJECT), "no topmost id");
+        assertNull(RdfParsing.topmostId("[{\"id\":\"" + SUBJECT + "\"}]", SUBJECT), "no topmost map");
+        assertNull(RdfParsing.topmostId("{\"id\":[\"" + SUBJECT + "\"]}", SUBJECT), "not one string");
+        assertThrows(java.io.IOException.class, () -> RdfParsing.topmostId("not json", SUBJECT));
     }
 }

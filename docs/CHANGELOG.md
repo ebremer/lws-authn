@@ -167,6 +167,14 @@ realm under the default `bearer` access mode, before any signature is checked.
 
 ### Added
 
+- **Controlled identifier documents without an `@context`, or served as `application/cid`, verify**
+  (R-19). CID 1.0 §4.2.1 lets a document leave out `@context` and requires a consumer to supply the
+  CID context; processed without one, every term was undefined and the document failed in both JWT
+  suites. `application/cid`, CID 1.0 Appendix A's media type, was refused as "not an RDF syntax"; it is
+  now read as JSON-LD, the verifiers ask for it and for `application/json`, and the CID endpoints serve
+  it to a client that asks for it by name. The key-reading fallback for a document naming an unbundled
+  context now reads `type` and `serviceEndpoint` arrays as the JSON-LD processor does, where a `type`
+  array used to read as no type and only the first endpoint counted.
 - **A Docker setup for trying the suites** (`Dockerfile`, `compose.yaml`). `docker compose up --build
   --wait` builds the provider from the checkout into a Keycloak 26.8.0 image and starts it with the
   `lws-demo` realm imported, so every demo script runs against it without setup. It is for
@@ -222,6 +230,14 @@ realm under the default `bearer` access mode, before any signature is checked.
   every ID Token; they were only read when the caller passed `client_id` or `audience`. Both are now
   checked before anything is fetched (`audiencePresent`, `issuedAtPresent`). Every provider known to
   this project sets both.
+- **The subject's document must have the subject as its topmost `id`** (R-18), in both JWT suites. For a
+  JSON document the check was "some node in the graph is the subject", which a document about somebody
+  else passed by nesting `{"id": sub, …}` under `alsoKnownAs` — and in the self-signed suite that nested
+  node's keys then verified the credential. Now the `id` of the topmost map is read from the JSON
+  itself; Turtle, N-Triples and RDF/XML, which have no topmost map, must still describe the subject. A
+  fetched document about somebody else is reported as `subjectIdMatches: false` — the self-signed suite
+  used to report it as `subjectDereferenced: false`, "failed to dereference", and to report
+  `subjectIdMatches: true` regardless.
 - **An `iat` in the future, or after `exp`, is refused** in both JWT suites (new check
   `issuedAtConsistent`; the clock skew allowance applies). A credential "issued" ten years from now used
   to pass.

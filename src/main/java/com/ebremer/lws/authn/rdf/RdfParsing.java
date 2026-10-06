@@ -10,11 +10,14 @@
 package com.ebremer.lws.authn.rdf;
 
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.Map;
 
 import com.apicatalog.jsonld.JsonLdOptions;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.jena.rdf.model.Model;
 import org.apache.jena.rdf.model.ModelFactory;
 import org.apache.jena.riot.Lang;
@@ -22,6 +25,7 @@ import org.apache.jena.riot.RDFDataMgr;
 import org.apache.jena.riot.RDFParser;
 import org.apache.jena.riot.system.jsonld.TitaniumJsonLdOptions;
 import org.apache.jena.sparql.util.Context;
+import org.keycloak.util.JsonSerialization;
 
 /**
  * RDF syntax helpers for controlled identifier documents.
@@ -34,6 +38,32 @@ public final class RdfParsing {
     }
 
     private static final String JSON_LD = "application/ld+json";
+
+    /**
+     * CID 1.0 Appendix A registers {@code application/cid} for a controlled identifier document: JSON-LD
+     * in the CID context, which a consumer that does not process JSON-LD may read as JSON. It used to be
+     * refused as "not an RDF syntax" (R-19).
+     */
+    public static final String CID = "application/cid";
+
+    private static final String JSON = "application/json";
+
+    /** The CID 1.0 context, which a document that names none is read with (CID 1.0 §4.2.1). */
+    public static final String CID_CONTEXT = "https://www.w3.org/ns/cid/v1";
+
+    /**
+     * The {@code Accept} header both verifiers dereference a subject with: Turtle first — the
+     * WebID/Solid norm — then JSON-LD, CID 1.0's own media type, the other RDF syntaxes, and plain JSON,
+     * which a CID document "that does not intend to use JSON-LD" may be served as. Every type here is
+     * one {@link #parse} reads, and nothing else is.
+     */
+    public static final String ACCEPT = "text/turtle, application/ld+json;q=0.9, application/cid;q=0.9, "
+            + "application/n-triples;q=0.8, application/rdf+xml;q=0.7, application/json;q=0.5";
+
+    /** The JSON media types: JSON-LD, CID 1.0's own, and plain JSON. */
+    private static boolean isJsonType(String mediaType) {
+        return JSON_LD.equals(mediaType) || CID.equals(mediaType) || JSON.equals(mediaType);
+    }
 
     /**
      * The non-JSON syntaxes a dereferenced document may be read as: exactly the ones the verifiers ask
@@ -110,7 +140,7 @@ public final class RdfParsing {
      */
     public static void requireSupported(String contentType) {
         String ct = mediaType(contentType);
-        if (ct == null || ct.equals(JSON_LD) || ct.equals("application/json")) {
+        if (ct == null || isJsonType(ct)) {
             return;
         }
         if (!READABLE.containsKey(ct)) {
@@ -125,7 +155,7 @@ public final class RdfParsing {
     public static boolean isJsonLd(String contentType, String body) {
         String ct = mediaType(contentType);
         if (ct != null) {
-            if (ct.equals(JSON_LD) || ct.equals("application/json")) {
+            if (isJsonType(ct)) {
                 return true;
             }
             if (READABLE.containsKey(ct)) {
@@ -189,6 +219,7 @@ public final class RdfParsing {
      */
     public static Model parseJsonLd(String body, String base) {
         requireShallow(body, true);
+        body = withCidContext(body);
         JsonLdOptions options = new JsonLdOptions();
         options.setDocumentLoader(LocalJsonLdContexts.INSTANCE);
 
@@ -207,6 +238,89 @@ public final class RdfParsing {
             throw new TooDeeplyNestedException(); // a backstop; requireShallow should have refused it
         }
         return model;
+    }
+
+    /**
+     * The document with CID 1.0's context injected, if its topmost map names none.
+     *
+     * <p>CID 1.0 §4.2.1: "Implementations that do not intend to use JSON-LD MAY choose to not include an
+     * {@code @context}", and a consumer processing such a document "MUST inject or append an
+     * {@code @context} property with a value of {@code https://www.w3.org/ns/cid/v1}". Processed
+     * without one, every term is undefined and the graph comes out empty — not {@code null}, so the
+     * compact reader never ran either, and a valid document failed (R-19). A document that names a
+     * context of its own is left as it is.</p>
+     */
+    static String withCidContext(String body) {
+        JsonNode document;
+        try {
+            document = JsonSerialization.mapper.readTree(body);
+        } catch (IOException notJson) {
+            return body; // the processor reports it
+        }
+        if (document == null || !document.isObject() || document.has("@context")) {
+            return body;
+        }
+        ObjectNode injected = JsonSerialization.mapper.createObjectNode();
+        injected.put("@context", CID_CONTEXT);
+        injected.setAll((ObjectNode) document);
+        return injected.toString();
+    }
+
+    /**
+     * The {@code id} of a JSON document's topmost map, resolved against {@code base} — the URL it was
+     * fetched from — or {@code null} if the document is not a map or has no string {@code id}
+     * ({@code @id} accepted too).
+     *
+     * <p>CID 1.0: "A controlled identifier document MUST contain an {@code id} value in the topmost
+     * map", and both JWT suites require it to equal the subject. The RDF view of a document cannot show
+     * that — only that <em>some</em> node is the subject, which a document about somebody else satisfies
+     * by nesting {@code {"id": sub}} under {@code alsoKnownAs} — so for a JSON document the verifiers
+     * compare this, read from the JSON itself (R-18).</p>
+     *
+     * @throws IOException if {@code body} is not JSON
+     */
+    public static String topmostId(String body, String base) throws IOException {
+        JsonNode document = JsonSerialization.mapper.readTree(body);
+        if (document == null || !document.isObject()) {
+            return null;
+        }
+        for (String name : new String[]{"id", "@id"}) {
+            JsonNode id = document.get(name);
+            if (id != null && id.isTextual()) {
+                return resolveReference(id.asText(), base);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Resolves a reference found in a document against the document's {@code id} or URL: an absolute
+     * URL or DID URL as it is, a fragment ({@code #key-1}) appended to the document — DID 1.1 §3.2.1's
+     * relative DID URL — and any other relative reference by RFC 3986 against a hierarchical base.
+     *
+     * @return the absolute form, or {@code null} if there is none
+     */
+    public static String resolveReference(String reference, String base) {
+        if (reference == null || reference.isBlank()) {
+            return null;
+        }
+        if (reference.matches("^[A-Za-z][A-Za-z0-9+.-]*:.*")) {
+            return reference;
+        }
+        if (base == null) {
+            return null;
+        }
+        int hash = base.indexOf('#');
+        String document = hash >= 0 ? base.substring(0, hash) : base;
+        if (reference.startsWith("#")) {
+            return document + reference;
+        }
+        try {
+            java.net.URI uri = new java.net.URI(document);
+            return uri.isOpaque() ? null : uri.resolve(reference).toString();
+        } catch (java.net.URISyntaxException | IllegalArgumentException invalid) {
+            return null;
+        }
     }
 
     /**

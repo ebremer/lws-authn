@@ -89,7 +89,7 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
                         case SsiCidConstants.TURTLE -> cid.toRdf(RDFFormat.TURTLE);
                         case SsiCidConstants.N_TRIPLES -> cid.toRdf(RDFFormat.NTRIPLES);
                         case SsiCidConstants.RDF_XML -> cid.toRdf(RDFFormat.RDFXML);
-                        default -> cid.toJsonLd();
+                        default -> cid.toJsonLd(); // JSON-LD, and application/cid, which is the same body
                     };
                 });
     }

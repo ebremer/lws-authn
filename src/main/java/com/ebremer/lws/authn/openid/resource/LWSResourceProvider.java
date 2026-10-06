@@ -78,7 +78,7 @@ public class LWSResourceProvider implements RealmResourceProvider {
                         case LWSConstants.TURTLE -> cid.toRdf(RDFFormat.TURTLE);
                         case LWSConstants.N_TRIPLES -> cid.toRdf(RDFFormat.NTRIPLES);
                         case LWSConstants.RDF_XML -> cid.toRdf(RDFFormat.RDFXML);
-                        default -> cid.toJsonLd();
+                        default -> cid.toJsonLd(); // JSON-LD, and application/cid, which is the same body
                     };
                 });
     }

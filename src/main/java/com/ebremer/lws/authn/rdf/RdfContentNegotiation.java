@@ -34,11 +34,19 @@ public final class RdfContentNegotiation {
     public static final String RDF_XML = "application/rdf+xml";
 
     /**
+     * CID 1.0 Appendix A's media type for a controlled identifier document. The body is the JSON-LD one —
+     * compact, in the CID context — labelled as what it is for a client that asks for it by that name
+     * (R-19).
+     */
+    public static final String CID = RdfParsing.CID;
+
+    /**
      * The syntaxes served, in the order preferred when a client expresses no preference between them
      * (an {@code Accept} of {@code * / *}, or equal q-values). JSON-LD leads because it is the form
-     * every LWS suite's example is written in.
+     * every LWS suite's example is written in; {@code application/cid} is the same body under CID 1.0's
+     * own name.
      */
-    public static final List<String> SUPPORTED = List.of(JSON_LD, TURTLE, N_TRIPLES, RDF_XML);
+    public static final List<String> SUPPORTED = List.of(JSON_LD, CID, TURTLE, N_TRIPLES, RDF_XML);
 
     /** How long a controlled identifier document may be cached, in seconds. */
     public static final long CACHE_SECONDS = 300;

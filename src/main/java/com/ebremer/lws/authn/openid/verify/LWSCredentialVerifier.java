@@ -319,9 +319,7 @@ public class LWSCredentialVerifier {
             // fetches through a client that follows no redirects and resolves only vetted addresses. It
             // keeps the breaker's books itself: what happens here after the fetch — a 404, the wrong
             // media type, a document that does not parse — says nothing about the host's health (R-02).
-            OutboundHttp.Fetched response = OutboundHttp.fetch(sub,
-                    LWSConstants.TURTLE + ", " + LWSConstants.JSON_LD + ";q=0.9, "
-                            + LWSConstants.N_TRIPLES + ";q=0.8, " + LWSConstants.RDF_XML + ";q=0.7", session);
+            OutboundHttp.Fetched response = OutboundHttp.fetch(sub, RdfParsing.ACCEPT, session);
             if (response.status() != 200) {
                 log.debugf("[%s] dereferencing sub <%s> returned HTTP %d", result.getTraceId(), sub,
                         response.status());
@@ -331,24 +329,32 @@ public class LWSCredentialVerifier {
             }
             String contentType = response.contentType();
             String body = response.body();
-            // JSON-LD is processed properly (Jena + Titanium, contexts served from this JAR) so a
-            // conforming document verifies whatever shape it is written in. The compact reader stays
-            // as a fallback for a document whose context this provider does not bundle, which is the
-            // only interpretation it can offer without having read the term definitions.
-            Model model = RdfParsing.parse(body, contentType, sub);
-            if (model == null) {
-                log.debugf("[%s] sub <%s> is JSON-LD this provider cannot process; reading the compact shape",
-                        result.getTraceId(), sub);
-                model = modelFromCompactJsonLd(body, sub);
-            }
-            result.check("subjectDereferenced", true);
-
+            RdfParsing.requireSupported(contentType);
             // CID 1.0: "A controlled identifier document MUST contain an `id` value in the topmost
-            // map", and the suite requires that id to equal the subject. On the JSON-LD path
-            // modelFromCompactJsonLd has already refused a document with no id or a different one; on
-            // the RDF path the base IRI is the subject, so this asserts the graph really describes it
-            // rather than some unrelated resource that merely happens to be served from that URL.
-            boolean describesSubject = model.contains(model.createResource(sub), null, (org.apache.jena.rdf.model.RDFNode) null);
+            // map", and the suite requires that id to equal the subject. For a JSON document that is
+            // read from the JSON itself, before any RDF processing (R-18): the graph only shows that
+            // *some* node is the subject, which a document about somebody else satisfies by nesting one
+            // under alsoKnownAs. An RDF syntax has no topmost map, so there the graph must describe sub.
+            boolean json = RdfParsing.isJsonLd(contentType, body);
+            boolean describesSubject = !json || sub.equals(RdfParsing.topmostId(body, sub));
+            Model model = null;
+            if (describesSubject) {
+                // JSON-LD is processed properly (Jena + Titanium, contexts served from this JAR) so a
+                // conforming document verifies whatever shape it is written in. The compact reader stays
+                // as a fallback for a document whose context this provider does not bundle, which is the
+                // only interpretation it can offer without having read the term definitions.
+                model = RdfParsing.parse(body, contentType, sub);
+                if (model == null) {
+                    log.debugf("[%s] sub <%s> is JSON-LD this provider cannot process; reading the compact shape",
+                            result.getTraceId(), sub);
+                    model = modelFromCompactJsonLd(body, sub);
+                }
+                describesSubject = json
+                        || model.contains(model.createResource(sub), null, (org.apache.jena.rdf.model.RDFNode) null);
+            }
+            // Fetched and read either way: a document about somebody else is a different problem from
+            // one that could not be fetched, with a different fix, and is reported as that.
+            result.check("subjectDereferenced", true);
             result.check("subjectIdMatches", describesSubject);
             if (!describesSubject) {
                 result.error("The document at 'sub' <" + sub + "> is not a controlled identifier document for it");
@@ -407,25 +413,23 @@ public class LWSCredentialVerifier {
         Property service = model.createProperty(LWSConstants.DID_SERVICE);
         Property serviceEndpoint = model.createProperty(LWSConstants.DID_SERVICE_ENDPOINT);
 
-        String id = firstNonBlank(text(doc, "id"), text(doc, "@id"), null);
-        if (id == null) {
-            throw new IOException("controlled identifier document has no 'id'");
-        }
-        if (!id.equals(sub)) {
+        if (!sub.equals(RdfParsing.topmostId(body, sub))) {
             throw new IOException("controlled identifier document 'id' does not equal the subject");
         }
-        Resource subject = model.createResource(id);
+        Resource subject = model.createResource(sub);
 
         JsonNode services = doc.get("service");
         if (services != null) {
             for (JsonNode svc : services.isArray() ? services : List.of(services)) {
                 Resource node = model.createResource();
-                String type = firstNonBlank(text(svc, "type"), text(svc, "@type"), null);
-                if (type != null) {
+                // Every type and every endpoint, as the JSON-LD processor would read them: a type array
+                // used to read as "" and only the first endpoint counted, so one unbundled context
+                // added to an otherwise valid document changed the verdict (R-19).
+                JsonNode types = svc.has("type") ? svc.get("type") : svc.get("@type");
+                for (String type : strings(types)) {
                     node.addProperty(RDF.type, model.createResource(type));
                 }
-                String endpoint = endpointValue(svc.get("serviceEndpoint"));
-                if (endpoint != null) {
+                for (String endpoint : strings(svc.get("serviceEndpoint"))) {
                     node.addProperty(serviceEndpoint, model.createResource(endpoint));
                 }
                 subject.addProperty(service, node);
@@ -434,30 +438,20 @@ public class LWSCredentialVerifier {
         return model;
     }
 
-    private static String endpointValue(JsonNode endpoint) {
-        if (endpoint == null) {
-            return null;
+    /** The IRIs a value holds: a string, an {@code {"@id": …}} object, or an array of either. */
+    private static List<String> strings(JsonNode value) {
+        List<String> out = new java.util.ArrayList<>();
+        if (value == null) {
+            return out;
         }
-        if (endpoint.isTextual()) {
-            return endpoint.asText();
+        for (JsonNode element : value.isArray() ? value : List.of(value)) {
+            if (element.isTextual() && !element.asText().isBlank()) {
+                out.add(element.asText());
+            } else if (element.isObject() && element.path("@id").isTextual()) {
+                out.add(element.get("@id").asText());
+            }
         }
-        if (endpoint.isObject() && endpoint.hasNonNull("@id")) {
-            return endpoint.get("@id").asText();
-        }
-        if (endpoint.isArray() && !endpoint.isEmpty()) {
-            return endpointValue(endpoint.get(0));
-        }
-        return null;
-    }
-
-    private static String firstNonBlank(String a, String b, String fallback) {
-        if (a != null && !a.isBlank()) {
-            return a;
-        }
-        if (b != null && !b.isBlank()) {
-            return b;
-        }
-        return fallback;
+        return out;
     }
 
     /**

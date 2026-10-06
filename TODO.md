@@ -575,7 +575,7 @@ is needed.
   `requiresIssuedAtAndAudience`, `rejectsAnIssuedAtInTheFutureOrAfterExpiry`; the self-signed suite's
   `anIssuedAtInTheFutureOrAfterExpiryIsRejected`. All fail against the previous code.
 
-- [ ] **R-18 · "a valid controlled identifier document with an `id` value equal to the subject identifier"
+- [x] **R-18 · "a valid controlled identifier document with an `id` value equal to the subject identifier"
   is only loosely checked, in both JWT suites.** `Medium` · spec-conformance · `S` · *demonstrated*
   On the JSON-LD/RDF path the check is "some triple has `sub` as its subject"
   (`LWSCredentialVerifier.java:293-303`): a document whose topmost `id` is `https://other.example/doc`,
@@ -588,8 +588,18 @@ is needed.
   **Do:** for JSON(-LD) bodies read the topmost `id`/`@id` from the raw JSON (resolved against the
   document URL) and require it to equal `sub` before RDF processing; report `subjectIdMatches` from what
   was actually compared; keep "fetch failed" and "wrong document" as distinct checks.
+  **Done.** `RdfParsing.topmostId` reads the topmost map's `id`/`@id` from the JSON and resolves it
+  against the document URL; both verifiers compare it with `sub` before any RDF processing, for every
+  JSON body (`application/ld+json`, `application/cid`, `application/json`, or sniffed). Turtle,
+  N-Triples and RDF/XML keep the graph check — they have no topmost map. A fetched document about
+  somebody else is `subjectDereferenced: true, subjectIdMatches: false` in both suites; the self-signed
+  verifier catches `SubjectIdMismatchException` for that, so its compact path reports it the same way,
+  and its compact reader resolves the `id` as `topmostId` does. `resolveReference` moved to
+  `RdfParsing` so both share one. Tests: the new `CidDocumentReadingTest` serves documents to both
+  verifiers from a local server — the review's `alsoKnownAs` nesting, a bare `@graph`, Turtle about
+  somebody else — and fails against the previous code; `RdfParsingTest.readsTheTopmostId`.
 
-- [ ] **R-19 · Valid CIDs with no `@context`, or served as `application/cid`, are refused.**
+- [x] **R-19 · Valid CIDs with no `@context`, or served as `application/cid`, are refused.**
   `Medium` · spec-conformance/interop · `S` · *demonstrated*
   CID 1.0 §4.2.1: "Implementations that do not intend to use JSON-LD MAY choose to not include an
   `@context`", and a consumer "MUST inject or append an `@context` property with a value of
@@ -603,6 +613,15 @@ is needed.
   **Do:** inject the CID context when `@context` is absent; treat `application/cid` as JSON-LD and add it
   (and `application/json`) to `Accept`; make the fallback handle `type`/`serviceEndpoint` arrays like the
   processor path. Optionally offer `application/cid` from the CID endpoints.
+  **Done, including the option.** `RdfParsing.parseJsonLd` injects `"@context":
+  "https://www.w3.org/ns/cid/v1"` into a topmost map that has none (a document naming its own context
+  is left alone). `application/cid` is read as JSON-LD; `RdfParsing.ACCEPT`, now the one `Accept` both
+  verifiers send, adds it and `application/json`. The OpenID compact reader reads every `type` and
+  every `serviceEndpoint` (string, `{"@id"}` or arrays of either), and the self-signed compact reader a
+  `type` array. `RdfContentNegotiation.SUPPORTED` offers `application/cid` after JSON-LD — the same
+  body, labelled with CID 1.0's name — so `*/*` still gets JSON-LD. Tests in `CidDocumentReadingTest`
+  (context-less documents as `ld+json`, `cid` and `json`; `application/cid`; arrays through the compact
+  reader, with the processor as a control), `RdfParsingTest` and `RdfContentNegotiationTest`.
 
 - [ ] **R-20 · SAML: subject and issuer are not validated as URIs.**
   `Medium` · spec-conformance · `S` · *demonstrated*
