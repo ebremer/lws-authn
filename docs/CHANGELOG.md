@@ -502,6 +502,11 @@ key type. `LwsAuthIT` gains a did:key credential through `/lws-ssi-cid` (Ed25519
 EdDSA provider), and checks that `/lws-ssi-did-key` answers `404`; the removed suite's own tests went
 with it.
 
+**A build without Docker no longer passes CI by skipping the integration test** (R-43).
+`-Dlws.authn.requireDocker=true` makes `LwsAuthIT` fail rather than skip when Docker is unavailable;
+CI sets it, checks that the integration tests completed with none skipped, and uploads the surefire
+and failsafe reports from every run.
+
 ### Documentation
 
 The documentation is now a website, <https://ebremer.github.io/lws-authn/>, built from `docs/`.

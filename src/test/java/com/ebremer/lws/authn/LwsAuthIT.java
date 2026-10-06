@@ -8,7 +8,9 @@
  * endpoints mount, shaded Jena serves/parses RDF, and the OpenID and did:key credentials verify.
  *
  * Requires Docker. Runs in `mvn verify` (failsafe, after the JAR is packaged) and is skipped
- * automatically when Docker is unavailable.
+ * automatically when Docker is unavailable — unless `-Dlws.authn.requireDocker=true` is given, as CI
+ * does, in which case a missing Docker fails the build instead of passing it with every test skipped
+ * (R-43).
  */
 package com.ebremer.lws.authn;
 
@@ -158,8 +160,14 @@ class LwsAuthIT {
 
     @BeforeAll
     void startKeycloak() throws Exception {
-        Assumptions.assumeTrue(DockerClientFactory.instance().isDockerAvailable(),
-                "Docker is required for the Testcontainers integration test");
+        boolean docker = DockerClientFactory.instance().isDockerAvailable();
+        // A skipped suite is a green build: without this, a CI runner whose Docker broke would report
+        // success having tested nothing (R-43).
+        if (!docker && Boolean.getBoolean("lws.authn.requireDocker")) {
+            throw new IllegalStateException("Docker is not available, and lws.authn.requireDocker is set:"
+                    + " LwsAuthIT must run here, not be skipped");
+        }
+        Assumptions.assumeTrue(docker, "Docker is required for the Testcontainers integration test");
         requirePort8080();
         startFixtureServer();
         Testcontainers.exposeHostPorts(fixturePort);

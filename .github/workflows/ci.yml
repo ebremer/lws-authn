@@ -34,8 +34,33 @@ jobs:
       # `mvn verify` packages the shaded provider JAR, then the Failsafe plugin runs LwsAuthIT, which
       # deploys that JAR into a real Keycloak container (the POM's keycloak.version) and exercises every suite. LwsAuthIT
       # binds host port 8080 — see its class javadoc — which is free on a hosted runner.
+      # requireDocker turns "no Docker, every IT skipped" from a green build into a red one (R-43).
       - name: Build and run integration tests
-        run: mvn -B -ntp verify
+        run: mvn -B -ntp verify -Dlws.authn.requireDocker=true
+
+      # Belt to requireDocker's braces: a green build must have run the integration tests, all of them.
+      - name: Assert the integration tests ran
+        run: |
+          set -euo pipefail
+          summary=target/failsafe-reports/failsafe-summary.xml
+          completed=$(sed -n 's:.*<completed>\([0-9]*\)</completed>.*:\1:p' "$summary")
+          skipped=$(sed -n 's:.*<skipped>\([0-9]*\)</skipped>.*:\1:p' "$summary")
+          echo "integration tests completed: $completed, skipped: $skipped"
+          if [ "${completed:-0}" -eq 0 ] || [ "${skipped:-0}" -ne 0 ]; then
+            echo "::error::LwsAuthIT did not run in full ($completed completed, $skipped skipped)."
+            exit 1
+          fi
+
+      # The reports, pass or fail, so what ran — and what did not — can be seen from outside (R-43).
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lws-authn-test-reports
+          path: |
+            target/surefire-reports/
+            target/failsafe-reports/
+          if-no-files-found: warn
 
       - name: Upload provider JAR
         if: success()

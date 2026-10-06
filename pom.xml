@@ -34,6 +34,9 @@
         <caffeine.version>3.2.4</caffeine.version>
         <commons-collections4.version>4.5.0</commons-collections4.version>
         <commons-codec.version>1.22.0</commons-codec.version>
+        <!-- Set to true (CI does) to make LwsAuthIT fail, rather than skip, when there is no Docker
+             (R-43): `mvn verify -Dlws.authn.requireDocker=true`. -->
+        <lws.authn.requireDocker>false</lws.authn.requireDocker>
     </properties>
 
     <!-- ==================================================================================== -->
@@ -362,6 +365,7 @@
                         <lws.authn.providerJar>${project.build.directory}/${project.build.finalName}.jar</lws.authn.providerJar>
                         <!-- The server LwsAuthIT deploys into: always the version the provider compiles against. -->
                         <lws.authn.keycloakImage>quay.io/keycloak/keycloak:${keycloak.version}</lws.authn.keycloakImage>
+                        <lws.authn.requireDocker>${lws.authn.requireDocker}</lws.authn.requireDocker>
                     </systemPropertyVariables>
                 </configuration>
                 <executions>

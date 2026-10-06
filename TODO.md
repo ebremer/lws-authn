@@ -1090,13 +1090,19 @@ is needed.
   `requireUpperBoundDeps`; add a CI step that fails on unrelocated `com/google/gson` or
   `org/apache/commons/{io,lang3}` entries in the JAR.
 
-- [ ] **R-43 · The integration test skips silently without Docker; nothing proves it ran**
+- [x] **R-43 · The integration test skips silently without Docker; nothing proves it ran**
   (absorbs **S-15**). `Low` · ci/test · `S` · *verified*
   `LwsAuthIT.java:151-152` uses `assumeTrue(isDockerAvailable)`, so a broken Docker is 24 skipped tests
   and a green build, and failsafe reports are not uploaded — so S-15 ("run the two new tests in CI") still
   cannot be confirmed from outside, although `master` CI is green at `edda85b`. **Do:** a
   `-Dlws.authn.requireDocker` (set in CI) that fails instead of skipping, or assert `skipped=0` in
   `target/failsafe-reports`; upload the reports.
+  **Done**, both. `-Dlws.authn.requireDocker=true` (a POM property, `false` by default, passed to
+  Failsafe) makes `LwsAuthIT` throw in `@BeforeAll` instead of assuming; checked here, where there is no
+  Docker daemon: one error and `BUILD FAILURE`, where the default still skips. CI sets it, then reads
+  `failsafe-summary.xml` and fails unless `completed > 0` and `skipped = 0`, and uploads the surefire
+  and failsafe reports whatever the outcome (`if: always()`). S-15 is confirmed by the next CI run's
+  reports, not from here.
 
 - [ ] **R-44 · Test gaps: rules with no negative test.** `Medium` · test-gap · `M` · *verified (grep)*
   A verifier that wrongly *accepts* is the silent failure mode; each rule below can be deleted today
