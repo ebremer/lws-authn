@@ -100,7 +100,7 @@ serving, parsing and SPARQL — run it after touching dependencies.
 
 ### Tests
 
-`mvn test` runs 317 unit tests. `mvn verify` additionally runs 28 in `LwsAuthIT`, which needs Docker
+`mvn test` runs 346 unit tests. `mvn verify` additionally runs 30 in `LwsAuthIT`, which needs Docker
 and is skipped without it.
 
 **`LwsAuthIT` binds host port 8080 and cannot run in parallel with itself.** The OpenID verifier
