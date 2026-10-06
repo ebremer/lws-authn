@@ -1,3 +1,7 @@
+# Copyright Erich Bremer.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Dependabot keeps the two things CI cannot check for itself up to date: the Maven dependencies that
 # end up inside the shaded provider JAR, and the pinned action SHAs in .github/workflows.
 #

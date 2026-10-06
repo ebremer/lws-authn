@@ -1,3 +1,7 @@
+# Copyright Erich Bremer.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 name: CI
 
 # A push to a branch with an open pull request used to run every job twice, once for each event (R-40).

@@ -49,4 +49,5 @@ Report a vulnerability by email, not in an issue — see the
 
 ## License
 
-Apache-2.0 — see [`LICENSE`](LICENSE). Every source file carries `SPDX-License-Identifier: Apache-2.0`.
+Apache-2.0 — see [`LICENSE`](LICENSE). Every source file — the Java, the scripts, the POM, the Docker files, the workflows and the
+`META-INF/services` registrations — carries `SPDX-License-Identifier: Apache-2.0`.

@@ -10,10 +10,11 @@ nav_order: 5
 each suite enforces, which are deferred to the relying party, and what is supported. It is written for
 someone integrating against this provider, who needs to know what a `"valid": true` actually asserts.
 
-**Last reviewed:** 30 September 2026, against the specifications as they stood on 28 September 2026
-(`w3c/lws-protocol` at `9b03b32`) and the code in this tree. No normative text changed after the
-previous review of 22 September 2026, which was against `3ddc642`: the four commits since touch only the
-discontinued `did:key` suite's snapshot, the README and the wiki. Earlier review: 3 September 2026.
+**Last reviewed:** 6 October 2026, against the specifications as they stood on 5 October 2026
+(`w3c/lws-protocol` at `ef02548`) and the code in this tree. No authentication text changed after the
+review of 30 September 2026, which was against `9b03b32`: the one commit since (`ef02548`, w3c/lws-protocol#255)
+adds a JSON Patch baseline for `PATCH`, which is storage-side. Earlier reviews: 22 September (against
+`3ddc642`) and 3 September 2026. The 6 October review's findings are the R-items of `TODO.md`.
 
 Item ids like **P0-3** refer to [`TODO.md`](https://github.com/ebremer/lws-authn/blob/master/TODO.md), which carries the reasoning and the history.
 Where this document says a check exists, it names the field that appears in the `checks` object of the
@@ -26,7 +27,7 @@ verify response, so a claim here can be tested against a real response.
 These are **W3C Working Drafts**, not Recommendations. Conformance here means "matches the published
 normative requirements", not a Rec-level conformance certificate — the text can still change.
 
-| Document | Latest published version, 28 September 2026 | Editor's draft, as reviewed |
+| Document | Latest published version, 5 October 2026 | Editor's draft, as reviewed |
 |---|---|---|
 | Linked Web Storage Protocol 1.0 (core) | W3C Working Draft **21 September 2026** | same text — adds authorization server metadata `subject_identifier_types_supported`, which does not apply here (see *Known divergences*) |
 | LWS 1.0 Authn Suite: Self-signed Identity (Controlled Identifiers) | W3C Working Draft **21 September 2026** | same text — **"designed to work with subject identifiers that use HTTPS URIs as well as DID URIs"** |
@@ -346,7 +347,9 @@ can mint credentials for an identity they should not control. `INSTALL.md` step 
 
 ## Verification
 
-`mvn clean verify` — 346 unit tests plus 30 in `LwsAuthIT` against a real Keycloak 26.8.0 container.
+`mvn clean verify` — 419 unit tests plus 33 in `LwsAuthIT` against a real Keycloak 26.8.0 container,
+and 5 that read the built JAR. Every rule the verifiers apply has a test that fails if the rule is
+deleted (R-44).
 Roughly half the integration tests assert a *rejection*, including a full third-party OpenID Provider
 fixture broken one document at a time, because a verifier that wrongly rejects gets reported by its
 users and one that wrongly accepts does not.

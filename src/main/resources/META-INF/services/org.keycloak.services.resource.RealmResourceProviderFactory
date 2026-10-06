@@ -1,3 +1,7 @@
+# Copyright Erich Bremer.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 com.ebremer.lws.authn.openid.resource.LWSResourceProviderFactory
 com.ebremer.lws.authn.ssicid.resource.SsiCidResourceProviderFactory
 com.ebremer.lws.authn.saml.resource.SamlResourceProviderFactory

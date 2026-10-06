@@ -486,7 +486,8 @@ each may reject a document that used to verify. Check your issuers' documents be
   server ships: 26.7.4 bundles commons-codec 1.21.0 and commons-collections4 4.5.0, not the 1.11 and 4.4
   its POMs declare. The bundling decisions are unchanged.
 - **Version `0.3.0-SNAPSHOT`.** The JAR is `lws-authn-0.3.0-SNAPSHOT.jar`, so a build of this tree cannot
-  be mistaken for the 0.2.0 release (commit `e539362`, which is untagged — see *Versioning*).
+  be mistaken for the 0.2.0 release (commit `e539362`, tagged `lws-authn-0.2.0` since 6 October — see
+  *Versioning*).
   `LwsAuthIT` now takes the JAR's path from Failsafe and CI uploads `target/lws-authn-*.jar`, so neither
   needs editing at the next release.
 - The multibase/did:key codec moved from `ssididkey` to a new `did` package, since the self-signed CID
@@ -537,7 +538,17 @@ each may reject a document that used to verify. Check your issuers' documents be
 
 ### Tests
 
-179 unit tests (was 144), 24 in `LwsAuthIT` (was 23). New: DID syntax, the did:web URL mapping against
+**419 unit tests, 33 in `LwsAuthIT` and 5 in `ShadedJarContentsIT`** (0.2.0 had 144 and 23). Every
+rule a verifier applies now has a test that fails when the rule is deleted (R-44), each checked by
+breaking the rule: the OpenID rules decided after a fetch, against a local server playing the provider
+and the subject's host; the self-signed CID rules at the `verify()` level, and `did:web` resolution,
+which had no test at all; every SAML check by name, and the signed-Response branch, which had none;
+the access decisions (secret mode, the role, the rate limit's `429` without a challenge) and the shared
+checks. `LwsAuthIT` now mints through `SelfIssuedJwts`, verifies ES384, ES512 and all six RSA
+algorithms through Keycloak's own providers, and sends a signed SAML Response checked against a
+certificate in the request.
+
+Earlier in this cycle: 179 unit tests (from 144), 24 in `LwsAuthIT` (from 23). New: DID syntax, the did:web URL mapping against
 the method's own examples, did:key expansion against the did:key Method's worked example, the multibase
 codec against the did:key and CID 1.0 test vectors, every CID 1.0 method rule above on both parsing
 paths, and did:key credentials verified end to end through the self-signed CID suite for every supported
@@ -675,14 +686,20 @@ each suite.
 
 ## Versioning
 
-**0.2.0 is the first release whose version actually identifies it.** Until this release `pom.xml` read
-`0.1.0` while the `lws-authn-0.1.0` tag pointed at the first commit, so the JAR this tree produced was
+**0.2.0 was the first release whose version actually identified it.** Until that release `pom.xml` read
+`0.1.0` while the `lws-authn-0.1.0` tag pointed at the first commit, so the JAR the tree produced was
 *named* `lws-authn-0.1.0.jar` without being the 0.1.0 release — harmless while the only consumer was
-the author, a trap the moment two builds existed on one machine. The build now produces
-`lws-authn-0.2.0.jar`, so a deployed artifact can be identified by its filename again.
+the author, a trap the moment two builds existed on one machine. Since 0.2.0 the build produces
+`lws-authn-<version>.jar` — `lws-authn-0.2.0.jar` for that release, `lws-authn-0.3.0-SNAPSHOT.jar` for
+this tree — so a deployed artifact can be identified by its filename again.
 
 **Identifying an already-deployed instance**, which by definition predates this fix and is named
 `lws-authn-0.1.0.jar` whichever code it holds: send an anonymous `POST …/verify`. A `401` carrying a
 `WWW-Authenticate` header is 0.2.0; a verification result is the older code.
 
-Tag each release commit `lws-authn-<version>` so the tag, the POM and the JAR filename agree.
+Tag each release commit `lws-authn-<version>` so the tag, the POM and the JAR filename agree: 0.1.0 is
+`cf0c06b`, 0.2.0 is `e539362` (tagged on 6 October 2026, R-50).
+
+[Unreleased]: https://github.com/ebremer/lws-authn/compare/lws-authn-0.2.0...HEAD
+[0.2.0]: https://github.com/ebremer/lws-authn/compare/lws-authn-0.1.0...lws-authn-0.2.0
+[0.1.0]: https://github.com/ebremer/lws-authn/releases/tag/lws-authn-0.1.0

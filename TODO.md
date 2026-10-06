@@ -1136,7 +1136,7 @@ is needed.
   and failsafe reports whatever the outcome (`if: always()`). S-15 is confirmed by the next CI run's
   reports, not from here.
 
-- [ ] **R-44 · Test gaps: rules with no negative test.** `Medium` · test-gap · `M` · *verified (grep)*
+- [x] **R-44 · Test gaps: rules with no negative test.** `Medium` · test-gap · `M` · *verified (grep)*
   A verifier that wrongly *accepts* is the silent failure mode; each rule below can be deleted today
   without a test failing.
   - **OpenID:** tampered signature (`signatureValid`); expired or missing `exp` (`notExpired`); wrong
@@ -1163,6 +1163,65 @@ is needed.
     addresses, unrequested RDF syntaxes or nesting depth.
   - Plus a regression test for each P0/P1 item as it is fixed. `LwsAuthIT` re-implements JWT minting at
     18 sites instead of using `testsupport/SelfIssuedJwts`.
+  **Done.** 73 unit tests (346 → 419) and 3 integration tests (30 → 33). Each rule was checked by deleting
+  it in the main code and watching a test fail. Where a deletion survived because a later check refused
+  the same credential, the test was tightened to assert the specific check or message. What P0–P2 had
+  already covered was left alone.
+  - **OpenID** (`OpenIdVerifierRulesTest`, 25; `ControlledIdentifierDocumentTest`, 5). A local server
+    plays the provider and the subject's host, and each test starts from a credential that verifies, then
+    breaks one thing: `signatureValid` (claims changed, another key under the same `kid`, a flipped bit);
+    `notExpired` (expired, no `exp`, future `nbf`); `subjectDereferenced` (404/410/500; a Turtle or
+    JSON-LD body served as text/html, text/plain or octet-stream); `subjectIdMatches` (Turtle and the
+    compact fallback); `openIdProviderServiceLocated` (another issuer, `iss/`, the service on another
+    node, a wrong type, through the processor and the fallback); `jwksResolved`, `issuerDiscoveryMatches`,
+    `algorithmAdvertised`, `authorizedPartyMatchesClient` with a correct `aud`; and valid credentials
+    through Turtle, JSON-LD and the compact fallback. The served document reads back as the same graph in
+    every syntax.
+  - **Self-signed CID** (`SelfSignedCidVerifyRulesTest`, 11; `DidWebResolutionTest`, 6). These cover
+    `none` and `crit`; missing `exp`, `iat` and `aud`; a future `nbf`; `verificationMethodActive` at the
+    `verify()` level; an HTTPS subject answering non-200, an unreadable type or an unparseable body, or
+    failing without echoing its cause. `did:web`: non-200 including 3xx, a non-DID media type, a non-object
+    body, a failed fetch, and an `id` that is another DID or missing. These need a seam, because a
+    `did:web` is always `https://` and the guarded client trusts only the JVM's CAs:
+    `SelfSignedCidVerifier.fetchingWith(Fetcher)`, package-private and per instance, used only by tests.
+  - **SAML** (`SamlVerifierRulesTest`, 17; fixtures moved to `SamlFixtures`). The rules covered:
+    - `signaturePresent`;
+    - `signatureCoversSignedElement` (wrong reference URI, `""`, two signatures), and the signed-Response
+      branch, accepted when valid and refused when altered, untrusted, or covering only the assertion;
+    - `singleAssertion` (none; one nested in `<Advice>`);
+    - both validity windows, and unparseable timestamps in every position;
+    - an empty NameID, and Subject structure (zero or two NameIDs or confirmations);
+    - missing `SubjectConfirmationData`;
+    - `audienceMatched` and `audiencePresent`, including no expected audience;
+    - a not-yet-valid certificate.
+
+    Found, not changed: a signed element without an `ID` is refused by an exception while the signature is
+    read, so `coverageProblem`'s "no ID" message cannot be reached and no check is recorded.
+  - **Access control and shared** (9 tests). These cover:
+    - secret mode, where the exact secret is admitted and nothing else, and a missing or non-Bearer header
+      gets the bare challenge;
+    - `429 slow_down` with `Retry-After` and no `WWW-Authenticate`;
+    - `403 insufficient_scope` when the role is not held, or the realm lacks it;
+    - the per-user bucket following the user;
+    - `withinValidityWindow` at both skew edges for `exp` and `nbf`, and the configured skew;
+    - pool exhaustion, which waits only the pool timeout and does not open the breaker;
+    - the nesting limit exact at 64/65 in JSON and Turtle.
+
+    This needed `VerifyAccess.checkAuthenticated(session, user)`, a pure extraction of what bearer mode
+    does after the token is accepted. Already covered: `typeIsJwtOrAbsent`, slow and endless bodies,
+    NAT64/6to4/compatible addresses, and unrequested syntaxes. RDF/XML needs no depth guard, because Jena
+    reads it without recursion.
+  - **`LwsAuthIT`** (+3). The integration test now mints through `SelfIssuedJwts`: 17 sites, and the HS256
+    forgery takes its signing input from there. `SelfIssuedJwts` gained RSA, RS/PS 256–512, and EC/RSA
+    public JWKs. New cases verify:
+    - did:key ES384 and ES512;
+    - one RSA key under all six RS/PS algorithms, with a PKCS#1 signature under PS256 refused;
+    - a signed SAML Response, signed on the Response and on the Assertion, against a certificate in the
+      request, with tampered and other-key variants refused.
+
+    The fixtures were checked through the JDK path in a throwaway unit test. **None of the new IT cases has
+    run** (no Docker here). PS\* inside Keycloak goes through BouncyCastle's PSS. Expect CI's first run to
+    be the real check.
 
 - [x] **R-45 · The SBOM does not describe the JAR.** `Medium` · build · `S` · *verified*
   `target/bom.json` lists 208 components, all `required`; about 180 are Keycloak's `provided` tree
@@ -1253,11 +1312,15 @@ is needed.
   bcpkix 1.86, commons-codec 1.22.1 (the 26.8.0 server's version; a patch ahead of Jena's), and
   jboss-logging 3.6.3 (`provided`, the server's). The IT's new testcontainers-keycloak has not run here.
 
-- [ ] **R-50 · Tag the 0.2.0 release** (carried forward from **S-13**). `Low` · release · `S`
+- [x] **R-50 · Tag the 0.2.0 release** (carried forward from **S-13**). `Low` · release · `S`
   Still only `lws-authn-0.1.0` exists, locally and on `origin`; `e539362` (the 0.2.0 bump, the build
   deployed to both hellion servers) is untagged. Left for the maintainer.
+  **Done locally, not pushed.** `lws-authn-0.2.0` is a lightweight tag on `e539362`, like
+  `lws-authn-0.1.0`. That commit's POM says 0.2.0 and its date matches the changelog's. To publish it:
+  `git push origin lws-authn-0.2.0`. The changelog's new link references point at the tag, so they work
+  once it is pushed.
 
-- [ ] **R-51 · Documentation corrections.** `Low` · docs · `S`
+- [x] **R-51 · Documentation corrections.** `Low` · docs · `S`
   - `COMPLIANCE.md`: re-date the review to the 5 October baseline; remove or qualify the claims this
     review found overstated — `subjectIdMatches` "on *both* the RDF and the JSON-LD path" (R-18), SAML
     `NameID`/`Issuer` as core subject/issuer URIs (R-20), `notReplayed` "optional" and divergence 3's
@@ -1271,6 +1334,22 @@ is needed.
     Keep-a-Changelog link references.
   - `README.md` says every source file carries SPDX; `scripts/*.sh` and the workflows do not.
   - Document `LWS_AUTHN_HTTP_MODE` (R-35).
+  **Done.** Much of this had been fixed by the items it names. When each was fixed, it corrected its own
+  claim in `COMPLIANCE.md`: R-18, R-20, R-34 (divergence 3), R-16 and R-39 (divergence 2), R-25
+  (divergence 5), R-29 (redirects), and R-32 (divergence 11). R-23 fixed the `methodId` comment, and R-35
+  documented `LWS_AUTHN_HTTP_MODE`. Each was re-read against the code; all still hold. Made here:
+  - `COMPLIANCE.md` is re-dated to the 5 October baseline (`ef02548`).
+  - Test counts are updated in `COMPLIANCE.md`, `build.md`, `CONTRIBUTING.md` and the changelog, whose
+    *Tests* section still quoted 179.
+  - `LWSCredentialVerifier`'s three remaining §3.1.3.7 step numbers are now phrased by content. The
+    `azp` rule is now attributed to the LWS suite, since errata set 2 made it a recommendation in Core.
+  - The JSON-LD note now describes the processor with the compact fallback.
+  - The POM's "bundled 1.20" is now 1.22.1, and so is its claim that Keycloak ships an older commons-codec.
+  - In the changelog, *Versioning* no longer says the build "now produces `lws-authn-0.2.0.jar`". It
+    names both release commits and has Keep a Changelog link references.
+  - SPDX headers are added to the POM, both GitHub YAML files, the two `META-INF/services` files, the
+    docs site's `Gemfile` and `_config.yml`, and (under R-48) the scripts. The README now lists what
+    "every source file" covers.
 
 ---
 

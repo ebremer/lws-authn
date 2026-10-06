@@ -1,9 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Copyright Erich Bremer.
+
+  SPDX-License-Identifier: Apache-2.0
+-->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <groupId>com.ebremer</groupId>
     <artifactId>lws-authn</artifactId>
-    <!-- Unreleased work towards 0.3.0; 0.2.0 is the latest release (commit e539362). -->
+    <!-- Unreleased work towards 0.3.0; 0.2.0 is the latest release (commit e539362, tag lws-authn-0.2.0). -->
     <version>0.3.0-SNAPSHOT</version>
     <packaging>jar</packaging>
 
@@ -548,9 +553,10 @@
                  its transitive libraries) into a single, self-contained provider JAR.
 
                  commons-codec is RELOCATED: Apache Jena 6 requires commons-codec >= 1.19 (for
-                 MurmurHash3, used even by the Turtle parser), but Keycloak ships an older copy on its
-                 runtime classpath. Relocating guarantees Jena binds to the bundled 1.20 regardless of
-                 Keycloak's version, with no classpath conflict in either direction. -->
+                 MurmurHash3, used even by the Turtle parser); Keycloak's POMs declare far older ones,
+                 and its server ships whatever that release does (26.7.4 had 1.21.0). Relocating
+                 guarantees Jena binds to the bundled 1.22.1 regardless of Keycloak's version, with no
+                 classpath conflict in either direction. -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>

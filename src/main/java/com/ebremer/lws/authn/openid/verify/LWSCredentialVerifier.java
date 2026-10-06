@@ -14,8 +14,8 @@
  *      serviceEndpoint equals the 'iss' claim.
  *   5. Perform OpenID Connect Discovery on 'iss' and locate the signing JWK.
  *   6. Validate the JWT signature and the active (exp/nbf) window.
- *   7. Apply OpenID Connect Core 3.1.3.7 steps 3-5 (aud/azp) against the expected client and
- *      audience, when the caller supplies them.
+ *   7. Apply OpenID Connect Core §3.1.3.7's audience rules (aud must contain the client; azp must be
+ *      it) against the expected client and audience, when the caller supplies them.
  *
  * RDF parsing of the (possibly arbitrary-syntax) controlled identifier document uses Apache Jena.
  */
@@ -98,11 +98,13 @@ public class LWSCredentialVerifier {
 
     /**
      * @param credential       the ID Token
-     * @param expectedClientId the relying party's own client identifier. When supplied, OpenID Connect
-     *                         Core 3.1.3.7 steps 3-5 are enforced: {@code aud} must contain it and
-     *                         {@code azp} must equal it. The LWS suite says the JWT "MUST be validated
-     *                         as described by OpenID Connect Core Section 3.1.3.7", and those steps are
-     *                         what stops a token minted for one relying party being replayed at another.
+     * @param expectedClientId the relying party's own client identifier. When supplied, {@code aud} must
+     *                         contain it, as OpenID Connect Core §3.1.3.7 requires, and {@code azp} must
+     *                         equal it — which Core, since errata set 2, only recommends, but the LWS
+     *                         suite makes {@code azp} the client identifier. The suite says the JWT
+     *                         "MUST be validated as described by OpenID Connect Core Section 3.1.3.7",
+     *                         and these rules are what stop a token minted for one relying party being
+     *                         replayed at another.
      * @param expectedAudience an additional audience the credential must be restricted to, typically the
      *                         authorization server this verifier speaks for
      */
@@ -378,8 +380,9 @@ public class LWSCredentialVerifier {
     /**
      * Dereferences the subject URL and parses the returned controlled identifier document into a Jena
      * model. Turtle is preferred (the WebID/Solid norm and the syntax this extension serves);
-     * N-Triples and RDF/XML are parsed with Jena RIOT; JSON-LD is interpreted directly (see
-     * {@link #modelFromCompactJsonLd}).
+     * N-Triples and RDF/XML are parsed with Jena RIOT; JSON-LD goes through Jena's JSON-LD processor,
+     * with contexts served from this JAR ({@link RdfParsing#parse}), and {@link #modelFromCompactJsonLd}
+     * reads it only when its context is not one this provider bundles.
      */
     private Model dereference(String sub, VerificationResult result) {
         try {
@@ -581,7 +584,7 @@ public class LWSCredentialVerifier {
             String alg = header.getRawAlgorithm();
             // Discovery 1.0 §3: id_token_signing_alg_values_supported is the "list of the JWS signing
             // algorithms (alg values) supported by the OP for the ID Token". An ID Token in any other
-            // was not signed the way this OP signs them (R-27; Core §3.1.3.7 step 7).
+            // was not signed the way this OP signs them (R-27; Core §3.1.3.7 on the expected alg).
             JsonNode advertised = config.get("id_token_signing_alg_values_supported");
             if (advertised != null && advertised.isArray()) {
                 boolean listed = false;

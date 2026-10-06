@@ -1,1 +1,5 @@
+# Copyright Erich Bremer.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 com.ebremer.lws.authn.openid.LWSSubMapper
