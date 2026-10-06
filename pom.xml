@@ -34,7 +34,7 @@
         <slf4j.version>2.0.18</slf4j.version>
         <jakarta-json.version>2.0.1</jakarta-json.version>
         <error-prone-annotations.version>2.49.0</error-prone-annotations.version>
-        <protobuf.version>4.35.0</protobuf.version>
+        <protobuf.version>4.36.2</protobuf.version>
         <!-- Base package for relocated third-party code (see the shade plugin below). -->
         <shade.base>com.ebremer.lws.authn.shaded</shade.base>
         <!-- Versions Jena 6.2.0 declares for libraries that carry behaviour and that Keycloak also
