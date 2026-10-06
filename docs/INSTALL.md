@@ -323,6 +323,10 @@ We wire the environment variable into the systemd unit in the next steps. For a 
 where the server can't reach its own public IP, set it to your hostname (and/or `127.0.0.1`); leave
 it empty otherwise.
 
+Every fetch is **https**: a subject, issuer or `jwks_uri` on plain `http` is refused, because anyone on
+the network path could substitute its keys. An allow-listed host is the one exception — so a server
+that reaches itself as `http://127.0.0.1:8080` works once that address is on the list.
+
 The guard is installed as the **DNS resolver** of the HTTP client the verifiers use, not as a separate
 check in front of it, so the addresses it approves are exactly the addresses connected to — there is no
 second lookup for a hostile name server to poison. That client also refuses to follow redirects.

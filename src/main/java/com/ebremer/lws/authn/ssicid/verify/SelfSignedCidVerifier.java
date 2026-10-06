@@ -49,6 +49,7 @@ import com.ebremer.lws.authn.jose.JwsSignatures;
 import com.ebremer.lws.authn.jose.KeyIdFragment;
 import com.ebremer.lws.authn.jose.PublicJwk;
 import com.ebremer.lws.authn.net.OutboundHttp;
+import com.ebremer.lws.authn.net.SsrfGuard;
 import com.ebremer.lws.authn.rdf.RdfParsing;
 import com.ebremer.lws.authn.verify.Trace;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -354,6 +355,13 @@ public class SelfSignedCidVerifier {
             result.check("subjectDereferenced", true);
             result.check("subjectIdMatches", true);
             return methods;
+        } catch (SsrfGuard.InsecureSchemeException insecure) {
+            // The suite works with "subject identifiers that use HTTPS URIs as well as DID URIs"; over
+            // plain http anyone on the network path could substitute the subject's keys (R-07).
+            log.debugf("[%s] sub <%s> is plain http: %s", result.getTraceId(), sub, insecure.getMessage());
+            result.check("subjectDereferenced", false);
+            result.error("'sub' <" + sub + "> is neither an https URL nor a DID");
+            return null;
         } catch (RdfParsing.UnsupportedSyntaxException wrongSyntax) {
             // Distinguished from the generic failure below because it is actionable and gives nothing
             // away: the media type is one the remote server chose to advertise publicly, and naming it

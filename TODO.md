@@ -314,7 +314,7 @@ is needed.
   covers each shape for both properties (`aRevocationThatIsNotAStringIsNotIgnored`,
   `aRevocationInAnotherShapeOfOneDateIsRead`); both fail against the previous code.
 
-- [ ] **R-07 · Plain `http` is accepted for every key-bearing fetch.**
+- [x] **R-07 · Plain `http` is accepted for every key-bearing fetch.**
   `Medium` · security/spec-conformance · `S` · *verified*
   `net/SsrfGuard.java:68` allows `http` and `https`; neither verifier checks the scheme of `sub`, `iss`,
   the discovery URL or `jwks_uri`. OpenID Connect Core §2: `iss` "is a case-sensitive URL using the
@@ -325,6 +325,18 @@ is needed.
   **Do:** require `https` for all four in both suites, and require `iss` to have no query or fragment;
   allow `http` only for hosts in `allowed-internal-hosts` (the demos and `LwsAuthIT` need it) and say so
   in `hardening.md`.
+  **Done.** The rule is enforced where every fetch is checked: `SsrfGuard.verify` refuses plain `http`
+  to a host that is not allow-listed, before any lookup, with `InsecureSchemeException` (a
+  `BlockedException`); `secureOrAllowListed` states the rule once. That covers `sub` in both suites, the
+  discovery URL and `jwks_uri`, and the client follows no redirects, so the URL checked is the URL
+  fetched. On top, the OpenID verifier checks `iss` before anything is fetched — new check
+  `issuerWellFormed`: an absolute URL with a host, no user information, query or fragment, https or an
+  allow-listed http host — and both verifiers name the problem (`'sub' … is not an https URL`; `… names a
+  jwks_uri that is not an https URL`) instead of the generic dereference error. Tests in `SsrfGuardTest`,
+  `OutboundHttpClientTest`, `LWSCredentialVerifierTest` and `SelfSignedCidVerifierTest`; the
+  internal-address tests in `SsrfGuardTest`, `GuardedDnsResolverTest` and `OutboundHttpClientTest` now
+  use `https` URLs so they go on testing the address rather than the scheme. `LwsAuthIT`'s fixtures are
+  all on its allow-listed hosts.
 
 - [ ] **R-08 · SSRF guard: special-purpose and address-embedding IPv6/IPv4 ranges pass.**
   `Medium` · security · `S` · *demonstrated (classification)*

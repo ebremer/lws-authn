@@ -193,9 +193,19 @@ class OutboundHttpClientTest {
      */
     @Test
     void refusesAnInternalHostThatIsNotAllowListed() {
-        assertThrows(SsrfGuard.BlockedException.class,
-                () -> OutboundHttp.fetch("http://127.0.0.1:" + port + "/cid", null, null),
+        // https, so it is the address that is refused rather than plain http to a host not allow-listed.
+        SsrfGuard.BlockedException refused = assertThrows(SsrfGuard.BlockedException.class,
+                () -> OutboundHttp.fetch("https://127.0.0.1:" + port + "/cid", null, null),
                 "127.0.0.1 is not on the allow-list, so it must be refused even though localhost is");
+        assertFalse(refused instanceof SsrfGuard.InsecureSchemeException);
+    }
+
+    /** R-07. Plain http still reaches an allow-listed host — the demos and the integration test need it. */
+    @Test
+    void plainHttpIsRefusedUnlessTheHostIsAllowListed() throws Exception {
+        assertThrows(SsrfGuard.InsecureSchemeException.class,
+                () -> OutboundHttp.fetch("http://127.0.0.1:" + port + "/cid", null, null));
+        assertEquals(200, OutboundHttp.fetch(url("/elsewhere"), null, null).status());
     }
 
     @Test

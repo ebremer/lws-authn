@@ -4,9 +4,9 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * SSRF guard for outbound HTTP fetches driven by attacker-influenced URLs (the OpenID and self-signed
- * CID verifiers dereference the credential's `sub`/`iss`). Only http(s) is allowed, and the target
- * host must not resolve to a loopback / private / link-local / reserved address unless it is
- * explicitly allow-listed.
+ * CID verifiers dereference the credential's `sub`/`iss`). Only https is allowed — plain http only to an
+ * allow-listed host — and the target host must not resolve to a loopback / private / link-local /
+ * reserved address unless it is explicitly allow-listed.
  */
 package com.ebremer.lws.authn.net;
 
@@ -29,10 +29,11 @@ import com.ebremer.lws.authn.config.ServerSettings;
  * environment variable {@code LWS_AUTHN_ALLOWED_INTERNAL_HOSTS}. By default nothing internal is
  * reachable.</p>
  *
- * <p>{@link #verify(String)} is the early, informative check: it validates the scheme and rejects a
- * URL whose host resolves anywhere internal, so the caller gets a useful error. It is <em>not</em> the
- * enforcement point — a name can resolve differently between that check and the moment a socket is
- * opened (DNS rebinding). Enforcement lives in {@link #resolveAndVet}, which
+ * <p>{@link #verify(String)} is the early, informative check: it requires https — plain http only to an
+ * allow-listed host — and rejects a URL whose host resolves anywhere internal, so the caller gets a
+ * useful error. For the scheme it is also the enforcement point, since the client follows no redirects;
+ * for the address it is <em>not</em> — a name can resolve differently between that check and the moment
+ * a socket is opened (DNS rebinding). Enforcement lives in {@link #resolveAndVet}, which
  * {@link GuardedDnsResolver} installs as the DNS resolver of the HTTP client
  * {@link OutboundHttp} uses, so the addresses that are vetted are exactly the addresses that are
  * connected to.</p>
@@ -45,8 +46,21 @@ public final class SsrfGuard {
     }
 
     /** Thrown when a URL must not be fetched. */
-    public static final class BlockedException extends RuntimeException {
+    public static class BlockedException extends RuntimeException {
         public BlockedException(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * Thrown when a URL is plain {@code http} and its host is not allow-listed (R-07). Everything the
+     * verifiers fetch carries or locates a key — the subject's document, the issuer's configuration, its
+     * JWK set — and over plain http anyone on the network path can substitute that key. OpenID Connect
+     * Core §2 requires {@code iss} to use https, Discovery §3 requires it of {@code jwks_uri}, and the
+     * self-signed CID suite speaks of HTTPS subjects. The message names only what the caller sent.
+     */
+    public static final class InsecureSchemeException extends BlockedException {
+        public InsecureSchemeException(String message) {
             super(message);
         }
     }
@@ -65,18 +79,39 @@ public final class SsrfGuard {
             throw new BlockedException("malformed URL: " + url);
         }
         String scheme = uri.getScheme();
-        if (scheme == null || !(scheme.equalsIgnoreCase("https") || scheme.equalsIgnoreCase("http"))) {
-            throw new BlockedException("only http(s) URLs may be fetched, got scheme: " + scheme);
+        boolean https = "https".equalsIgnoreCase(scheme);
+        if (!https && !"http".equalsIgnoreCase(scheme)) {
+            throw new BlockedException("only https URLs may be fetched, got scheme: " + scheme);
         }
         String host = uri.getHost();
         if (host == null || host.isBlank()) {
             throw new BlockedException("URL has no host: " + url);
+        }
+        if (!https && !isAllowListed(host, allowedHosts)) {
+            throw new InsecureSchemeException("plain http is fetched only from an allow-listed host, not from "
+                    + host);
         }
         try {
             resolveAndVet(host, allowedHosts);
         } catch (UnknownHostException e) {
             throw new BlockedException(e.getMessage());
         }
+    }
+
+    /**
+     * True iff a URL of this scheme and host may carry key material: {@code https}, or {@code http} to an
+     * allow-listed host (R-07). An allow-listed host is one the deployment vouches for — its own Keycloak
+     * on loopback, a test fixture — and so the one place plain http is still accepted.
+     */
+    public static boolean secureOrAllowListed(String scheme, String host, Set<String> allowedHosts) {
+        if ("https".equalsIgnoreCase(scheme)) {
+            return true;
+        }
+        return "http".equalsIgnoreCase(scheme) && host != null && isAllowListed(host, allowedHosts);
+    }
+
+    private static boolean isAllowListed(String host, Set<String> allowedHosts) {
+        return allowedHosts.contains(normalize(host).toLowerCase(Locale.ROOT));
     }
 
     /**
@@ -106,7 +141,7 @@ public final class SsrfGuard {
         if (addresses.length == 0) {
             throw new UnknownHostException("cannot resolve host: " + name);
         }
-        if (allowedHosts.contains(name.toLowerCase(Locale.ROOT))) {
+        if (isAllowListed(name, allowedHosts)) {
             return addresses;
         }
         for (InetAddress address : addresses) {

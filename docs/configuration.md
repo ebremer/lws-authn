@@ -89,7 +89,7 @@ setting leaves it alone):
 
 | Setting | Scope key | System property | Environment variable | Default |
 |---|---|---|---|---|
-| SSRF allow-list (comma-separated hosts) | `allowed-internal-hosts` | `lws.authn.allowedInternalHosts` | `LWS_AUTHN_ALLOWED_INTERNAL_HOSTS` | — |
+| SSRF allow-list (comma-separated hosts); also the only hosts plain `http` is fetched from | `allowed-internal-hosts` | `lws.authn.allowedInternalHosts` | `LWS_AUTHN_ALLOWED_INTERNAL_HOSTS` | — |
 | Outbound fetch timeout (ms) | `http-timeout-millis` | `lws.authn.http.timeoutMillis` | `LWS_AUTHN_HTTP_TIMEOUT_MILLIS` | `5000` |
 | Outbound response cap (bytes) | `http-max-response-bytes` | `lws.authn.http.maxResponseBytes` | `LWS_AUTHN_HTTP_MAX_RESPONSE_BYTES` | `262144` |
 | Outbound fetch deadline, whole exchange (ms) | `http-deadline-millis` | `lws.authn.http.deadlineMillis` | `LWS_AUTHN_HTTP_DEADLINE_MILLIS` | `10000` |

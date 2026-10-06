@@ -100,6 +100,12 @@ realm under the default `bearer` access mode, before any signature is checked.
   `{"@value": "2000-01-01T00:00:00Z", "@type": "xsd:dateTime"}`, two dates in an array, a number. Now a
   value object or an array of one is read as its date, `null` is no value, and every other shape makes
   the method unusable; `expires` follows the same rule.
+- **Keys are fetched only over https** (R-07). The verifiers fetched a subject's document, an issuer's
+  configuration and its JWK set over plain `http` as readily as `https`, so anyone on the network path
+  to an `http` subject or issuer could substitute its keys and forge credentials for it. Every fetch is
+  now `https` — plain `http` only to a host on `allowed-internal-hosts`, which the demos and the
+  integration test use — and the OpenID verifier checks that `iss` is an Issuer Identifier as OpenID
+  Connect Core §2 defines one: https, with no query or fragment (new check `issuerWellFormed`).
 
 ### Added
 
@@ -169,6 +175,10 @@ each may reject a document that used to verify. Check your issuers' documents be
   header of `at+jwt` in either JWT suite, and in the OpenID suite a payload `typ` other than `ID`. An
   ID Token from a provider that sets the payload `typ` to something else would now fail
   `tokenIsIdToken`; none known does.
+- **Plain `http` subjects, issuers and `jwks_uri`s are refused** unless the host is on
+  `allowed-internal-hosts` (R-07). A deployment that verified `http` WebIDs or a test OP on `http` must
+  allow-list the host or move it to https; an `iss` with a query or fragment now fails
+  `issuerWellFormed`.
 
 ### Changed
 

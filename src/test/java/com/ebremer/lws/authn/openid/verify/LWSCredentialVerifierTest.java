@@ -8,9 +8,11 @@ package com.ebremer.lws.authn.openid.verify;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.Set;
 
 import org.junit.jupiter.api.Test;
 
@@ -125,5 +127,32 @@ class LWSCredentialVerifierTest {
                 "{\"sub\":\"https://id.example/u\",\"iss\":\"https://op.example\",\"azp\":\"https://c.example\"}");
         assertFalse(r.isValid());
         assertEquals(Boolean.FALSE, r.getChecks().get("typeIsJwt"));
+    }
+
+    /**
+     * R-07. OpenID Connect Core §2: the Issuer Identifier is "a case-sensitive URL using the https scheme
+     * that contains scheme, host, and optionally, port number and path components and no query or
+     * fragment components". Its configuration and keys are fetched from it.
+     */
+    @Test
+    void rejectsAnIssuerThatIsNotAnHttpsUrl() {
+        for (String iss : new String[]{"http://op.example", "https://op.example?x=1", "https://op.example/#f",
+                "https://user@op.example", "op.example", "urn:example:op", "https:///realms/r", "https://op .example"}) {
+            VerificationResult r = verify("{\"alg\":\"RS256\"}",
+                    "{\"sub\":\"https://id.example/u\",\"iss\":\"" + iss + "\",\"azp\":\"https://c.example\"}");
+            assertFalse(r.isValid(), iss);
+            assertEquals(Boolean.FALSE, r.getChecks().get("issuerWellFormed"), iss);
+        }
+    }
+
+    /** A port and a path are fine; plain http only to a host the deployment has allow-listed. */
+    @Test
+    void anIssuerIdentifierMayHaveAPortAndAPath() {
+        assertTrue(LWSCredentialVerifier.isIssuerIdentifier("https://op.example:8443/realms/r", Set.of()));
+        assertTrue(LWSCredentialVerifier.isIssuerIdentifier("http://localhost:8080/realms/r", Set.of("localhost")));
+        assertFalse(LWSCredentialVerifier.isIssuerIdentifier("http://localhost:8080/realms/r", Set.of()));
+        assertEquals(Boolean.TRUE, verify("{\"alg\":\"RS256\"}",
+                "{\"sub\":\"https://id.example/u\",\"iss\":\"https://op.example/realms/r\",\"azp\":\"https://c.example\"}")
+                .getChecks().get("issuerWellFormed"));
     }
 }

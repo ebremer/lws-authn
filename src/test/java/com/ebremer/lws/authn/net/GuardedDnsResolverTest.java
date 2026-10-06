@@ -64,7 +64,7 @@ class GuardedDnsResolverTest {
     /** {@link SsrfGuard#verify} stays the early, friendly check in front of the resolver. */
     @Test
     void urlLevelCheckStillRejectsBeforeAnyFetch() {
-        assertThrows(SsrfGuard.BlockedException.class, () -> SsrfGuard.verify("http://10.1.2.3/x", NONE));
+        assertThrows(SsrfGuard.BlockedException.class, () -> SsrfGuard.verify("https://10.1.2.3/x", NONE));
         assertThrows(SsrfGuard.BlockedException.class, () -> SsrfGuard.verify("file:///etc/passwd", NONE));
     }
 }

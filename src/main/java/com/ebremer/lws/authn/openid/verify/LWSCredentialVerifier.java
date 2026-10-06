@@ -22,12 +22,16 @@
 package com.ebremer.lws.authn.openid.verify;
 
 import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.security.PublicKey;
 import java.util.List;
+import java.util.Set;
 
 import com.ebremer.lws.authn.jose.JwsChecks;
 import com.ebremer.lws.authn.net.OutboundHttp;
+import com.ebremer.lws.authn.net.SsrfGuard;
 import com.ebremer.lws.authn.rdf.RdfParsing;
 import com.ebremer.lws.authn.verify.Trace;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -146,6 +150,16 @@ public class LWSCredentialVerifier {
             if (isBlank(iss)) {
                 result.check("issuerPresent", false);
                 result.error("ID Token is missing the 'iss' claim");
+                return result.fail();
+            }
+            // OpenID Connect Core §2: the Issuer Identifier is "a case-sensitive URL using the https
+            // scheme that contains scheme, host, and optionally, port number and path components and no
+            // query or fragment components". The issuer's configuration and keys are fetched from it, so
+            // over plain http anyone on the network path could substitute them (R-07).
+            boolean issuerOk = isIssuerIdentifier(iss, SsrfGuard.configuredAllowlist());
+            result.check("issuerWellFormed", issuerOk);
+            if (!issuerOk) {
+                result.error("The 'iss' claim <" + iss + "> is not an https URL without a query or fragment");
                 return result.fail();
             }
 
@@ -317,6 +331,11 @@ public class LWSCredentialVerifier {
                 return null;
             }
             return model;
+        } catch (SsrfGuard.InsecureSchemeException insecure) {
+            log.debugf("[%s] sub <%s> is plain http: %s", result.getTraceId(), sub, insecure.getMessage());
+            result.check("subjectDereferenced", false);
+            result.error("'sub' <" + sub + "> is not an https URL");
+            return null;
         } catch (RdfParsing.UnsupportedSyntaxException wrongSyntax) {
             // Distinguished from the generic failure below because it is actionable and gives nothing
             // away: the media type is one the remote server chose to advertise publicly, and naming it
@@ -490,12 +509,36 @@ public class LWSCredentialVerifier {
             result.check("jwksResolved", false);
             result.error("No JWK published by <" + iss + "> matched the token (kid=" + kid + ", alg=" + alg + ")");
             return null;
+        } catch (SsrfGuard.InsecureSchemeException insecure) {
+            // iss itself has been checked, so this is the jwks_uri, which OpenID Connect Discovery 1.0
+            // §3 says "MUST use the https scheme".
+            log.debugf("[%s] the jwks_uri for <%s> is plain http: %s", result.getTraceId(), iss, insecure.getMessage());
+            result.check("jwksResolved", false);
+            result.error("The OpenID configuration for <" + iss + "> names a jwks_uri that is not an https URL");
+            return null;
         } catch (Exception e) {
             log.debugf(e, "[%s] OpenID Connect discovery failed for <%s>", result.getTraceId(), iss);
             result.check("jwksResolved", false);
             result.error("OpenID Connect Discovery failed for <" + iss + ">");
             return null;
         }
+    }
+
+    /**
+     * True iff {@code iss} is an Issuer Identifier as OpenID Connect Core §2 defines one: an absolute URL
+     * with a host, optionally a port and path, and no user information, query or fragment — https, or
+     * plain http only to a host this deployment allow-lists ({@link SsrfGuard#secureOrAllowListed}).
+     */
+    static boolean isIssuerIdentifier(String iss, Set<String> allowedHosts) {
+        URI uri;
+        try {
+            uri = new URI(iss);
+        } catch (URISyntaxException malformed) {
+            return false;
+        }
+        return !uri.isOpaque() && uri.getHost() != null && uri.getRawUserInfo() == null
+                && uri.getRawQuery() == null && uri.getRawFragment() == null
+                && SsrfGuard.secureOrAllowListed(uri.getScheme(), uri.getHost(), allowedHosts);
     }
 
     private static String text(JsonNode node, String field) {

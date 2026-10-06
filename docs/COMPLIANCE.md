@@ -68,7 +68,7 @@ suite to be associated with a token type URI.
 | Requirement | OpenID | SSI CID | SAML |
 |---|---|---|---|
 | subject REQUIRED | `subjectPresent` | `selfIssued` | `NameID` from the covered assertion |
-| issuer REQUIRED | `issuerPresent` | `selfIssued` | `issuerPresent` |
+| issuer REQUIRED | `issuerPresent` + `issuerWellFormed` | `selfIssued` | `issuerPresent` |
 | client REQUIRED | `clientPresent` (`azp`) | `selfIssued` (`client_id`) | `recipientPresent` |
 | audience restriction | `audienceMatched` | `audiencePresent` + `audienceMatched` | `audiencePresent` + `audienceMatched` |
 | signed (§4.2) | `signatureValid` | `signatureValid` | `signatureValid` |
@@ -88,14 +88,16 @@ and fails closed when the client identifier is absent.
 **Enforced.** `alg` is never `none`; no unsupported `crit`; `typ`, when present, names a JWT — not
 `at+jwt`, an access token's type; the payload's `typ`, when present, says it is an ID Token
 (`tokenIsIdToken`: Keycloak's access tokens say `Bearer`, and their header is `JWT` like an ID Token's);
-`sub` and `iss` present; `azp` present (`clientPresent`). `sub` is dereferenced over the guarded HTTP
+`sub` and `iss` present; `iss` an https URL with no query or fragment, as OpenID Connect Core §2 defines
+an Issuer Identifier (`issuerWellFormed`); `azp` present (`clientPresent`). `sub` is dereferenced over the guarded HTTP
 stack and the document must have an `id` equal to `sub` (`subjectDereferenced`, `subjectIdMatches`) —
 on *both* the RDF and the JSON-LD path; the JSON-LD path used to default a missing `id` to the subject,
 accepting a document that never claimed to describe it. The document must declare a
 `https://www.w3.org/ns/lws#OpenIdProvider` service whose `serviceEndpoint` equals `iss`
 (`openIdProviderServiceLocated`), located by parameterized SPARQL so an attacker-controlled `sub`
 cannot inject. Discovery on `iss` must return a configuration whose `issuer` matches
-(`issuerDiscoveryMatches`) and a `jwks_uri` (`jwksResolved`). The `alg` is pinned to the discovered key
+(`issuerDiscoveryMatches`) and an https `jwks_uri` (Discovery 1.0 §3; `jwksResolved`). Every fetch —
+`sub`, discovery, `jwks_uri` — is https; plain http only to a host the deployment allow-lists. The `alg` is pinned to the discovered key
 type (`algorithmMatchesKey`) — the classic HS256-against-an-RSA-public-key confusion. Signature
 (`signatureValid`) and an explicit `exp` (`notExpired`; a missing `exp` is not "never expires").
 
@@ -115,8 +117,9 @@ issuance too (Resource Indicators, RFC 8707).
 **Enforced.** `alg` never `none`; no unsupported `crit`; `typ` names a JWT if present, not an access
 token's `at+jwt`;
 `sub == iss == client_id` (`selfIssued`); a `kid` is present (`keyIdPresent`) — no fallback to "the
-only key", because the credential says which key signed it. `sub` is dereferenced — or, for a DID,
-resolved (below) — and the document's `id` must equal it (`subjectDereferenced`, `subjectIdMatches`).
+only key", because the credential says which key signed it. `sub` is dereferenced — over https; plain
+http only to an allow-listed host — or, for a DID, resolved (below), and the document's `id` must equal
+it (`subjectDereferenced`, `subjectIdMatches`).
 
 The `kid` then selects a verification method (`verificationMethodFound`), following CID 1.0 §3.3, which
 the suite cites for this step. The method must be:

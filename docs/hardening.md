@@ -24,6 +24,11 @@ behaviours are covered by tests — `mvn test` for the unit tests, `mvn verify` 
     redirects by default too (`spi-connections-http-client-default-allow-redirects`, default `false`),
     but that is a deployment setting one flag away from letting a `302` walk past the guard — so the
     verifiers do not depend on it.
+  - **https only.** Everything fetched carries or locates a key — the subject's document, the issuer's
+    configuration, its JWK set — and over plain `http` anyone on the network path can swap it. So every
+    fetch must be `https`, and the OpenID `iss` must be an https URL with no query or fragment (OpenID
+    Connect Core §2; `jwks_uri` too, Discovery 1.0 §3). Plain `http` is accepted only to an allow-listed
+    host — the one place a deployment vouches for the path, such as its own Keycloak on loopback.
   - **Important:** if this Keycloak hosts its own controlled identifier documents on a loopback or
     internal address — so the OpenID verifier dereferences *itself* — you **must** allow-list that
     host, or OpenID `/verify` is blocked.
