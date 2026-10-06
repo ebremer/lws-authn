@@ -1205,11 +1205,23 @@ is needed.
   — bind `127.0.0.1:8080:8080`. Base images are tag-only (no digest) and Dependabot has no `docker`
   ecosystem entry.
 
-- [ ] **R-48 · Demo scripts.** `Low` · maintainability · `S` · *verified*
+- [x] **R-48 · Demo scripts.** `Low` · maintainability · `S` · *verified*
   Admin API calls use `curl -sS` without `--fail`, so a failed realm/client/user creation still prints
   "created…"; admin passwords and tokens appear in `curl` argv (visible to `ps`); JSON bodies are built by
   string interpolation (use `jq -n --arg`); `USERNAME` is the login name under Git Bash, so the scripts
   create that user instead of `alice`; `ssi-cid-demo.sh:120` exits in `jq` before its friendly `die`.
+  **Done** in all three scripts. Admin API calls go through `curl --fail-with-body` and stop the script
+  with Keycloak's answer; probes that expect a `404` use a separate status-only helper. No password,
+  token or credential is on a command line any more: passwords reach curl on stdin
+  (`--data-urlencode password@-`) and jq as input (`jq -Rs`), bearer tokens go in a header file
+  (`-H @file`, in a `mktemp -d` directory under `umask 077`), and the credential under test is posted
+  from stdin. Every JSON body is built by `jq -n --arg`, as are the self-signed JWT's header and claims.
+  The user is `DEMO_USER` (`USERNAME` is ignored). JSON reads go through a helper that yields nothing on
+  a non-JSON answer, so the friendly `die` is reached. SPDX headers added (R-51). Checked against a mock
+  Keycloak (Python) with logging shims for curl, jq, openssl and node on `PATH`: all three scripts pass,
+  passwords with spaces, `&`, `=`, `+`, `%` and `"` arrive intact, the shims' argv log holds no password,
+  token or JWT, and a `400` on user creation stops `lws-demo.sh` with the server's message instead of
+  "created user". Not run against a real Keycloak here (no Docker). Needs curl 7.76 or later.
 
 - [ ] **R-49 · Build hygiene.** `Low` · build · `S`
   No `project.build.outputTimestamp` (not reproducible); surefire unpinned while failsafe is 3.5.2; no

@@ -517,6 +517,12 @@ each may reject a document that used to verify. Check your issuers' documents be
   plugin's default; it now carries this project's copyright. `META-INF/licenses/` lists every bundled
   library with its licence and includes the texts, among them Dexx Collections' MIT licence and the W3C
   licence of the bundled `cid/v1` JSON-LD context.
+- **Demo scripts** (R-48). A failed admin API call now stops the script with Keycloak's answer, where
+  it used to print "created…" regardless. Passwords and tokens no longer appear on `curl` or `jq`
+  command lines, where `ps` shows them to other users of the machine. JSON is built with `jq`, so a
+  value containing a quote no longer breaks it. The user is now `DEMO_USER`: `USERNAME`, which
+  Windows sets to the login name, made the scripts create that user under Git Bash. They need curl
+  7.76 or later.
 - **Dependabot leaves deliberate pins alone** (R-41): the APIs Keycloak supplies, and minor or major
   updates of the libraries bundled at Jena's version, are ignored, as are JUnit majors.
 
