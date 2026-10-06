@@ -93,6 +93,13 @@ and `exp`; and check the audience.
 says "the `aud` claim MUST include the target authorization server", and that only means something if
 the verifier knows which one it is; a request without one is a `400`, before anything is fetched.
 
+`single_use=true` holds the credential to one use, for a caller that treats one verification as one use
+(a single-use exchange, say): it must carry a `jti`, and once verified this way it is refused
+(`notReplayed: false`) whenever it is asked about again with `single_use=true`, until its `exp` plus the
+clock skew has passed. The record is Keycloak's single-use object store, shared across a cluster. A
+credential still valid for more than a day cannot be held to one use and is refused when that is asked.
+Leave it off otherwise: a storage server looks at the same token on every request it carries.
+
 The document a verifier dereferences must therefore be CID-conformant: an `id` equal to the subject,
 and the key listed under `authentication` (CID 1.0 §2.3 — a key defined under `verificationMethod`
 but named only by, say, `assertionMethod` cannot authenticate), with an `id` in that document, a

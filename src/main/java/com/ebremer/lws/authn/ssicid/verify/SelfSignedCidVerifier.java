@@ -81,7 +81,7 @@ import org.keycloak.representations.JsonWebToken;
 import org.keycloak.util.JsonSerialization;
 
 import com.ebremer.lws.authn.ssicid.SsiCidConstants;
-import com.ebremer.lws.authn.verify.ReplayCache;
+import com.ebremer.lws.authn.verify.SingleUse;
 
 /**
  * @author Erich Bremer
@@ -91,7 +91,6 @@ public class SelfSignedCidVerifier {
     private static final Logger log = Logger.getLogger(SelfSignedCidVerifier.class);
 
     private final KeycloakSession session;
-    private final ReplayCache replayCache;
 
     /**
      * @param session the Keycloak session, used for outbound fetches and for Keycloak's own signature
@@ -100,18 +99,18 @@ public class SelfSignedCidVerifier {
      *                checked with the JDK.
      */
     public SelfSignedCidVerifier(KeycloakSession session) {
-        this(session, null);
+        this.session = session;
     }
 
+    private SingleUse singleUse;
+
     /**
-     * @param replayCache optional, and normally {@code null}. See {@link ReplayCache}: a verify
-     *                    endpoint is asked about the same live credential repeatedly, so refusing a
-     *                    second look is only correct for a caller that treats one verification as one
-     *                    use.
+     * Holds each credential this verifies to one use, recorded in {@code uses} (R-34). Only for a caller
+     * that treats one verification as one use: see {@link SingleUse}.
      */
-    public SelfSignedCidVerifier(KeycloakSession session, ReplayCache replayCache) {
-        this.session = session;
-        this.replayCache = replayCache;
+    public SelfSignedCidVerifier singleUse(SingleUse uses) {
+        this.singleUse = uses;
+        return this;
     }
 
     private ThisRealm thisRealm;
@@ -375,12 +374,28 @@ public class SelfSignedCidVerifier {
                 return result.fail();
             }
 
-            if (replayCache != null) {
-                boolean firstSighting = replayCache.firstSighting(iss, token.getId());
-                result.check("notReplayed", firstSighting);
-                if (!firstSighting) {
-                    result.error("Credential 'jti' has already been verified within the replay window");
-                    return result.fail();
+            // Last, once everything else holds: recording a use of a credential that then failed would let
+            // anyone who knows an issuer's next jti spend it first.
+            if (singleUse != null) {
+                SingleUse.Outcome use = singleUse.use(iss, token.getId(), exp,
+                        java.time.Instant.now().getEpochSecond(), JwsChecks.clockSkewSeconds());
+                result.check("notReplayed", use == SingleUse.Outcome.FIRST_USE);
+                switch (use) {
+                    case FIRST_USE -> {
+                    }
+                    case REPLAYED -> {
+                        result.error("Credential has already been used: it was verified for single use before");
+                        return result.fail();
+                    }
+                    case NO_JTI -> {
+                        result.error("Credential has no 'jti', so it cannot be held to single use");
+                        return result.fail();
+                    }
+                    case TOO_LONG_LIVED -> {
+                        result.error("Credential is valid for more than " + SingleUse.MAX_LIFESPAN_SECONDS
+                                + " seconds more, too long to be held to single use");
+                        return result.fail();
+                    }
                 }
             }
 

@@ -12,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.security.KeyPair;
 import java.security.interfaces.ECPublicKey;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
@@ -19,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import com.ebremer.lws.authn.did.DidKey;
 import com.ebremer.lws.authn.ssicid.SsiCidConstants;
 import com.ebremer.lws.authn.testsupport.SelfIssuedJwts;
+import com.ebremer.lws.authn.verify.SingleUse;
 
 /**
  * DID subjects under the self-signed CID suite, verified end to end.
@@ -225,6 +227,76 @@ class SelfSignedCidDidSubjectTest {
             assertFalse(result.isValid(), typ);
             assertEquals(Boolean.FALSE, result.getChecks().get("typeIsJwt"), typ);
         }
+    }
+
+    // ---------------------------------------------------------------------------------- R-34
+
+    /** A single-use record in a map, standing in for Keycloak's store: key → lifespan. */
+    private static SingleUse uses(Map<String, Long> recorded) {
+        return new SingleUse((key, lifespan) -> recorded.putIfAbsent(key, lifespan) == null);
+    }
+
+    private static SsiCidVerificationResult verifyOnce(String jwt, Map<String, Long> recorded) {
+        return new SelfSignedCidVerifier(null).singleUse(uses(recorded)).verify(jwt, SelfIssuedJwts.AUDIENCE);
+    }
+
+    /**
+     * R-34. A caller that treats one verification as one use asks for it, and the second time the same
+     * credential is refused — until its {@code exp} and the clock skew have passed, not a fixed window.
+     * A caller that does not ask is not affected: a storage server looks at the same token many times.
+     */
+    @Test
+    void aCredentialHeldToSingleUseIsRefusedTheSecondTime() throws Exception {
+        KeyPair pair = SelfIssuedJwts.ed25519();
+        String did = DidKey.encodeEd25519(pair.getPublic());
+        Map<String, Object> claims = SelfIssuedJwts.claims(did);
+        claims.put("jti", "8c1f0a2e");
+        String jwt = edDsaCredential(pair, did, claims);
+        Map<String, Long> recorded = new java.util.HashMap<>();
+
+        SsiCidVerificationResult first = verifyOnce(jwt, recorded);
+        assertTrue(first.isValid(), () -> String.valueOf(first.getErrors()));
+        assertEquals(Boolean.TRUE, first.getChecks().get("notReplayed"));
+        assertRejected(verifyOnce(jwt, recorded), "notReplayed");
+
+        SsiCidVerificationResult unasked = verify(jwt);
+        assertTrue(unasked.isValid(), () -> String.valueOf(unasked.getErrors()));
+        assertEquals(null, unasked.getChecks().get("notReplayed"));
+
+        long lifespan = recorded.values().iterator().next();
+        long expected = 300 + com.ebremer.lws.authn.jose.JwsChecks.clockSkewSeconds();
+        assertTrue(lifespan > expected - 5 && lifespan <= expected, "remembered until exp + skew: " + lifespan);
+    }
+
+    /** With no {@code jti} there is nothing to remember; valid for days, too long to remember. */
+    @Test
+    void aCredentialThatCannotBeHeldToSingleUseIsRefusedWhenThatIsAsked() throws Exception {
+        KeyPair pair = SelfIssuedJwts.ed25519();
+        String did = DidKey.encodeEd25519(pair.getPublic());
+        Map<String, Long> recorded = new java.util.HashMap<>();
+
+        SsiCidVerificationResult noJti = verifyOnce(edDsaCredential(pair, did, SelfIssuedJwts.claims(did)), recorded);
+        assertRejected(noJti, "notReplayed");
+        assertTrue(noJti.getErrors().toString().contains("'jti'"), noJti.getErrors().toString());
+
+        Map<String, Object> longLived = SelfIssuedJwts.claims(did);
+        longLived.put("jti", "8c1f0a2f");
+        longLived.put("exp", java.time.Instant.now().getEpochSecond() + 2 * 24 * 3600);
+        assertRejected(verifyOnce(edDsaCredential(pair, did, longLived), recorded), "notReplayed");
+        assertTrue(recorded.isEmpty());
+    }
+
+    /** Only a credential that verified is recorded: otherwise anyone could spend an issuer's next jti. */
+    @Test
+    void aCredentialThatFailsIsNotRecorded() throws Exception {
+        KeyPair pair = SelfIssuedJwts.ed25519();
+        String did = DidKey.encodeEd25519(pair.getPublic());
+        Map<String, Object> claims = SelfIssuedJwts.claims(did);
+        claims.put("jti", "8c1f0a30");
+        claims.put("aud", List.of("https://another-as.example"));
+        Map<String, Long> recorded = new java.util.HashMap<>();
+        assertRejected(verifyOnce(edDsaCredential(pair, did, claims), recorded), "audienceMatched");
+        assertTrue(recorded.isEmpty());
     }
 
     private static String edDsaCredential(KeyPair pair, String did, Map<String, Object> claims) throws Exception {

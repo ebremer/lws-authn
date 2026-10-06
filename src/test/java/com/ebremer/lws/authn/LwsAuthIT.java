@@ -853,6 +853,26 @@ class LwsAuthIT {
     }
 
     /**
+     * R-34. {@code single_use=true} records the credential in Keycloak's single-use object store, and the
+     * second request that asks the same is refused; one that does not ask still gets {@code valid: true}.
+     */
+    @Test
+    void aCredentialHeldToSingleUseVerifiesOnce() throws Exception {
+        KeyPair ed = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+        String did = DidKey.encodeEd25519(ed.getPublic());
+        String jwt = signJwt(did, "EdDSA", did + "#" + DidKey.multibaseValue(did), ed.getPrivate(), "Ed25519",
+                java.util.UUID.randomUUID().toString());
+        Map<String, String> once = Map.of("credential", jwt, "audience", "https://as.example", "single_use", "true");
+        String url = base + "/realms/" + REALM + "/lws-ssi-cid/verify";
+
+        JsonNode first = JSON.readTree(postForm(url, once, accessToken()).body());
+        assertTrue(first.get("valid").asBoolean(), () -> "expected valid, got: " + first);
+        assertRejected(JSON.readTree(postForm(url, once, accessToken()).body()), "notReplayed");
+        JsonNode unasked = verifySsiCid(jwt);
+        assertTrue(unasked.get("valid").asBoolean(), () -> "expected valid, got: " + unasked);
+    }
+
+    /**
      * The discontinued did:key suite's endpoint was removed rather than kept deprecated. Its path must
      * be unknown to Keycloak — a provider still registered under that id would answer here.
      */
@@ -1038,11 +1058,17 @@ class LwsAuthIT {
 
     private static String signJwt(String did, String alg, String kid, PrivateKey key, String jdkAlg)
             throws Exception {
+        return signJwt(did, alg, kid, key, jdkAlg, null);
+    }
+
+    private static String signJwt(String did, String alg, String kid, PrivateKey key, String jdkAlg, String jti)
+            throws Exception {
         long now = System.currentTimeMillis() / 1000;
         String signingInput = b64("{\"alg\":\"" + alg + "\",\"typ\":\"JWT\""
                         + (kid == null ? "" : ",\"kid\":\"" + kid + "\"") + "}") + "."
                 + b64("{\"sub\":\"" + did + "\",\"iss\":\"" + did + "\",\"client_id\":\"" + did
-                        + "\",\"aud\":[\"https://as.example\"],\"iat\":" + now + ",\"exp\":" + (now + 300) + "}");
+                        + "\",\"aud\":[\"https://as.example\"],\"iat\":" + now + ",\"exp\":" + (now + 300)
+                        + (jti == null ? "" : ",\"jti\":\"" + jti + "\"") + "}");
         Signature s = Signature.getInstance(jdkAlg);
         s.initSign(key);
         s.update(signingInput.getBytes(StandardCharsets.UTF_8));

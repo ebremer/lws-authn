@@ -946,7 +946,7 @@ is needed.
   attribute's value order. Tests in `SelfSignedControlledIdentifierDocumentTest` read the Turtle back;
   `aPositionalIdNeverTakesOneAKidAlreadyHas` describes what the previous code produced.
 
-- [ ] **R-34 · Replay protection cannot be turned on, though COMPLIANCE says it can.**
+- [x] **R-34 · Replay protection cannot be turned on, though COMPLIANCE says it can.**
   `Low` · docs/maintainability · `S` · *verified*
   `ReplayCache` is never instantiated in `src/main`; `SsiCidResourceProvider.java:164` always uses the
   null-cache constructor; no setting enables it. `COMPLIANCE.md` lists `notReplayed` as optional and
@@ -955,6 +955,15 @@ is needed.
   git treats the file as binary (`-text`), `grep` skips it and `text=auto` does not apply.
   **Do:** wire a factory-level cache to a documented setting with TTL = max(window, `exp` − now + skew),
   or delete the class and the claims; write `'\0'` as an escape either way.
+  **Done: wired, per request.** `ReplayCache` and its test are deleted (and the NUL byte with them).
+  `verify/SingleUse` records issuer+`jti` (SHA-256, `'\0'` written as an escape) in Keycloak's
+  `SingleUseObjectProvider` — cluster-wide, not one node's LRU — for `exp + skew − now` seconds;
+  `NO_JTI` and a remaining lifetime over a day (`TOO_LONG_LIVED`, bounding the store) are refused, not
+  passed. `SsiCidResourceProvider.verify` takes `single_use=true|false` (anything else is a `400`) and
+  calls `SelfSignedCidVerifier.singleUse(SingleUse.of(session))`; the check runs last, so only a
+  credential that verified is recorded. A request parameter rather than a server setting, because
+  COMPLIANCE's "opt in per caller" is the right grain: a deployment-wide switch would break every storage
+  server that re-verifies a token. Tests: `SingleUseTest`, and three in `SelfSignedCidDidSubjectTest`.
 
 - [ ] **R-35 · Configuration precedence and validation.** `Low` · correctness/config · `S` · *demonstrated*
   - A scope value is overwritten by another provider's system-property/environment fallback

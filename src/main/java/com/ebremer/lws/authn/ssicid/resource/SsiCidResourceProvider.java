@@ -43,6 +43,7 @@ import com.ebremer.lws.authn.ssicid.SsiCidConstants;
 import com.ebremer.lws.authn.ssicid.cid.SelfSignedControlledIdentifierDocument;
 import com.ebremer.lws.authn.ssicid.verify.SelfSignedCidVerifier;
 import com.ebremer.lws.authn.ssicid.verify.SsiCidVerificationResult;
+import com.ebremer.lws.authn.verify.SingleUse;
 import com.ebremer.lws.authn.verify.VerifyAccess;
 
 /**
@@ -143,6 +144,10 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
      * the {@code audience} setting — and a request with neither is a {@code 400} before anything is
      * fetched: without a target there is no verdict to give (R-16).</p>
      *
+     * <p>{@code single_use=true} holds the credential to one use (R-34): it must carry a {@code jti}, and
+     * once verified this way it is refused the next time anyone asks the same. Only for a caller that
+     * treats one verification as one use; see {@link SingleUse}.</p>
+     *
      * <p><strong>An invalid credential is a {@code 200}</strong> carrying {@code "valid": false}, not a
      * {@code 401}: the request was authorized and this is its answer. A {@code 401} from this endpoint
      * means the <em>caller</em> was refused, and carries a {@code WWW-Authenticate} challenge.</p>
@@ -153,6 +158,7 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
     @Produces(MediaType.APPLICATION_JSON)
     public Response verify(@FormParam("credential") String credential,
                            @FormParam("audience") String expectedAudience,
+                           @FormParam("single_use") String singleUse,
                            @HeaderParam("Authorization") String authorization) {
         if (!settings.isEnabled(session.getContext().getRealm())) {
             return JsonResponses.notEnabled();
@@ -179,9 +185,16 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
                     + "the target authorization server, so the verifier must be told which one that is");
         }
 
-        SsiCidVerificationResult result = new SelfSignedCidVerifier(session)
-                .localTo(ThisRealm.of(session), DOCUMENTS)
-                .verify(token, audience);
+        boolean oneUse = "true".equals(singleUse);
+        if (!oneUse && singleUse != null && !singleUse.isEmpty() && !"false".equals(singleUse)) {
+            return JsonResponses.badRequest("'single_use' must be true or false");
+        }
+
+        SelfSignedCidVerifier verifier = new SelfSignedCidVerifier(session).localTo(ThisRealm.of(session), DOCUMENTS);
+        if (oneUse) {
+            verifier.singleUse(SingleUse.of(session));
+        }
+        SsiCidVerificationResult result = verifier.verify(token, audience);
         return JsonResponses.of(Response.Status.OK, result);
     }
 }

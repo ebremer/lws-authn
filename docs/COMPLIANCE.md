@@ -198,7 +198,9 @@ method is mandated; two are resolved and any other is refused by name (`subjectD
 A DID document is read with the JSON rules of its representation rather than by a JSON-LD processor
 (see *Known divergences*).
 
-**Optional.** `notReplayed`: a bounded `jti` cache, off by default. No suite mandates replay
+**Optional.** `notReplayed`, when the request passes `single_use=true`: the credential must carry a
+`jti`, and is recorded — issuer and `jti` together, in Keycloak's single-use object store, until its
+`exp` plus the clock skew — and refused if it was recorded before (**R-34**). No suite mandates replay
 protection, and refusing a second look at a live credential is only correct for a caller that treats
 one verification as one use.
 
@@ -319,7 +321,7 @@ Each is a decision, not an oversight; each names where the reasoning lives.
 |---|---|---|
 | 1 | The LWS `client` identifier is required but **not required to be a URI** | Core §4.1 says SHOULD, not MUST. The bundled demo realm uses `lws-app`, a bare id, which is what Keycloak conventionally issues — see **P6-8**, and use a URI in production if your relying party cares. |
 | 2 | **OpenID: audience binding is optional per request** | Core RECOMMENDS an audience restriction naming the authorization server, and OpenID Connect binds an ID Token to a relying party, not to an authorization server: requiring a match would reject conforming ID Tokens. `aud` must be present (OpenID Connect Core §2); matching it is enforced when the request passes `client_id` or `audience`, or the deployment configures `audience` (**P3-6**). The **self-signed CID** suite is different: there "the `aud` claim MUST include the target authorization server", every conforming credential names one, and the match is required — a request with no target is refused (**R-16**). SAML matches the audience when the request or the configuration names one, as OpenID does, but always requires an `<AudienceRestriction>` (divergence 11). |
-| 3 | **Replay protection is off by default** | No suite mandates it, and a verify endpoint is legitimately asked about the same live credential repeatedly. Opt in per caller (**P2-8**). |
+| 3 | **Replay protection is off by default** | No suite mandates it, and a verify endpoint is legitimately asked about the same live credential repeatedly. A caller of the self-signed suite opts in per request with `single_use=true` (**R-34**); the OpenID and SAML verifiers have none. |
 | 4 | **`cid/{userId}` is unauthenticated** | A controlled identifier is a URL others dereference; an identity document requiring a credential would not be dereferenceable. Enumeration is bounded — random-UUID ids, a uniform response shape, and a rate limit — not closed (**P3-7**). |
 | 5 | **The SAML verifier can trust a certificate the caller supplies** | SAML trust is out of band, and a relying party may hold it rather than this deployment. By default the realm's SAML identity providers are the trust — each certificate bound to its IdP's entity ID — and a caller may instead supply one; the result names the source and the certificate's fingerprint, and `request-certificates=false` turns the second off (**R-25**). See the suite section above. |
 | 6 | **Fetch happens before the signature is known good** | Required by the specification's cold-trust algorithm and unavoidable. The exposure is addressed instead: authenticated endpoints, rate limiting, SSRF vetting at resolution time, bounded timeouts and response size, and a per-host circuit breaker (**P0-3**, **P0-5**). The same applies to a `did:web` subject. |

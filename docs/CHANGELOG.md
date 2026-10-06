@@ -200,6 +200,13 @@ realm under the default `bearer` access mode, before any signature is checked.
   request vetted as the first is — the SSRF guard, the https rule, the origin's breaker — the chain
   shares the one fetch deadline, and the document must still have the original subject as its `id`.
   OpenID discovery, the JWK set and `did:web` documents still follow no redirect.
+- **Replay protection a caller can turn on** (R-34). `POST /lws-ssi-cid/verify` with `single_use=true`
+  holds the credential to one use: it must carry a `jti`, and the next request about it with
+  `single_use=true` is refused (`notReplayed`). Uses are recorded in Keycloak's single-use object store —
+  cluster-wide — until the credential's `exp` plus the clock skew; a credential valid for more than a
+  day more is refused rather than remembered that long. COMPLIANCE already said a caller could opt in,
+  but nothing could: the `ReplayCache` it meant was never constructed, would have forgotten a
+  credential after a fixed window whatever its `exp`, and lived on one node. It is gone.
 - **A maximum credential lifetime** (R-28), `max-credential-lifetime-seconds`, off by default. Neither
   JWT suite bounds how long a credential may be valid, so a self-issued one with `exp` in 9999 verified
   until then; with the setting, `exp − iat` over it fails `lifetimeWithinLimit` in both JWT suites.
