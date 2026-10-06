@@ -75,7 +75,10 @@ This produces a single, self-contained provider JAR: **`target/lws-authn-<versio
 SBOM (`target/bom.json`, `target/bom.xml`) listing exactly what is inside it and under what licence:
 the 20 bundled libraries, not the Keycloak libraries the provider compiles against. Relocated libraries
 appear under their own coordinates — relocation renames the packages, not the code. The CycloneDX plugin
-does not run in an offline build (`mvn -o`), so build online when you need the SBOM.
+does not run in an offline build (`mvn -o`), so build online when you need the SBOM. Inside the JAR,
+`META-INF/LICENSE-lws-authn.txt` is this project's licence, `META-INF/NOTICE` merges the bundled
+libraries' notices, and `META-INF/licenses/` holds `THIRD-PARTY.txt` — every bundled library and its
+licence — with the text of each licence.
 
 Apache Jena and its dependencies are shaded in. Where Jena and Keycloak want the same library, the
 build picks one of two strategies deliberately, because the wrong one is a runtime failure either way:

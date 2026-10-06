@@ -20,6 +20,8 @@ WORKDIR /src
 # invalidate.
 COPY pom.xml .
 RUN mvn -B -ntp -q dependency:go-offline
+# The JAR's licence is read from this file at packaging time; the build fails without it (R-46).
+COPY LICENSE .
 COPY src src
 # Tests are skipped: the unit tests are CI's job, and LwsAuthIT needs a Docker daemon of its own.
 RUN mvn -B -ntp -q -DskipTests package \

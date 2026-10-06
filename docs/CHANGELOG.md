@@ -511,6 +511,12 @@ each may reject a document that used to verify. Check your issuers' documents be
   Keycloak's own libraries, so a scanner reading it would attribute Keycloak's advisories to this
   provider. It now lists the 20 libraries the JAR bundles; protobuf-java, which the JAR never contained,
   is `provided` like the server's other libraries.
+- **Licences in the JAR** (R-46). The Docker-built JAR carried no licence at all — `LICENSE` was
+  outside the build context, and the shade plugin skips a missing file silently; the build now fails
+  instead. The merged NOTICE was headed "Copyright 2006-2026 The Apache Software Foundation", the shade
+  plugin's default; it now carries this project's copyright. `META-INF/licenses/` lists every bundled
+  library with its licence and includes the texts, among them Dexx Collections' MIT licence and the W3C
+  licence of the bundled `cid/v1` JSON-LD context.
 - **Dependabot leaves deliberate pins alone** (R-41): the APIs Keycloak supplies, and minor or major
   updates of the libraries bundled at Jena's version, are ignored, as are JUnit majors.
 

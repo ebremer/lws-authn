@@ -1182,13 +1182,23 @@ is needed.
   test library reappears in `bom.json`. One thing the review did not say: the plugin skips itself in
   offline mode ("Goal makeBom requires online mode"), so `mvn -o` builds have no SBOM — CI builds online.
 
-- [ ] **R-46 · Licence files in the JAR.** `Low` · packaging · `S` · *verified*
+- [x] **R-46 · Licence files in the JAR.** `Low` · packaging · `S` · *verified*
   The Docker-built JAR carries **no licence**: `LICENSE` is outside the build context (`.dockerignore`),
   `IncludeResourceTransformer` skips a missing file silently, and the Apache transformer drops every other
   `LICENSE`. The merged `META-INF/NOTICE` reads "Copyright 2006-2026 The Apache Software Foundation" — the
   transformer's defaults, because only `projectName` is set (`pom.xml:463-465`). Dexx collections
   (MIT) ships no licence text. **Do:** `!LICENSE` in `.dockerignore` and `COPY LICENSE`; set
   `organizationName`/`inceptionYear` (or `addHeader=false`); include third-party licence texts.
+  **Done.** `.dockerignore` lets `LICENSE` in and the `Dockerfile` copies it before packaging, and the
+  enforcer's `requireFilesExist` now fails the build without it (checked by moving it away), so a JAR
+  without a licence cannot be built silently again. The NOTICE is headed "lws-authn / Copyright 2026
+  Erich Bremer" (`organizationName`, `organizationURL`, `inceptionYear`). `META-INF/licenses/` holds
+  `THIRD-PARTY.txt` — every bundled library and its licence — the Apache 2.0 text again for the bundled
+  Apache libraries, Dexx's MIT licence (from its repository; the JAR ships none), and the W3C Software and
+  Document License for the bundled `cid/v1` context, which the review did not mention: it is a verbatim
+  W3C document (checked against `https://www.w3.org/ns/cid/v1`), and that licence asks for its notice on
+  every copy. `ShadedJarContentsIT` checks the files, the NOTICE header, and that every component of the
+  SBOM is named in `THIRD-PARTY.txt`.
 
 - [ ] **R-47 · Docker quickstart.** `Low` · security/maintainability · `S` · *verified*
   `compose.yaml` publishes the port on all interfaces with `admin`/`admin` and a loopback SSRF allow-list

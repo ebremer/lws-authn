@@ -409,6 +409,15 @@
                                     <findAllDuplicates>true</findAllDuplicates>
                                 </banDuplicateClasses>
                                 <requireUpperBoundDeps/>
+                                <!-- The shaded JAR's licence comes from this file, and the shade plugin
+                                     silently ships none when it is missing — as it was from the Docker
+                                     build context (R-46). -->
+                                <requireFilesExist>
+                                    <files>
+                                        <file>${project.basedir}/LICENSE</file>
+                                    </files>
+                                    <message>LICENSE is missing: the provider JAR would ship without a licence.</message>
+                                </requireFilesExist>
                             </rules>
                         </configuration>
                     </execution>
@@ -583,16 +592,33 @@
                                      last. For a fat JAR of Apache-licensed code that is an Apache-2.0
                                      §4(d) obligation on redistribution, not just tidiness. -->
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ApacheLicenseResourceTransformer"/>
+                                <!-- Without the organisation and year, the transformer heads the merged NOTICE
+                                     with its own defaults — "lws-authn, Copyright 2006-2026 The Apache Software
+                                     Foundation" — which is not true (R-46). -->
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ApacheNoticeResourceTransformer">
                                     <projectName>lws-authn</projectName>
+                                    <organizationName>Erich Bremer</organizationName>
+                                    <organizationURL>https://github.com/ebremer/lws-authn</organizationURL>
+                                    <inceptionYear>2026</inceptionYear>
                                 </transformer>
                                 <!-- The licence transformer above matches exactly META-INF/LICENSE,
                                      LICENSE.txt and LICENSE.md, and emits none of them — so without
                                      this the shaded JAR would ship no licence at all. This name is
-                                     deliberately outside that set. -->
+                                     deliberately outside that set. The transformer skips a missing file
+                                     without a word, so the enforcer's requireFilesExist makes sure it is
+                                     there (R-46). -->
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.IncludeResourceTransformer">
                                     <file>${project.basedir}/LICENSE</file>
                                     <resource>META-INF/LICENSE-lws-authn.txt</resource>
+                                </transformer>
+                                <!-- The same text again, as META-INF/licenses/Apache-2.0.txt, for the bundled
+                                     Apache-licensed libraries, whose own LICENSE files the licence
+                                     transformer drops. META-INF/licenses/THIRD-PARTY.txt lists every
+                                     bundled library and its licence; the texts that are not Apache's are
+                                     beside it, in src/main/resources/META-INF/licenses (R-46). -->
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.IncludeResourceTransformer">
+                                    <file>${project.basedir}/LICENSE</file>
+                                    <resource>META-INF/licenses/Apache-2.0.txt</resource>
                                 </transformer>
                             </transformers>
                             <filters>

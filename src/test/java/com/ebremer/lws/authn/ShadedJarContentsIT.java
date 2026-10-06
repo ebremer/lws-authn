@@ -12,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -107,6 +108,55 @@ class ShadedJarContentsIT {
         }
         assertTrue(listed.contains("org.apache.jena:jena-arq") && listed.contains("com.google.code.gson:gson"),
                 "the SBOM does not list what is bundled: " + listed);
+    }
+
+    /**
+     * R-46. The JAR carries its own licence, every licence it bundles code under, and a NOTICE headed
+     * with this project's name and copyright rather than the shade transformer's defaults ("Copyright
+     * 2006-2026 The Apache Software Foundation"). The Docker-built JAR used to carry no licence at all.
+     */
+    @Test
+    void theJarCarriesItsLicencesAndATrueNotice() throws IOException {
+        try (JarFile jar = new JarFile(providerJar().toFile())) {
+            for (String name : List.of("META-INF/LICENSE-lws-authn.txt", "META-INF/NOTICE",
+                    "META-INF/licenses/THIRD-PARTY.txt", "META-INF/licenses/Apache-2.0.txt",
+                    "META-INF/licenses/dexx-collection-MIT.txt", "META-INF/licenses/W3C-cid-v1-context.txt")) {
+                assertTrue(jar.getEntry(name) != null, "missing from the JAR: " + name);
+            }
+            String notice = new String(jar.getInputStream(jar.getEntry("META-INF/NOTICE")).readAllBytes(),
+                    StandardCharsets.UTF_8);
+            String head = notice.substring(0, notice.indexOf("Apache Commons") < 0 ? notice.length() : notice.indexOf("Apache Commons"));
+            assertTrue(head.contains("lws-authn") && head.contains("Erich Bremer") && !head.contains("2006"),
+                    "the NOTICE is not headed with this project's own copyright:\n" + head);
+        }
+    }
+
+    /** R-46. Every library the SBOM says is bundled is named, with its licence, in THIRD-PARTY.txt. */
+    @Test
+    void everyBundledLibraryIsInTheThirdPartyList() throws IOException {
+        Path bom = providerJar().resolveSibling("bom.json");
+        Assumptions.assumeTrue(Files.exists(bom), "no target/bom.json: the CycloneDX plugin does not run offline");
+        Set<String> named = new TreeSet<>();
+        try (JarFile jar = new JarFile(providerJar().toFile())) {
+            String list = new String(jar.getInputStream(jar.getEntry("META-INF/licenses/THIRD-PARTY.txt"))
+                    .readAllBytes(), StandardCharsets.UTF_8);
+            // Lines of the form "  group:artifact, artifact, ...".
+            for (String line : list.lines().filter(l -> l.startsWith("  ") && l.contains(":")).toList()) {
+                String trimmed = line.trim();
+                String group = trimmed.substring(0, trimmed.indexOf(':'));
+                for (String artifact : trimmed.substring(trimmed.indexOf(':') + 1).split(",")) {
+                    named.add(group + ":" + artifact.trim());
+                }
+            }
+        }
+        Set<String> missing = new TreeSet<>();
+        for (JsonNode component : new ObjectMapper().readTree(bom.toFile()).path("components")) {
+            String id = component.path("group").asText() + ":" + component.path("name").asText();
+            if (!named.contains(id)) {
+                missing.add(id);
+            }
+        }
+        assertTrue(missing.isEmpty(), "bundled but not in META-INF/licenses/THIRD-PARTY.txt: " + missing);
     }
 
     /** The JAR Failsafe names, or the newest one in {@code target/} when run from an IDE. */
