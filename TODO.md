@@ -965,7 +965,7 @@ is needed.
   COMPLIANCE's "opt in per caller" is the right grain: a deployment-wide switch would break every storage
   server that re-verifies a token. Tests: `SingleUseTest`, and three in `SelfSignedCidDidSubjectTest`.
 
-- [ ] **R-35 · Configuration precedence and validation.** `Low` · correctness/config · `S` · *demonstrated*
+- [x] **R-35 · Configuration precedence and validation.** `Low` · correctness/config · `S` · *demonstrated*
   - A scope value is overwritten by another provider's system-property/environment fallback
     (`config/ServerSettings.java:185-217`): `lws` scope `http-timeout-millis=1000` plus
     `-Dlws.authn.http.timeoutMillis=60000` yields 60 000, contradicting "scope first"; the result depends
@@ -983,6 +983,18 @@ is needed.
     guarded client ignores JVM proxy settings, so a deployment that needs an egress proxy must fall back
     to the unguarded session client. **Do:** document it; consider explicit proxy support that keeps the
     guard.
+  **Done.** `ServerSettings.contribute` records only scope values (in `fromScopes`) and `apply()`
+  recomputes every setting from scope → property → environment → default, so the result no longer
+  depends on factory order (`aScopeValueBeatsThePropertyWhateverOrderTheProvidersStartIn` fails against
+  the previous code). `Settings.getLong/getInt` take a range: out of range is clamped, unparseable or
+  negative falls back, and `Settings.warnOnce` logs each (once per key and value); booleans warn too.
+  `rate-limit`/`cid-rate-limit` use it, so `-1` is the default, not off. The scope key is now `serve`
+  (sysprop/env unchanged); `enabled` is left to Keycloak. `SsrfGuard.normalizeHost` (brackets, trailing
+  dot, case, full IPv6 form) is used for both the configured entries and the host compared. `http-mode`
+  moved into `ServerSettings` (`guarded`|`session`, unknown → guarded, logged) and is documented in
+  `configuration.md` with what `session` gives up. Explicit proxy support that keeps the guard was
+  considered and not done: through a proxy the proxy resolves the name, so the resolver this guard
+  relies on never sees the address.
 
 - [ ] **R-36 · HTTP details.** `Low` · spec-conformance · `S` · *verified*
   `VerifyAccess.java:216-219` always sends `error="invalid_token"`, even when no `Authorization` header

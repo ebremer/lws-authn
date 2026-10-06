@@ -111,7 +111,31 @@ public final class SsrfGuard {
     }
 
     private static boolean isAllowListed(String host, Set<String> allowedHosts) {
-        return allowedHosts.contains(normalize(host).toLowerCase(Locale.ROOT));
+        String normalized = normalizeHost(host);
+        return allowedHosts.contains(normalized)
+                || allowedHosts.stream().anyMatch(entry -> normalizeHost(entry).equals(normalized));
+    }
+
+    /**
+     * {@code host} in the one spelling the allow-list is kept in (R-35): trimmed and lower-cased, without
+     * the brackets of an IPv6 literal or the trailing dot of a fully qualified name, and an IPv6 literal
+     * in its full form. An allow-list entry written {@code [::1]} or {@code kc.internal.} used to match
+     * nothing — failing closed, but with no way to tell why.
+     */
+    public static String normalizeHost(String host) {
+        String h = normalize(host).toLowerCase(Locale.ROOT);
+        if (h.endsWith(".") && h.length() > 1) {
+            h = h.substring(0, h.length() - 1);
+        }
+        if (h.indexOf(':') >= 0 && h.matches("[0-9a-f:.]+")) {
+            try {
+                // A literal, which InetAddress parses without asking DNS: "::1" and "0:0:0:0:0:0:0:1" alike.
+                h = InetAddress.getByName(h).getHostAddress();
+            } catch (UnknownHostException notALiteral) {
+                // left as written; it will match only itself
+            }
+        }
+        return h;
     }
 
     /**

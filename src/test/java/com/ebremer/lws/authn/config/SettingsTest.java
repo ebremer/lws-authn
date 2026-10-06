@@ -76,6 +76,7 @@ class SettingsTest {
         ServerSettings.reset();
         System.clearProperty("lws.authn.clockSkewSeconds");
         System.clearProperty("lws.authn.allowedInternalHosts");
+        System.clearProperty("lws.authn.http.timeoutMillis");
     }
 
     // ------------------------------------------------------------------ Settings: the three sources
@@ -101,10 +102,72 @@ class SettingsTest {
 
     @Test
     void malformedNumbersAndBooleansFallBackRatherThanThrow() {
-        assertEquals(7L, Settings.getLong(scope("k", "not a number"), "k", "no.such", "NO_SUCH", 7L));
-        assertEquals(7, Settings.getInt(scope("k", "99999999999999"), "k", "no.such", "NO_SUCH", 7));
+        assertEquals(7L, Settings.getLong(scope("k", "not a number"), "k", "no.such", "NO_SUCH", 7L, 0, 100));
         assertTrue(Settings.getBoolean(scope("k", "yes please"), "k", "no.such", "NO_SUCH", true));
         assertFalse(Settings.getBoolean(scope("k", "FALSE"), "k", "no.such", "NO_SUCH", true));
+    }
+
+    /**
+     * R-35. A number out of range is clamped — {@code http-timeout-millis=99999999999} used to overflow
+     * an {@code int} and quietly become the default — and a negative one is a mistake, not "off".
+     */
+    @Test
+    void outOfRangeIsClampedAndNegativeIsInvalid() {
+        assertEquals(100, Settings.getInt(scope("k", "99999999999999"), "k", "no.such", "NO_SUCH", 7, 0, 100));
+        assertEquals(5L, Settings.getLong(scope("k", "1"), "k", "no.such", "NO_SUCH", 7L, 5, 100));
+        assertEquals(7L, Settings.getLong(scope("k", "-1"), "k", "no.such", "NO_SUCH", 7L, 0, 100));
+
+        ServerSettings.contribute("lws", scope("http-timeout-millis", "99999999999"));
+        assertEquals(60_000, OutboundHttp.timeoutMillis());
+
+        EndpointSettings negative = EndpointSettings.from("lws", scope("rate-limit", "-1", "cid-rate-limit", "-1"));
+        assertNotNull(negative.getCidLimiter(), "rate-limit=-1 used to turn limiting off");
+        assertEquals(EndpointSettings.DEFAULT_CID_RATE_LIMIT, negative.getCidLimiter().getPermitsPerMinute());
+        assertTrue(negative.describe().contains("rate-limit=" + VerifyAccess.DEFAULT_RATE_LIMIT + "/min"),
+                negative.describe());
+    }
+
+    /**
+     * R-35. Any provider's scope comes before the system property, whichever order the providers are
+     * initialised in. The second provider, with nothing in its scope, used to read the property as its
+     * own say-so and overwrite the first one's scope value.
+     */
+    @Test
+    void aScopeValueBeatsThePropertyWhateverOrderTheProvidersStartIn() {
+        System.setProperty("lws.authn.http.timeoutMillis", "60000");
+        ServerSettings.contribute("lws", scope("http-timeout-millis", "1000"));
+        ServerSettings.contribute("lws-saml", scope());
+        assertEquals(1000, OutboundHttp.timeoutMillis());
+
+        ServerSettings.reset();
+        ServerSettings.contribute("lws-saml", scope());
+        assertEquals(60_000, OutboundHttp.timeoutMillis(), "with no scope naming it, the property applies");
+        ServerSettings.contribute("lws", scope("http-timeout-millis", "1000"));
+        assertEquals(1000, OutboundHttp.timeoutMillis());
+    }
+
+    /** R-35. The allow-list matches however a host is spelt: bracketed, with a trailing dot, any case. */
+    @Test
+    void allowListEntriesAreReadInTheirUsualSpellings() {
+        ServerSettings.contribute("lws", scope("allowed-internal-hosts", "[::1], KC.Internal. ,0:0:0:0:0:0:0:2"));
+        Set<String> allowed = SsrfGuard.configuredAllowlist();
+        for (String host : new String[]{"[::1]", "::1", "0:0:0:0:0:0:0:1", "kc.internal", "kc.internal.",
+                "KC.INTERNAL", "[::2]"}) {
+            assertTrue(SsrfGuard.secureOrAllowListed("http", host, allowed), host + " in " + allowed);
+        }
+        assertFalse(SsrfGuard.secureOrAllowListed("http", "kc.internal.example", allowed));
+    }
+
+    /** R-35. {@code http-mode} is a setting like the others, read by the same rules, and logged. */
+    @Test
+    void theHttpModeIsASetting() {
+        assertEquals("guarded", ServerSettings.httpMode());
+        ServerSettings.contribute("lws", scope("http-mode", "Session"));
+        assertEquals("session", ServerSettings.httpMode());
+        assertTrue(ServerSettings.describe().contains("http-mode=session"), ServerSettings.describe());
+        ServerSettings.reset();
+        ServerSettings.contribute("lws", scope("http-mode", "proxy"));
+        assertEquals("guarded", ServerSettings.httpMode(), "an unknown mode is the safe one");
     }
 
     // ----------------------------------------------------------------------------- ServerSettings
@@ -198,14 +261,17 @@ class SettingsTest {
 
     @Test
     void anEndpointCanBeTurnedOff() {
-        assertFalse(EndpointSettings.from("lws-saml", scope("enabled", "false")).isEnabled(null));
-        assertTrue(EndpointSettings.from("lws-saml", scope("enabled", "true")).isEnabled(null));
+        assertFalse(EndpointSettings.from("lws-saml", scope("serve", "false")).isEnabled(null));
+        assertTrue(EndpointSettings.from("lws-saml", scope("serve", "true")).isEnabled(null));
+        // R-35: 'enabled' in a provider's scope is Keycloak's own switch, which never lets the factory
+        // load when false; this provider does not read it.
+        assertTrue(EndpointSettings.from("lws-saml", scope("enabled", "false")).isEnabled(null));
     }
 
     @Test
     void aRealmAttributeOverridesTheProviderWideFlagInBothDirections() {
-        EndpointSettings on = EndpointSettings.from("lws-saml", scope("enabled", "true"));
-        EndpointSettings off = EndpointSettings.from("lws-saml", scope("enabled", "false"));
+        EndpointSettings on = EndpointSettings.from("lws-saml", scope("serve", "true"));
+        EndpointSettings off = EndpointSettings.from("lws-saml", scope("serve", "false"));
 
         assertFalse(on.isEnabled(realmWith("lws.authn.lws-saml.enabled", "false")));
         assertTrue(off.isEnabled(realmWith("lws.authn.lws-saml.enabled", "true")));

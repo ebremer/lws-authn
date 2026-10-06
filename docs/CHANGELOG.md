@@ -408,6 +408,21 @@ each may reject a document that used to verify. Check your issuers' documents be
   realm and `lws-demo.sh` set it off explicitly. Existing mappers with the switch explicitly on keep
   it; turn it off unless something downstream needs the WebID in the access token. The ID Token and
   userinfo are unchanged.
+- **Configuration is read in one order, and says when it is wrong** (R-35). A provider's scope now
+  always comes before the system property and environment variable: a server-wide setting such as
+  `http-timeout-millis` set in one provider's scope used to be overwritten by the property whenever a
+  provider with nothing in its scope was initialised after it. A value that will not parse, a negative
+  number, or a boolean other than `true`/`false` falls back to the default **with a warning**, where it
+  used to do so silently — and `rate-limit=-1` or `cid-rate-limit=-1`, which used to turn rate limiting
+  **off**, now means the default (`0` still turns it off). An out-of-range number is clamped, with a
+  warning: `http-timeout-millis=99999999999` used to overflow and become 5 s rather than the 60 s
+  ceiling. The allow-list now matches `[::1]`, `::1` and `0:0:0:0:0:0:0:1` alike, and a trailing dot.
+  **The "serve this suite" scope key is now `serve`**: `enabled` in a provider's scope is Keycloak's own
+  switch, which at `false` stops Keycloak loading the provider at all — so no realm attribute could
+  turn it back on, as the documentation said one could. Keycloak's switch still works as Keycloak's;
+  `LWS_AUTHN_ENABLED` and `lws.authn.enabled` are unchanged. And `http-mode` (`LWS_AUTHN_HTTP_MODE`,
+  `lws.authn.http.mode`) is now a documented setting read like the others and logged at startup:
+  `session` is the way to fetch through an egress proxy, at the cost of the rebinding-safe resolver.
 - **Userinfo's `sub` follows the ID Token's** (R-30). The mapper's *Add to userinfo* switch is gone — one
   saved with a mapper is ignored — and *Add to ID token and userinfo* sets both, because OIDC Core
   §5.3.2 requires userinfo's `sub` to match the ID Token's exactly: with the ID Token on and userinfo

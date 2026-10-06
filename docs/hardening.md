@@ -101,7 +101,7 @@ behaviours are covered by tests — `mvn test` for the unit tests, `mvn verify` 
   identifiers are Keycloak user ids (random UUIDs, not guessable and not meaningful), every answer —
   document, `404`, `406`, `429` — is the same media type with the same body shape so nothing but the
   status distinguishes them, and a rate limit (`cid-rate-limit`, default 600/minute per caller) makes
-  scraping slow. Set `enabled=false` for a deployment that does not want to host identifiers at all.
+  scraping slow. Set `serve=false` for a deployment that does not want to host identifiers at all.
 - **Only the syntaxes asked for are read.** A dereferenced document is read only as one of the syntaxes
   the verifiers request — Turtle, JSON-LD, `application/cid`, N-Triples, RDF/XML — or as `application/json`. Anything else
   is rejected by name rather than handed to a parser: not only HTML or PDF, which once failed as a

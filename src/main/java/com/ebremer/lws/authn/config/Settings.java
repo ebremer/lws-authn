@@ -8,6 +8,10 @@
  */
 package com.ebremer.lws.authn.config;
 
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+
+import org.jboss.logging.Logger;
 import org.keycloak.Config;
 
 /**
@@ -60,41 +64,78 @@ public final class Settings {
         return get(scope, key, systemProperty, environmentVariable, null) != null;
     }
 
-    /** As {@link #get}, parsed as a {@code long}; a value that will not parse falls back with no fuss. */
+    /**
+     * As {@link #get}, parsed as a non-negative {@code long} in {@code [min, max]} (R-35). A value outside
+     * the range is clamped to it; one that will not parse, or is negative — every number this provider
+     * reads is a count, a size or a duration — falls back. Either way the log says so: a mistyped
+     * setting used to become the default without a word, and {@code rate-limit=-1} turned limiting off.
+     */
     public static long getLong(Config.Scope scope, String key, String systemProperty,
-                               String environmentVariable, long fallback) {
-        String value = get(scope, key, systemProperty, environmentVariable, null);
-        if (value == null) {
-            return fallback;
-        }
-        try {
-            return Long.parseLong(value.trim());
-        } catch (NumberFormatException e) {
-            return fallback;
-        }
+                               String environmentVariable, long fallback, long min, long max) {
+        return parseLong(key, get(scope, key, systemProperty, environmentVariable, null), fallback, min, max);
     }
 
-    /** As {@link #getLong}, narrowed to {@code int}. */
+    /** As {@link #getLong(Config.Scope, String, String, String, long, long, long)}, narrowed to {@code int}. */
     public static int getInt(Config.Scope scope, String key, String systemProperty,
-                             String environmentVariable, int fallback) {
-        long value = getLong(scope, key, systemProperty, environmentVariable, fallback);
-        return value < Integer.MIN_VALUE || value > Integer.MAX_VALUE ? fallback : (int) value;
+                             String environmentVariable, int fallback, int min, int max) {
+        return (int) getLong(scope, key, systemProperty, environmentVariable, fallback, min, max);
     }
 
-    /** As {@link #get}, read as a boolean; anything other than {@code true}/{@code false} falls back. */
+    /** As {@link #get}, read as a boolean; anything other than {@code true}/{@code false} falls back, and is logged. */
     public static boolean getBoolean(Config.Scope scope, String key, String systemProperty,
                                      String environmentVariable, boolean fallback) {
-        String value = get(scope, key, systemProperty, environmentVariable, null);
-        if (value == null) {
+        return parseBoolean(key, get(scope, key, systemProperty, environmentVariable, null), fallback);
+    }
+
+    /** {@code raw} as {@link #getLong(Config.Scope, String, String, String, long, long, long)} reads it. */
+    static long parseLong(String key, String raw, long fallback, long min, long max) {
+        if (raw == null) {
             return fallback;
         }
-        String trimmed = value.trim();
+        long value;
+        try {
+            value = Long.parseLong(raw.trim());
+        } catch (NumberFormatException unreadable) {
+            warnOnce(key, raw, "is not a whole number; using " + fallback);
+            return fallback;
+        }
+        if (value < 0) {
+            warnOnce(key, raw, "is negative; using " + fallback);
+            return fallback;
+        }
+        if (value < min || value > max) {
+            long clamped = Math.max(min, Math.min(max, value));
+            warnOnce(key, raw, "is outside " + min + "–" + max + "; using " + clamped);
+            return clamped;
+        }
+        return value;
+    }
+
+    /** {@code raw} as {@link #getBoolean} reads it. */
+    static boolean parseBoolean(String key, String raw, boolean fallback) {
+        if (raw == null) {
+            return fallback;
+        }
+        String trimmed = raw.trim();
         if (trimmed.equalsIgnoreCase("true")) {
             return true;
         }
         if (trimmed.equalsIgnoreCase("false")) {
             return false;
         }
+        warnOnce(key, raw, "is neither true nor false; using " + fallback);
         return fallback;
+    }
+
+    private static final Logger log = Logger.getLogger(Settings.class);
+
+    /** What has been warned about, so a setting several providers read is complained of once. */
+    private static final Set<String> WARNED = ConcurrentHashMap.newKeySet();
+
+    /** Logs that {@code key}'s value {@code raw} {@code problem}, once per key and value. */
+    public static void warnOnce(String key, String raw, String problem) {
+        if (WARNED.add(key + "=" + raw)) {
+            log.warnf("lws-authn setting '%s' has the value '%s', which %s", key, raw, problem);
+        }
     }
 }

@@ -367,7 +367,7 @@ are what the systemd unit below uses.
 > for these lines in the startup log, one per provider and one for the server-wide settings:
 >
 > ```
-> lws-authn provider 'lws' settings in force: enabled=true, access=bearer, role=lws-verifier, rate-limit=60/min, …
+> lws-authn provider 'lws' settings in force: serve=true, access=bearer, role=lws-verifier, rate-limit=60/min, …
 > lws-authn server-wide settings in force: allowed-internal-hosts=[…], http-timeout-millis=5000, …
 > ```
 
@@ -400,7 +400,7 @@ need no `kc.sh build`. (A provider option belongs in `keycloak.conf` or on `kc.s
 
 | Setting | Environment variable | System property | Provider option | Default |
 |---|---|---|---|---|
-| Serve this suite at all | `LWS_AUTHN_ENABLED` | `lws.authn.enabled` | `enabled` | `true` |
+| Serve this suite at all | `LWS_AUTHN_ENABLED` | `lws.authn.enabled` | `serve` | `true` |
 | Audience to require when the request names none | `LWS_AUTHN_AUDIENCE` | `lws.authn.audience` | `audience` | — |
 | `Cache-Control: max-age` on a served CID | `LWS_AUTHN_CID_CACHE_SECONDS` | `lws.authn.cid.cacheSeconds` | `cid-cache-seconds` | `300` |
 | CID requests per minute, per caller | `LWS_AUTHN_CID_RATE_LIMIT` | `lws.authn.cid.rateLimit` | `cid-rate-limit` | `600` |
@@ -411,12 +411,15 @@ need no `kc.sh build`. (A provider option belongs in `keycloak.conf` or on `kc.s
 | Clock skew on `exp`/`nbf`/`<Conditions>` (s) | `LWS_AUTHN_CLOCK_SKEW_SECONDS` | `lws.authn.clockSkewSeconds` | `clock-skew-seconds` | `60` |
 
 The last five are server-wide: set them on any one provider and all three use them. Out-of-range
-values are clamped rather than honoured.
+values are clamped rather than honoured, and one that will not parse falls back to the default; either
+is logged as a warning at startup. [Configuration](configuration.md) has the full list, including
+`http-mode` for a server that can reach the internet only through an egress proxy.
 
 **Turning a suite off.** `LWS_AUTHN_ENABLED=false` makes the suites' endpoints answer `404`. For just
-one, `--spi-realm-restapi-extension--lws-saml--enabled=false` — the one provider option that *is*
-build-time, so it goes on `kc.sh build`, and Keycloak then does not load that provider at all. For one realm only, set the realm attribute
-`lws.authn.<providerId>.enabled` — for example:
+one, `--spi-realm-restapi-extension--lws-saml--serve=false` on `kc.sh start`. (Keycloak's own
+`--spi-realm-restapi-extension--lws-saml--enabled=false` — build-time, so on `kc.sh build` — removes
+the provider entirely: it is not loaded, and no realm can turn it back on.) For one realm only, set the
+realm attribute `lws.authn.<providerId>.enabled` — for example:
 
 ```bash
 kcadm.sh update realms/myrealm -s 'attributes."lws.authn.lws-saml.enabled"=false'

@@ -87,7 +87,7 @@ public final class VerifyAccess {
     }
 
     private static final String BEARER_PREFIX = "Bearer ";
-    private static final int DEFAULT_RATE_LIMIT = 60;
+    public static final int DEFAULT_RATE_LIMIT = 60;
 
     /**
      * The realm role a {@code bearer} caller must hold when {@code role} is not set (R-11).
@@ -123,8 +123,9 @@ public final class VerifyAccess {
         String access = Settings.get(scope, "access", "lws.authn.verify.access", "LWS_AUTHN_VERIFY_ACCESS", "bearer");
         String secret = Settings.get(scope, "secret", "lws.authn.verify.secret", "LWS_AUTHN_VERIFY_SECRET", null);
         String role = Settings.get(scope, "role", "lws.authn.verify.role", "LWS_AUTHN_VERIFY_ROLE", DEFAULT_ROLE);
-        String rate = Settings.get(scope, "rate-limit", "lws.authn.verify.rateLimit", "LWS_AUTHN_VERIFY_RATE_LIMIT",
-                String.valueOf(DEFAULT_RATE_LIMIT));
+        // 0 turns the limiter off; a negative value is a mistake, not a way to say so (R-35).
+        int permits = Settings.getInt(scope, "rate-limit", "lws.authn.verify.rateLimit", "LWS_AUTHN_VERIFY_RATE_LIMIT",
+                DEFAULT_RATE_LIMIT, 0, 1_000_000);
 
         Mode mode;
         try {
@@ -148,13 +149,7 @@ public final class VerifyAccess {
                     + "make this server dereference URLs of their choosing. Only do this on a realm whose users "
                     + "are all trusted.");
         }
-        int permits;
-        try {
-            permits = Integer.parseInt(rate.trim());
-        } catch (RuntimeException e) {
-            permits = DEFAULT_RATE_LIMIT;
-        }
-        return new VerifyAccess(mode, secret, requiredRole, Math.max(0, permits));
+        return new VerifyAccess(mode, secret, requiredRole, permits);
     }
 
     /** The policy that applies when nothing is configured: bearer-authenticated and rate limited. */

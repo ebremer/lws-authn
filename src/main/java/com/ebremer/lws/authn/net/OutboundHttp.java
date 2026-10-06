@@ -68,8 +68,8 @@ import com.ebremer.lws.authn.verify.VerifyAccess;
  * (R-01). {@link #fetch} instead aborts the request — which shuts the socket rather than draining it —
  * at a deadline, on a declared length over the cap, and as soon as the body passes it.</p>
  *
- * <p>Set {@code lws.authn.http.mode=session} (or {@code LWS_AUTHN_HTTP_MODE=session}) to fetch through
- * the server-wide client instead — for a deployment that needs Keycloak's proxy mappings, which this
+ * <p>Set {@code http-mode=session} (or {@code lws.authn.http.mode}, {@code LWS_AUTHN_HTTP_MODE}) to fetch
+ * through the server-wide client instead — for a deployment that needs Keycloak's proxy mappings, which this
  * client does not replicate. Redirects stay off per request and the deadline, cap and caller bound
  * still apply, but name resolution is then Keycloak's: that fallback is not rebinding-safe.</p>
  *
@@ -540,12 +540,9 @@ public final class OutboundHttp {
         }
     }
 
+    /** {@code http-mode=session}: see {@link ServerSettings#httpMode()}. */
     private static boolean usingSessionClient() {
-        String mode = System.getProperty("lws.authn.http.mode");
-        if (mode == null || mode.isBlank()) {
-            mode = System.getenv("LWS_AUTHN_HTTP_MODE");
-        }
-        return mode != null && "session".equalsIgnoreCase(mode.trim());
+        return "session".equals(ServerSettings.httpMode());
     }
 
     // ------------------------------------------------------------------------ per-origin breaker

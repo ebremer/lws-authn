@@ -26,17 +26,23 @@ import com.ebremer.lws.authn.verify.VerifyAccess;
  *   <caption>Settings (scope keys are per provider id: {@code lws}, {@code lws-ssi-cid},
  *            {@code lws-saml})</caption>
  *   <tr><th>Scope key</th><th>System property</th><th>Environment</th><th>Default</th></tr>
- *   <tr><td>{@code enabled}</td><td>{@code lws.authn.enabled}</td><td>{@code LWS_AUTHN_ENABLED}</td><td>{@code true}</td></tr>
+ *   <tr><td>{@code serve}</td><td>{@code lws.authn.enabled}</td><td>{@code LWS_AUTHN_ENABLED}</td><td>{@code true}</td></tr>
  *   <tr><td>{@code audience}</td><td>{@code lws.authn.audience}</td><td>{@code LWS_AUTHN_AUDIENCE}</td><td>none</td></tr>
  *   <tr><td>{@code cid-cache-seconds}</td><td>{@code lws.authn.cid.cacheSeconds}</td><td>{@code LWS_AUTHN_CID_CACHE_SECONDS}</td><td>{@code 300}</td></tr>
  *   <tr><td>{@code cid-rate-limit}</td><td>{@code lws.authn.cid.rateLimit}</td><td>{@code LWS_AUTHN_CID_RATE_LIMIT}</td><td>{@code 600}</td></tr>
  *   <tr><td>{@code request-certificates}</td><td>{@code lws.authn.saml.requestCertificates}</td><td>{@code LWS_AUTHN_SAML_REQUEST_CERTIFICATES}</td><td>{@code true}</td></tr>
  * </table>
  *
- * <p>{@code enabled} additionally honours a per-realm override, which is the only one of these that
+ * <p>{@code serve} additionally honours a per-realm override, which is the only one of these that
  * can sensibly differ between realms of the same server: a realm attribute named
  * {@code lws.authn.<providerId>.enabled} (for example {@code lws.authn.lws-saml.enabled}) set to
  * {@code false} turns that suite off for that realm alone. See {@link #isEnabled(RealmModel)}.</p>
+ *
+ * <p>The scope key is {@code serve}, not {@code enabled}, because {@code enabled} in a provider's scope
+ * is Keycloak's own switch (R-35): {@code spi-realm-restapi-extension--lws-saml--enabled=false} stops
+ * Keycloak loading the factory at all, so no realm attribute could turn the suite back on, its paths
+ * answered Keycloak's 404 rather than this provider's, and any server-wide setting given only to that
+ * provider was lost. Keycloak's switch still works, as Keycloak's.</p>
  *
  * @author Erich Bremer
  */
@@ -100,16 +106,17 @@ public final class EndpointSettings {
     }
 
     private static EndpointSettings read(String providerId, Config.Scope scope) {
-        boolean enabled = Settings.getBoolean(scope, "enabled", "lws.authn.enabled", "LWS_AUTHN_ENABLED", true);
+        boolean enabled = Settings.getBoolean(scope, "serve", "lws.authn.enabled", "LWS_AUTHN_ENABLED", true);
         if (!enabled) {
             log.infof("lws-authn provider '%s' is disabled by configuration; its endpoints will answer 404",
                     providerId);
         }
         String audience = Settings.get(scope, "audience", "lws.authn.audience", "LWS_AUTHN_AUDIENCE", null);
-        long cache = Math.max(0, Settings.getLong(scope, "cid-cache-seconds",
-                "lws.authn.cid.cacheSeconds", "LWS_AUTHN_CID_CACHE_SECONDS", DEFAULT_CID_CACHE_SECONDS));
-        int cidRateLimit = Math.max(0, Settings.getInt(scope, "cid-rate-limit",
-                "lws.authn.cid.rateLimit", "LWS_AUTHN_CID_RATE_LIMIT", DEFAULT_CID_RATE_LIMIT));
+        long cache = Settings.getLong(scope, "cid-cache-seconds", "lws.authn.cid.cacheSeconds",
+                "LWS_AUTHN_CID_CACHE_SECONDS", DEFAULT_CID_CACHE_SECONDS, 0, 31_536_000);
+        // 0 turns the limiter off; a negative value is a mistake, not a way to say so (R-35).
+        int cidRateLimit = Settings.getInt(scope, "cid-rate-limit", "lws.authn.cid.rateLimit",
+                "LWS_AUTHN_CID_RATE_LIMIT", DEFAULT_CID_RATE_LIMIT, 0, 1_000_000);
         boolean requestCertificates = Settings.getBoolean(scope, "request-certificates",
                 "lws.authn.saml.requestCertificates", "LWS_AUTHN_SAML_REQUEST_CERTIFICATES", true);
         return new EndpointSettings(providerId, enabled, blankToNull(audience), cache, cidRateLimit,
@@ -187,7 +194,7 @@ public final class EndpointSettings {
      * one is set.
      */
     public String describe() {
-        return "enabled=" + enabled + ", " + verifyAccess.describe()
+        return "serve=" + enabled + ", " + verifyAccess.describe()
                 + ", audience=" + (defaultAudience == null ? "(none)" : defaultAudience)
                 + ", cid-cache-seconds=" + cidCacheSeconds
                 + ", cid-rate-limit=" + (cidLimiter == null ? "off" : cidLimiter.getPermitsPerMinute() + "/min")
