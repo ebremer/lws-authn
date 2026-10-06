@@ -6,11 +6,13 @@
 package com.ebremer.lws.authn.ssicid.verify;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.security.KeyPair;
 import java.util.List;
 
 import org.apache.jena.rdf.model.Model;
@@ -21,6 +23,7 @@ import org.junit.jupiter.api.Test;
 
 import com.ebremer.lws.authn.ssicid.SsiCidConstants;
 import com.ebremer.lws.authn.ssicid.verify.SelfSignedCidVerifier.VerificationMethod;
+import com.ebremer.lws.authn.testsupport.SelfIssuedJwts;
 
 /**
  * Key extraction is static and side-effect free, so it can be driven without a Keycloak session or
@@ -176,5 +179,23 @@ class SelfSignedCidVerifierTest {
         List<VerificationMethod> methods = SelfSignedCidVerifier.collectFromRdf(model, VICTIM);
         assertNotNull(SelfSignedCidVerifier.selectByKid(methods, "k2"));
         assertNull(SelfSignedCidVerifier.selectByKid(methods, "k1"));
+    }
+
+    /**
+     * R-07. The suite is for "subject identifiers that use HTTPS URIs as well as DID URIs"; a plain http
+     * subject's document — and so its keys — can be swapped by anyone on the network path. It is refused
+     * by name, without a fetch.
+     */
+    @Test
+    void aPlainHttpSubjectIsRefused() throws Exception {
+        KeyPair pair = SelfIssuedJwts.ec("secp256r1");
+        String sub = "http://cid.example/agent";
+        String jwt = SelfIssuedJwts.sign(SelfIssuedJwts.claims(sub), "ES256", sub + "#k1", pair.getPrivate(),
+                SelfIssuedJwts.jcaFor("ES256"));
+        SsiCidVerificationResult result = new SelfSignedCidVerifier(null).verify(jwt, SelfIssuedJwts.AUDIENCE);
+        assertFalse(result.isValid());
+        assertEquals(Boolean.FALSE, result.getChecks().get("subjectDereferenced"));
+        assertTrue(result.getErrors().stream().anyMatch(e -> e.contains("neither an https URL nor a DID")),
+                String.valueOf(result.getErrors()));
     }
 }

@@ -1,3 +1,7 @@
+# Copyright Erich Bremer.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # For previewing the documentation site locally; GitHub Pages does not read this file. It builds the
 # published site with its own copy of the `github-pages` gem, and depending on that same gem is what
 # makes a preview render the way the published site will.

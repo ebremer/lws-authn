@@ -13,6 +13,7 @@ package com.ebremer.lws.authn.openid.resource;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.FormParam;
 import jakarta.ws.rs.GET;
+import jakarta.ws.rs.OPTIONS;
 import jakarta.ws.rs.HeaderParam;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
@@ -28,6 +29,7 @@ import org.keycloak.services.resource.RealmResourceProvider;
 import com.ebremer.lws.authn.config.EndpointSettings;
 import com.ebremer.lws.authn.http.CidEndpoint;
 import com.ebremer.lws.authn.http.JsonResponses;
+import com.ebremer.lws.authn.http.ThisRealm;
 import com.ebremer.lws.authn.openid.LWSConstants;
 import com.ebremer.lws.authn.openid.cid.ControlledIdentifierDocument;
 import com.ebremer.lws.authn.openid.verify.LWSCredentialVerifier;
@@ -65,23 +67,35 @@ public class LWSResourceProvider implements RealmResourceProvider {
      * <p>Content negotiated: JSON-LD (default), Turtle, N-Triples, RDF/XML. See {@link CidEndpoint}
      * for why it is unauthenticated and what bounds that.</p>
      */
+    /** The CORS preflight for the document (R-36); see {@link CidEndpoint}. */
+    @OPTIONS
+    @Path(LWSConstants.CID_PATH + "/{userId}")
+    public Response preflightControlledIdentifierDocument() {
+        return CidEndpoint.preflight();
+    }
+
     @GET
     @Path(LWSConstants.CID_PATH + "/{userId}")
     @Produces({LWSConstants.JSON_LD, LWSConstants.TURTLE, LWSConstants.N_TRIPLES, LWSConstants.RDF_XML})
     public Response getControlledIdentifierDocument(@PathParam("userId") String userId,
                                                     @HeaderParam("Accept") String accept,
                                                     @HeaderParam("If-None-Match") String ifNoneMatch) {
-        return CidEndpoint.serve(session, settings, LWSConstants.CID_PATH, userId, accept, ifNoneMatch,
-                (user, issuer, webId, contentType) -> {
-                    ControlledIdentifierDocument cid = new ControlledIdentifierDocument(webId, issuer);
-                    return switch (contentType) {
-                        case LWSConstants.TURTLE -> cid.toRdf(RDFFormat.TURTLE);
-                        case LWSConstants.N_TRIPLES -> cid.toRdf(RDFFormat.NTRIPLES);
-                        case LWSConstants.RDF_XML -> cid.toRdf(RDFFormat.RDFXML);
-                        default -> cid.toJsonLd();
-                    };
-                });
+        return CidEndpoint.serve(session, settings, LWSConstants.CID_PATH, userId, accept, ifNoneMatch, DOCUMENTS);
     }
+
+    /**
+     * How a user's controlled identifier document is rendered: for the endpoint, and for the verifier
+     * reading one of this realm's own without fetching it (R-26), so the two cannot disagree.
+     */
+    public static final CidEndpoint.DocumentRenderer DOCUMENTS = (user, issuer, webId, contentType) -> {
+        ControlledIdentifierDocument cid = new ControlledIdentifierDocument(webId, issuer);
+        return switch (contentType) {
+            case LWSConstants.TURTLE -> cid.toRdf(RDFFormat.TURTLE);
+            case LWSConstants.N_TRIPLES -> cid.toRdf(RDFFormat.NTRIPLES);
+            case LWSConstants.RDF_XML -> cid.toRdf(RDFFormat.RDFXML);
+            default -> cid.toJsonLd(); // JSON-LD, and application/cid, which is the same body
+        };
+    };
 
     /**
      * Verifies an ID Token as an LWS authentication credential, running the specification's
@@ -132,8 +146,13 @@ public class LWSResourceProvider implements RealmResourceProvider {
         if (token == null || token.isBlank()) {
             return JsonResponses.badRequest("missing 'credential' form parameter or Bearer token");
         }
+        Response oversized = VerifyAccess.refuseOversized(token);
+        if (oversized != null) {
+            return oversized;
+        }
 
         VerificationResult result = new LWSCredentialVerifier(session)
+                .localTo(ThisRealm.of(session), DOCUMENTS)
                 .verify(token, expectedClientId, settings.audienceFor(expectedAudience));
         return JsonResponses.of(Response.Status.OK, result);
     }

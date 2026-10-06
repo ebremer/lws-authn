@@ -21,15 +21,20 @@ import com.fasterxml.jackson.annotation.JsonPropertyOrder;
  * @author Erich Bremer
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
-@JsonPropertyOrder({"valid", "subject", "issuer", "client", "audiences", "recipient", "tokenType", "notBefore", "notOnOrAfter", "checks", "errors", "traceId"})
+@JsonPropertyOrder({"valid", "subject", "subjectFormat", "issuer", "client", "audiences", "recipient", "tokenType", "notBefore", "notOnOrAfter", "oneTimeUse", "trustSource", "identityProvider", "certificateSha256", "checks", "errors", "traceId"})
 public class SamlVerificationResult {
 
     private boolean valid;
     private String subject;
+    private String subjectFormat;
     private String issuer;
     private String recipient;
     private String notBefore;
     private String notOnOrAfter;
+    private Boolean oneTimeUse;
+    private String trustSource;
+    private String identityProvider;
+    private String certificateSha256;
     private List<String> audiences = new ArrayList<>();
     private final Map<String, Boolean> checks = new LinkedHashMap<>();
     private final List<String> errors = new ArrayList<>();
@@ -51,6 +56,15 @@ public class SamlVerificationResult {
 
     public void setSubject(String subject) {
         this.subject = subject;
+    }
+
+    /** The {@code <NameID>}'s {@code Format}, or {@code null} if it names none (R-20). */
+    public String getSubjectFormat() {
+        return subjectFormat;
+    }
+
+    public void setSubjectFormat(String subjectFormat) {
+        this.subjectFormat = subjectFormat;
     }
 
     public String getIssuer() {
@@ -83,6 +97,56 @@ public class SamlVerificationResult {
 
     public void setNotOnOrAfter(String notOnOrAfter) {
         this.notOnOrAfter = notOnOrAfter;
+    }
+
+    /**
+     * {@code true} when the assertion carries {@code <OneTimeUse>}, otherwise absent. SAML Core §2.5.1.5:
+     * such an assertion "SHOULD be used immediately by the relying party and MUST NOT be retained for
+     * future use". This verifier retains nothing; a caller that caches verdicts must not cache this one
+     * (R-21).
+     */
+    public Boolean getOneTimeUse() {
+        return oneTimeUse;
+    }
+
+    public void setOneTimeUse(Boolean oneTimeUse) {
+        this.oneTimeUse = oneTimeUse;
+    }
+
+    /**
+     * Where the certificate that verified the credential came from: {@code request}, the caller's
+     * {@code certificate} parameter, or {@code identity-provider}, one of the realm's SAML identity
+     * providers whose entity ID is the assertion's issuer (R-25). Absent when nothing verified.
+     */
+    public String getTrustSource() {
+        return trustSource;
+    }
+
+    public void setTrustSource(String trustSource) {
+        this.trustSource = trustSource;
+    }
+
+    /** The alias of the identity provider whose certificate verified the credential, if one did. */
+    public String getIdentityProvider() {
+        return identityProvider;
+    }
+
+    public void setIdentityProvider(String identityProvider) {
+        this.identityProvider = identityProvider;
+    }
+
+    /**
+     * The SHA-256 fingerprint of the certificate that verified the credential, as
+     * {@code openssl x509 -noout -fingerprint -sha256} prints it. A caller that supplies several
+     * certificates in turn learns which one it was; with a caller-supplied certificate, {@code valid}
+     * says only that this certificate signed the credential, and the caller decides what that is worth.
+     */
+    public String getCertificateSha256() {
+        return certificateSha256;
+    }
+
+    public void setCertificateSha256(String certificateSha256) {
+        this.certificateSha256 = certificateSha256;
     }
 
     public List<String> getAudiences() {

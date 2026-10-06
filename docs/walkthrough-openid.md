@@ -33,7 +33,7 @@ identity is self-describing.
 
 ## Prerequisites
 
-- Keycloak **26.7.4** with the `lws-authn` provider deployed — see [Build and deploy](build.md) (build
+- Keycloak **26.8.0** or a later 26.8 release, with the `lws-authn` provider deployed — see [Build and deploy](build.md) (build
   → copy `target/lws-authn-<version>.jar` to `providers/` → `kc.sh build` → `kc.sh start`).
 - `curl` and `jq`.
 - For a quick local run: `docker compose up --build --wait` in a checkout — see
@@ -54,8 +54,10 @@ bash scripts/lws-demo.sh
 ```
 
 It provisions a realm (`lws-demo`), a client (`lws-app`), the **LWS WebID Subject** mapper and a user
-(`alice`), then obtains an ID Token, dereferences the resulting WebID, and runs the credential through
-`/verify`. Override anything via env vars, e.g. `KC_URL=https://kc.example ADMIN_PASS=… bash scripts/lws-demo.sh`.
+(`alice`, or `DEMO_USER`), then obtains an ID Token, dereferences the resulting WebID, and runs the credential through
+`/verify`. Override anything via env vars, e.g. `KC_URL=https://kc.example ADMIN_PASS=… PASSWORD=… bash
+scripts/lws-demo.sh` — against anything but `localhost`, `PASSWORD` is required, since the default
+(`alice`) would be a public password on that server.
 
 A successful run ends with `valid: true` and prints the WebID — that's your LWS identity.
 
@@ -100,11 +102,17 @@ issuer below is assumed to be `http://localhost:8080/realms/lws-demo`.
 ### 3. Get an ID Token
 
 ```bash
-ID_TOKEN=$(curl -s -X POST \
+TOKENS=$(curl -s -X POST \
   http://localhost:8080/realms/lws-demo/protocol/openid-connect/token \
   -d grant_type=password -d client_id=lws-app -d scope=openid \
-  -d username=alice -d password=alice | jq -r .id_token)
+  -d username=alice -d password=alice)
+ID_TOKEN=$(echo "$TOKENS" | jq -r .id_token)
+ACCESS_TOKEN=$(echo "$TOKENS" | jq -r .access_token)
 ```
+
+The ID Token is the credential. The access token from the same login identifies *you* when you call
+`/verify` in step 6, which needs a caller holding the realm role `lws-verifier` — `alice` does, in the
+demo realm.
 
 ### 4. Inspect — your `sub` is a WebID
 
@@ -159,7 +167,7 @@ This is exactly what an LWS server does, exposed as an endpoint:
 
 ```bash
 curl -s -X POST "$(echo "$ID_TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq -r .iss)/lws/verify" \
-  --data-urlencode "credential=$ID_TOKEN" | jq
+  -H "Authorization: Bearer $ACCESS_TOKEN" --data-urlencode "credential=$ID_TOKEN" | jq
 ```
 
 ```json

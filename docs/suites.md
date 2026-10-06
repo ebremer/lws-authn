@@ -18,8 +18,16 @@ same things step by step.
 2. **Add the LWS WebID Subject mapper.** *Clients → your client → Client scopes →
    `<client>-dedicated` → Add mapper → By configuration → **LWS WebID Subject***.
    - **WebID user attribute** *(optional)* — a user attribute holding a WebID the user already owns.
-     When empty, the `sub` becomes the Keycloak-hosted URL `{issuer}/lws/cid/{userId}`.
-   - **Add to ID token / access token / userinfo** — default on. The ID Token is the LWS credential.
+     When empty, the `sub` becomes the Keycloak-hosted URL `{issuer}/lws/cid/{userId}`. A value is
+     used only if it is an absolute `http(s)` URL of at most 255 ASCII characters, names no URL of this
+     realm's but the user's own hosted WebID, and no other user of the realm holds it; otherwise the
+     hosted WebID is used and the server log says why. The attribute must not be user-editable — the
+     mapper warns in the log if the user profile allows it.
+   - **Add to ID token and userinfo** — default on. The ID Token is the LWS credential; userinfo's `sub`
+     always matches it, as OIDC Core §5.3.2 requires.
+   - **Add to access token** — default **off**. An access token is not an LWS credential, and one carrying
+     the WebID as its `sub` looks like one; the verifier refuses it by its type (`tokenIsIdToken`), but
+     other verifiers may not. Turn it on only if something downstream needs the WebID there.
 
 ### Endpoints — `/realms/{realm}/lws`
 
@@ -74,15 +82,23 @@ verifiers can find it, and offers a verifier.
    key).
 
 `GET …/lws-ssi-cid/cid/{userId}` serves the CID publishing the registered key(s) as `authentication`
-methods; `POST …/lws-ssi-cid/verify` validates a self-issued JWT: reject `none` and any unsupported
-`crit` header; enforce `sub == iss == client_id`; require a `kid`; dereference `sub` to a document
+methods; `POST …/lws-ssi-cid/verify` validates a self-issued JWT: require strict base64url and numeric
+dates; reject `none` and any unsupported `crit` header; enforce `sub == iss == client_id`; require a `kid`; dereference `sub` to a document
 whose `id` **is** `sub`; select, by `kid`, a `JsonWebKey` or `Multikey` method the document's
 `authentication` relationship names — embedded or by reference — that the subject **controls** and
 that is neither revoked nor expired; pin the `alg` to that key; validate the signature; require `iat`
 and `exp`; and check the audience.
 
-Pass `audience=<authorization server>` to enforce the suite's "the `aud` claim MUST include the target
-authorization server" — without it only the presence of an audience restriction can be checked.
+`audience=<authorization server>` is **required** — or the deployment's `audience` setting. The suite
+says "the `aud` claim MUST include the target authorization server", and that only means something if
+the verifier knows which one it is; a request without one is a `400`, before anything is fetched.
+
+`single_use=true` holds the credential to one use, for a caller that treats one verification as one use
+(a single-use exchange, say): it must carry a `jti`, and once verified this way it is refused
+(`notReplayed: false`) whenever it is asked about again with `single_use=true`, until its `exp` plus the
+clock skew has passed. The record is Keycloak's single-use object store, shared across a cluster. A
+credential still valid for more than a day cannot be held to one use and is refused when that is asked.
+Leave it off otherwise: a storage server looks at the same token on every request it carries.
 
 The document a verifier dereferences must therefore be CID-conformant: an `id` equal to the subject,
 and the key listed under `authentication` (CID 1.0 §2.3 — a key defined under `verificationMethod`
@@ -99,10 +115,10 @@ resolved. Two methods are resolved; any other is refused by name.
 | Method | Resolution | Example `kid` |
 |---|---|---|
 | `did:key` | expanded locally into the did:key Method's document — one `Multikey` method, referenced from `authentication`. No network. Must be canonically encoded; Ed25519, P-256, P-384 or P-521. | `did:key:zDnae…#zDnae…` |
-| `did:web` | `did:web:example.com` → `https://example.com/.well-known/did.json`; `did:web:example.com:u:bob` → `https://example.com/u/bob/did.json`; a port as `%3A`. Fetched through the same SSRF-guarded client as an HTTPS subject; a domain name only, never an IP address; the document's `id` must be the DID. | `did:web:example.com#key-1` |
+| `did:web` | `did:web:example.com` → `https://example.com/.well-known/did.json`; `did:web:example.com:u:bob` → `https://example.com/u/bob/did.json`; a port as `%3A`. Fetched through the same SSRF-guarded client as an HTTPS subject; a fully qualified domain name only — never an IP address, nor a single label such as `localhost` — and no path segment that is `.` or `..` or holds an encoded slash; the document's `id` must be the DID. | `did:web:example.com#key-1` |
 
 A `kid` may name the method by its full identifier, as above, or by its fragment (`key-1` or
-`#key-1`), or by its JWK's own `kid`. This suite requires one; for a `did:key` it is
+`#key-1`), or by its JWK's own `kid` — in that order, so a method's own id wins. This suite requires one; for a `did:key` it is
 `"kid": "<did>#<multibase>"`.
 
 Walkthrough + runnable demo: **[Self-signed CID walkthrough](walkthrough-ssi-cid.md)** /
@@ -115,35 +131,53 @@ for a `did:key` subject, **[`did:key` identity walkthrough](walkthrough-did-key.
 ## SAML 2.0 suite
 
 The credential is a signed SAML 2.0 `<Response>`; the subject is the `<NameID>`. Trust is **out of
-band**: the verifier validates the assertion's XML signature against a pre-configured IdP certificate —
-no CID and no discovery, so this suite uses neither Jena nor a CID endpoint.
+band**: the verifier validates the assertion's XML signature against a certificate established ahead of
+time — no CID and no discovery, so this suite uses neither Jena nor a CID endpoint.
 
 Keycloak is a full SAML 2.0 IdP; to issue LWS SAML credentials, set up a SAML client and arrange for
-the `<NameID>` to carry the user's WebID. The realm's SAML signing certificate is published at
+the `<NameID>` to carry the user's WebID. The `<NameID>` must be a URI — an LWS subject "MUST be a URI"
+— so Keycloak's default username or email NameID is refused (`subjectIsUri`), and the `<Issuer>` must be
+the IdP's entity URI (`issuerWellFormed`). The realm's SAML signing certificate is published at
 `…/realms/{realm}/protocol/saml/descriptor`.
 
-`POST …/lws-saml/verify` — validates a signed SAML Response. Supply the trusted IdP certificate (since
-trust is out-of-band):
+`POST …/lws-saml/verify` — validates a signed SAML Response. The trusted IdP certificate comes from
+one of two places, and the result says which (`trustSource`) and gives the certificate's SHA-256
+fingerprint (`certificateSha256`):
+
+- **the realm's SAML identity providers** — send no `certificate`. Configure the IdP under *Identity
+  providers → SAML v2.0* with its entity ID and signing certificate; the verifier trusts the
+  certificates of the enabled SAML identity providers whose IdP entity ID is the assertion's `<Issuer>`,
+  so one IdP's key cannot vouch for another's assertion. Several certificates are tried in turn, for
+  key rotation.
+- **a certificate in the request** — `certificate`, the caller's own trust decision, which binds it to
+  no issuer unless `issuer` is also sent. The `request-certificates=false` setting turns this off.
 
 | Param | |
 |---|---|
 | `credential` | the SAML Response (raw XML or base64-encoded XML) |
-| `certificate` | the trusted IdP signing certificate, PEM-encoded (required) |
-| `audience` | optional audience the assertion must be restricted to |
+| `certificate` | optional: the trusted IdP signing certificate, PEM-encoded. Without it, the realm's SAML identity providers are the trust |
+| `audience` | optional audience every `<AudienceRestriction>` must name |
+| `issuer` | optional `<Issuer>` the assertion must name |
+| `recipient` | optional bearer `Recipient` — the LWS client identifier — the assertion must name |
 | `allowExpiredCertificate` | `true` to accept an IdP certificate outside its own validity period. Off by default — an expired certificate is not a trust anchor. Only for offline analysis of an old credential. |
 
 ```bash
 curl -X POST https://keycloak.example/realms/myrealm/lws-saml/verify \
   -H "Authorization: Bearer $CALLER_ACCESS_TOKEN" \
   --data-urlencode "credential=$SAML_RESPONSE" \
-  --data-urlencode "certificate=$IDP_CERT_PEM" \
-  --data-urlencode "audience=https://app.example/SAML"
+  --data-urlencode "audience=https://app.example/SAML" \
+  --data-urlencode "recipient=https://app.example/SAML"
 ```
 
 The verifier additionally requires the Response's `<samlp:StatusCode>` to be
 `…:status:Success`, exactly one bearer `<SubjectConfirmation>` whose `<SubjectConfirmationData>`
 carries a `Recipient` (the LWS client identifier) and an unexpired `NotOnOrAfter`, and a signing
-certificate that is inside its own validity period.
+certificate that is inside its own validity period and holds an RSA-2048 or P-256 key at least. Every
+signature present must follow SAML Core §5.4 — a single reference to the signed element, no transform
+but enveloped-signature and exclusive canonicalization, SHA-2 — and the credential must hold exactly
+one assertion, with no other anywhere in it; encrypted assertions and identifiers are not supported.
+Every `<AudienceRestriction>` must name the `audience`, and with no `audience` there must still be one; a `<Conditions>` holding anything the verifier does not understand is refused, as SAML
+Core §2.5.1.1 requires; a `<OneTimeUse>` assertion is reported as `oneTimeUse: true`.
 
 Guide: **[SAML 2.0 walkthrough](walkthrough-saml.md)** (there is no shell demo — producing a
 signed SAML Response requires a SAML login flow).

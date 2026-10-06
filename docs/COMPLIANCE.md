@@ -10,10 +10,11 @@ nav_order: 5
 each suite enforces, which are deferred to the relying party, and what is supported. It is written for
 someone integrating against this provider, who needs to know what a `"valid": true` actually asserts.
 
-**Last reviewed:** 30 September 2026, against the specifications as they stood on 28 September 2026
-(`w3c/lws-protocol` at `9b03b32`) and the code in this tree. No normative text changed after the
-previous review of 22 September 2026, which was against `3ddc642`: the four commits since touch only the
-discontinued `did:key` suite's snapshot, the README and the wiki. Earlier review: 3 September 2026.
+**Last reviewed:** 6 October 2026, against the specifications as they stood on 5 October 2026
+(`w3c/lws-protocol` at `ef02548`) and the code in this tree. No authentication text changed after the
+review of 30 September 2026, which was against `9b03b32`: the one commit since (`ef02548`, w3c/lws-protocol#255)
+adds a JSON Patch baseline for `PATCH`, which is storage-side. Earlier reviews: 22 September (against
+`3ddc642`) and 3 September 2026. The 6 October review's findings are the R-items of `TODO.md`.
 
 Item ids like **P0-3** refer to [`TODO.md`](https://github.com/ebremer/lws-authn/blob/master/TODO.md), which carries the reasoning and the history.
 Where this document says a check exists, it names the field that appears in the `checks` object of the
@@ -26,7 +27,7 @@ verify response, so a claim here can be tested against a real response.
 These are **W3C Working Drafts**, not Recommendations. Conformance here means "matches the published
 normative requirements", not a Rec-level conformance certificate — the text can still change.
 
-| Document | Latest published version, 28 September 2026 | Editor's draft, as reviewed |
+| Document | Latest published version, 5 October 2026 | Editor's draft, as reviewed |
 |---|---|---|
 | Linked Web Storage Protocol 1.0 (core) | W3C Working Draft **21 September 2026** | same text — adds authorization server metadata `subject_identifier_types_supported`, which does not apply here (see *Known divergences*) |
 | LWS 1.0 Authn Suite: Self-signed Identity (Controlled Identifiers) | W3C Working Draft **21 September 2026** | same text — **"designed to work with subject identifiers that use HTTPS URIs as well as DID URIs"** |
@@ -52,7 +53,7 @@ notifications, search and access grants live in `lws-server`.
 |---|---|---|---|---|---|
 | OpenID Connect | OP + CID host + verifier | ID Token (JWT), `sub` = WebID | OIDC Discovery on `iss`, found via the CID service | `/realms/{realm}/lws` | `…token-type:id_token` |
 | Self-signed CID | CID host + verifier | self-issued JWT, `sub`==`iss`==`client_id`: an HTTPS URI, `did:key` or `did:web` | the `authentication` method `kid` names in the subject's CID or DID document (`JsonWebKey` or `Multikey`) | `/realms/{realm}/lws-ssi-cid` | `…token-type:jwt` |
-| SAML 2.0 | verifier | signed SAML 2.0 Response | out-of-band IdP certificate supplied by the caller | `/realms/{realm}/lws-saml` | `…token-type:saml2` |
+| SAML 2.0 | verifier | signed SAML 2.0 Response | out of band: the realm's SAML identity provider whose entity ID is the `<Issuer>`, or a certificate the caller supplies | `/realms/{realm}/lws-saml` | `…token-type:saml2` |
 
 SPI surface: three `RealmResourceProviderFactory` ids (`lws`, `lws-ssi-cid`, `lws-saml`) plus the OIDC
 `ProtocolMapper` `lws-webid-sub-mapper`.
@@ -67,10 +68,10 @@ suite to be associated with a token type URI.
 
 | Requirement | OpenID | SSI CID | SAML |
 |---|---|---|---|
-| subject REQUIRED | `subjectPresent` | `selfIssued` | `NameID` from the covered assertion |
-| issuer REQUIRED | `issuerPresent` | `selfIssued` | `issuerPresent` |
-| client REQUIRED | `clientPresent` (`azp`) | `selfIssued` (`client_id`) | `recipientPresent` |
-| audience restriction | `audienceMatched` | `audiencePresent` + `audienceMatched` | `audiencePresent` + `audienceMatched` |
+| subject REQUIRED, a URI | `subjectPresent` | `selfIssued` | `NameID` from the covered assertion, an absolute URI (`subjectIsUri`) |
+| issuer REQUIRED, a URI | `issuerPresent` + `issuerWellFormed` | `selfIssued` | `issuerPresent` + `issuerWellFormed` |
+| client REQUIRED | `clientPresent` (`azp`) | `selfIssued` (`client_id`) | `recipientPresent`; `recipientMatched` when one is given |
+| audience restriction | `audiencePresent` always; `audienceMatched` when one is given | `audiencePresent` + `audienceMatched`, both always | `audiencePresent` + `audienceMatched` |
 | signed (§4.2) | `signatureValid` | `signatureValid` | `signatureValid` |
 | token type URI (§4.3) | reported as `tokenType` on every result | | |
 
@@ -85,17 +86,44 @@ and fails closed when the client identifier is absent.
 
 ## OpenID Connect suite
 
-**Enforced.** `alg` is never `none`; no unsupported `crit`; `typ`, when present, names a JWT;
-`sub` and `iss` present; `azp` present (`clientPresent`). `sub` is dereferenced over the guarded HTTP
-stack and the document must have an `id` equal to `sub` (`subjectDereferenced`, `subjectIdMatches`) —
-on *both* the RDF and the JSON-LD path; the JSON-LD path used to default a missing `id` to the subject,
-accepting a document that never claimed to describe it. The document must declare a
+**Enforced.** The token is a JWS in strict compact serialization — three base64url segments with no
+padding, whitespace or other characters (`compactSerializationWellFormed`; RFC 7515 §5.2), so every
+decoder reads the same header — and `exp`, `nbf` and `iat` are JSON numbers
+(`numericDatesWellFormed`; RFC 7519 §2). `alg` is never `none`; no unsupported `crit`, and a header that
+does not decode counts as one; `typ`, when present, names a JWT — not
+`at+jwt`, an access token's type; the payload's `typ`, when present, says it is an ID Token
+(`tokenIsIdToken`: Keycloak's access tokens say `Bearer`, and their header is `JWT` like an ID Token's);
+`sub` and `iss` present; `iss` an https URL with no query or fragment, as OpenID Connect Core §2 defines
+an Issuer Identifier (`issuerWellFormed`); `azp` present (`clientPresent`). `sub` is dereferenced over the guarded HTTP
+stack and the document must have an `id` equal to `sub` (`subjectDereferenced`, `subjectIdMatches`):
+up to three redirects are followed — a WebID answering `303 See Other`, http going to https — each
+vetted as a new request, and the document must still describe the original `sub`;
+for a JSON document, the `id` of its **topmost map**, read from the JSON before any RDF processing (CID
+1.0: "A controlled identifier document MUST contain an `id` value in the topmost map"); for Turtle,
+N-Triples or RDF/XML, which have no topmost map, the graph must describe `sub`. A document that was
+fetched but is about somebody else fails `subjectIdMatches`, not `subjectDereferenced`. The document must declare a
 `https://www.w3.org/ns/lws#OpenIdProvider` service whose `serviceEndpoint` equals `iss`
 (`openIdProviderServiceLocated`), located by parameterized SPARQL so an attacker-controlled `sub`
 cannot inject. Discovery on `iss` must return a configuration whose `issuer` matches
-(`issuerDiscoveryMatches`) and a `jwks_uri` (`jwksResolved`). The `alg` is pinned to the discovered key
-type (`algorithmMatchesKey`) — the classic HS256-against-an-RSA-public-key confusion. Signature
-(`signatureValid`) and an explicit `exp` (`notExpired`; a missing `exp` is not "never expires").
+(`issuerDiscoveryMatches`) and an https `jwks_uri` (Discovery 1.0 §3; `jwksResolved`). Every fetch —
+`sub`, discovery, `jwks_uri` — is https; plain http only to a host the deployment allow-lists. When
+the configuration lists `id_token_signing_alg_values_supported`, the token's `alg` must be among them
+(`algorithmAdvertised`). The keys tried are those of the `kid` — or all of them, without one — that are
+published for signing with this `alg` (`use`, `key_ops` and `alg` permitting); one this server cannot
+read is skipped rather than ending the search. The `alg` is pinned to the discovered key
+type (`algorithmMatchesKey`) — the classic HS256-against-an-RSA-public-key confusion — and an RSA key
+must be at least 2048 bits (`signingKeyStrong`; RFC 7518 §3.3). Signature
+(`signatureValid`) and an explicit `exp` (`notExpired`; a missing `exp` is not "never expires"). The
+claims OpenID Connect Core §2 makes REQUIRED in an ID Token are required whatever the caller asks:
+`iat` (`issuedAtPresent`) — not in the future, nor after `exp` (`issuedAtConsistent`) — and a non-blank
+`aud` (`audiencePresent`), checked with `sub`, `iss` and `azp` before anything is fetched. With
+`max-credential-lifetime-seconds` configured, `exp − iat` must be within it (`lifetimeWithinLimit`);
+neither suite bounds a credential's lifetime, so by default nothing does.
+
+For a token from the realm the request came to — `iss` is its issuer as this request sees it — the
+keys are the realm's own enabled signing keys rather than discovery's, and a subject that is one of the
+realm's own `lws/cid/{userId}` documents is read from the realm, rendered by the code its endpoint uses;
+nothing is fetched. Every other document is fetched and may be cached (divergence 10).
 
 **Enforced when the caller asks.** OpenID Connect Core §3.1.3.7 steps 3–5, which the suite
 incorporates by reference: pass `client_id` and `aud` must list it (`audienceContainsClient`) and `azp`
@@ -110,10 +138,14 @@ issuance too (Resource Indicators, RFC 8707).
 
 ## Self-signed Controlled Identifier suite
 
-**Enforced.** `alg` never `none`; no unsupported `crit`; `typ` names a JWT if present;
+**Enforced.** Strict compact serialization (`compactSerializationWellFormed`) and numeric dates
+(`numericDatesWellFormed`), as in the OpenID suite; `alg` never `none`; no unsupported `crit`; `typ`
+names a JWT if present, not an access token's `at+jwt`;
 `sub == iss == client_id` (`selfIssued`); a `kid` is present (`keyIdPresent`) — no fallback to "the
-only key", because the credential says which key signed it. `sub` is dereferenced — or, for a DID,
-resolved (below) — and the document's `id` must equal it (`subjectDereferenced`, `subjectIdMatches`).
+only key", because the credential says which key signed it. `sub` is dereferenced — over https; plain
+http only to an allow-listed host — or, for a DID, resolved (below), and the document's `id` must equal
+it (`subjectDereferenced`, `subjectIdMatches`) — the topmost map's `id` for a JSON document, as in the
+OpenID suite.
 
 The `kid` then selects a verification method (`verificationMethodFound`), following CID 1.0 §3.3, which
 the suite cites for this step. The method must be:
@@ -124,20 +156,32 @@ the suite cites for this step. The method must be:
   "Verification methods that are not associated with a particular verification relationship cannot be
   used for that verification relationship" (§2.3). A reference to a method in another document is not
   followed;
-- **of the subject's document** — its `id`, when it has one, is a fragment of the subject — and
-  **controlled by the subject** (`controller` equals `sub`);
-- a **`JsonWebKey`** with a `publicKeyJwk` carrying no private members (§2.2.3), or a **`Multikey`**
-  with a `publicKeyMultibase` that is a canonically encoded public key of a supported type — a
-  secret-key header is refused by name (§2.2.2);
-- **neither revoked nor expired** (`verificationMethodActive`, §2.2); an unreadable `revoked` or
-  `expires` makes the method unusable rather than current.
+- **identified, in the subject's document** — it has an `id` (§2.2: a method "MUST include `id`,
+  `type`, `controller`"), and that `id` is a fragment of the subject's document — and **controlled by
+  the subject** (`controller` equals `sub`);
+- **of one type**: a **`JsonWebKey`** with a `publicKeyJwk` carrying no private members (§2.2.3), or a
+  **`Multikey`** with a `publicKeyMultibase` that is a canonically encoded public key of a supported
+  type — a secret-key header is refused by name (§2.2.2). A method with a second `type` or
+  `controller`, or with both key properties ("MUST NOT contain multiple verification material
+  properties"), is not usable;
+- **neither revoked nor expired** (`verificationMethodActive`, §2.2); a `revoked` or `expires` that is
+  not exactly one `xsd:dateTimeStamp` — unparseable, two values, a number, a node reference — makes the
+  method unusable rather than current.
 
 The `kid` may be the method's full identifier (the verification method identifier §3.3 retrieves by,
-and the usual form for a DID), its fragment with or without `#`, or its JWK's `kid`. The key must be
-published for signing and consistent with the token's algorithm (`verificationMethodUsableForSigning`,
-`algorithmMatchesKey` — `ES*` pinned to its curve). Signature (`signatureValid`), explicit `exp`
-(`notExpired`), required `iat` (`issuedAtPresent`), and an audience that is present and — when one is
-configured or supplied — matched (`audiencePresent`, `audienceMatched`).
+and the usual form for a DID), its fragment with or without `#`, or its JWK's `kid` — tried in that
+order, so the method a fragment names under §3.4 is the one selected. The key must be
+published for signing — `use`, `key_ops` and `alg` permitting — and consistent with the token's algorithm
+(`verificationMethodUsableForSigning`, `algorithmMatchesKey` — `ES*` pinned to its curve), and an RSA key
+at least 2048 bits (`signingKeyStrong`). An Ed25519 key, from a `did:key`, a `Multikey` or a JWK, must
+be canonically encoded and not of small order: with the identity point as the key, a fixed signature
+verifies any message. Signature (`signatureValid`), explicit `exp`
+(`notExpired`), required `iat` (`issuedAtPresent`) that is not in the future nor after `exp`
+(`issuedAtConsistent`), a lifetime within `max-credential-lifetime-seconds` when one is configured
+(`lifetimeWithinLimit`), and an audience that is present, not blank, and **includes the target
+authorization server** (`audiencePresent`, `audienceMatched`): "The `aud` claim MUST include the target
+authorization server." The target is the request's `audience` or the configured one, and a request with
+neither is a `400` — there is no verdict without it.
 
 **DID subjects.** The suite "is designed to work with subject identifiers that use HTTPS URIs as well
 as DID URIs", because a DID document extends a controlled identifier document (DID 1.1 §5). No DID
@@ -149,13 +193,15 @@ method is mandated; two are resolved and any other is refused by name (`subjectD
 - `did:web` — the method's Read operation: `did:web:<domain>[%3A<port>][:<path>…]` →
   `https://<domain>[:<port>]/<path…>/did.json`, or `/.well-known/did.json` with no path. The domain must
   be a DNS name, never an IP address, and this is checked before anything is fetched. The fetch uses
-  the same SSRF-guarded, redirect-refusing, bounded client as an HTTPS subject. The document must be
+  the same SSRF-guarded, bounded client as an HTTPS subject, following no redirect. The document must be
   served as a DID or JSON media type, and its `id` must be the DID (`subjectIdMatches`).
 
 A DID document is read with the JSON rules of its representation rather than by a JSON-LD processor
 (see *Known divergences*).
 
-**Optional.** `notReplayed`: a bounded `jti` cache, off by default. No suite mandates replay
+**Optional.** `notReplayed`, when the request passes `single_use=true`: the credential must carry a
+`jti`, and is recorded — issuer and `jti` together, in Keycloak's single-use object store, until its
+`exp` plus the clock skew — and refused if it was recorded before (**R-34**). No suite mandates replay
 protection, and refusing a second look at a live credential is only correct for a caller that treats
 one verification as one use.
 
@@ -167,31 +213,80 @@ key material is refused outright and logged, never trimmed and published. Every 
 ## SAML 2.0 suite
 
 **Enforced.** The IdP certificate's own validity window (`certificateValid`; overridable only by an
-explicit `allowExpiredCertificate`, for offline analysis, never a live decision).
-`<samlp:Status>` must be Success (`statusSuccess`). A signature must be present and valid
-(`signaturePresent`, `signatureValid`) and must **reference the signed element by its own `ID`**
-(`signatureCoversSignedElement`); a signed Response must contain exactly one assertion
-(`singleAssertion`). Claims are read **only from the cryptographically covered assertion**, located by
-precise direct-child navigation rather than a document-wide search an injected element could win — the
-signature-wrapping (XSW) defence. `<Issuer>` required (`issuerPresent`). The bearer
+explicit `allowExpiredCertificate`, for offline analysis, never a live decision), and its key: RSA of at
+least 2048 bits or EC on at least P-256 (`certificateKeyStrong`). The document is a Response holding
+exactly one assertion (`singleAssertion`), or an assertion, of SAML version 2.0 (`versionSupported`;
+SAML Core §4.1.2: a relying party "MUST NOT process any assertion with a major assertion version number
+not supported"). `<samlp:Status>` must be Success (`statusSuccess`).
+
+**Signatures follow SAML Core §5.4**, and are validated with the JDK's XML Digital Signature API
+against the trusted key alone — `<ds:KeyInfo>` is never consulted. Every `<ds:Signature>` directly
+within the Response or the assertion is checked — Profiles §4.1.4.3: "Verify any signatures present" —
+and at least one must be there (`signaturePresent`). Each has **a single `<ds:Reference>`, to the
+signed element's own `ID`** (`signatureCoversSignedElement`; §5.4.2), only the enveloped-signature and
+exclusive-canonicalization transforms (§5.4.4: a verifier allowing others "MUST ensure that no content
+of the SAML message is excluded from the signature" — this one allows none), RSA (PKCS#1 v1.5 or PSS)
+or ECDSA with SHA-2, and SHA-2 digests (`signatureAlgorithmsAllowed`); all of that is checked before any
+cryptography. Then each validates (`signatureValid`). Claims are read **only from the one assertion**,
+located by precise direct-child navigation rather than a document-wide search an injected element could
+win — the signature-wrapping (XSW) defence — and the document may hold no other: an element named
+`Assertion` or `EncryptedAssertion` anywhere else, in `<samlp:Extensions>`, in an `<Advice>` or in any
+namespace, is refused (`singleAssertion`), since a consumer that re-parses the credential could read it
+instead of the one verified (**R-31**). The `<NameID>` must be an absolute URI (`subjectIsUri`; core §4.1:
+the subject "MUST be a URI") — a username, an email address or an opaque handle is refused — and its
+`Format` is reported as `subjectFormat`. `<Issuer>` is required (`issuerPresent`), must be an absolute
+URI and, per SAML Profiles §4.1.4.2, carry no `Format` or the `entity` one (`issuerWellFormed`); a
+Response's `<Issuer>`, if it has one, must be the same (`issuersMatch`). `IssueInstant` on both must be
+readable and not in the future, beyond the clock skew (`issueInstantValid`). The bearer
 `<SubjectConfirmationData>` is checked for method, `Recipient` and `NotOnOrAfter`
-(`bearerSubjectConfirmation`, `recipientPresent`, `subjectConfirmationWithinWindow`). `<Conditions>`
-window with clock skew (`withinValidityWindow`), and audience (`audiencePresent`, `audienceMatched`).
+(`bearerSubjectConfirmation`, `recipientPresent`, `subjectConfirmationWithinWindow`); where this is
+narrower than the Web Browser SSO profile, divergence 11 says so. One
+`<Conditions>`, holding only conditions the verifier understands — `<AudienceRestriction>`s of
+non-blank `<Audience>`s, at most one `<OneTimeUse>` and at most one `<ProxyRestriction>`
+(`conditionsUnderstood`): an extension `<Condition>`, or any other element, makes the assertion
+Indeterminate, and SAML Core §2.5.1.1 says "An assertion that is determined to be Invalid or
+Indeterminate MUST be rejected". Its window with clock skew (`withinValidityWindow`), and the audience
+(`audiencePresent`, `audienceMatched`) — named by **every** `<AudienceRestriction>`, which "form a
+conjunction" (§2.5.1.4) — and, with no audience asked for, an `<AudienceRestriction>` all the same
+(divergence 11). A `<OneTimeUse>` assertion is valid and reported as `oneTimeUse: true`: it
+"MUST NOT be retained for future use" (§2.5.1.5), so a caller that caches verdicts must not cache it.
 XML is parsed with DTDs **disallowed** and external entities disabled, independent of any caller or
 library configuration.
 
-**Deferred to the relying party — read this.** SAML trust is out of band, so **the caller supplies the
-certificate**. This endpoint answers *"is this Response signed by the certificate you gave me"*, not
-*"does this deployment trust that IdP"*. Anyone can therefore obtain `"valid": true` for an assertion
-they signed themselves with a certificate they also supplied. That is the API behaving correctly.
-**Pin the expected certificate on your side**; do not treat this endpoint as a trust decision.
+**Trust.** The suite: "there must be a trust relationship with the issuing identity provider … established
+out-of-band". It comes from one of two places, and every result says which (`trustSource`), and the
+SHA-256 fingerprint of the certificate that verified it (`certificateSha256`):
+
+- **The realm's SAML identity providers** (`trustSource: identity-provider`, with the alias as
+  `identityProvider`), when the request carries no `certificate`. The certificates trusted are the
+  configured signing certificates of the enabled SAML identity providers whose IdP entity ID is the
+  assertion's `<Issuer>` (`trustedCertificateFound`), tried in turn, so a key being rotated still
+  verifies. Each certificate is bound to one issuer: one IdP's key cannot vouch for an assertion that
+  names another as its issuer. Here `"valid": true` is this deployment's trust decision, as it is for
+  the OpenID and self-signed suites.
+- **A certificate the caller supplies** (`trustSource: request`), unless the deployment turns this off
+  with `request-certificates=false`. Then the endpoint answers *"is this Response signed by the
+  certificate you gave me"*, not *"does this deployment trust that IdP"*, and nothing binds the
+  certificate to the `<Issuer>` unless the caller passes `issuer` (`issuerMatched`). Anyone can obtain
+  `"valid": true` for an assertion they signed with a certificate they also supplied. **Pin the expected
+  certificate on your side** — compare `certificateSha256` — and pass `issuer`.
+
+Either way, `recipient` binds the bearer `Recipient` — the LWS client identifier — to the one the
+caller expects (`recipientMatched`), as SAML Profiles §4.1.4.3 requires of whoever received the
+Response.
 
 ---
 
 ## Supported formats
 
 **RDF syntaxes**, both served and parsed: JSON-LD (`application/ld+json`), Turtle (`text/turtle`),
-N-Triples (`application/n-triples`), RDF/XML (`application/rdf+xml`). Verifiers request Turtle first.
+N-Triples (`application/n-triples`), RDF/XML (`application/rdf+xml`), and **`application/cid`**, CID 1.0
+Appendix A's media type for a controlled identifier document — the JSON-LD body under that name.
+Verifiers request Turtle first, and also accept `application/json`.
+
+A JSON document **without an `@context`** is read in the CID 1.0 context, which CID 1.0 §4.2.1 requires
+of a consumer: "Implementations that do not intend to use JSON-LD MAY choose to not include an
+`@context`", and the consumer "MUST inject or append" `https://www.w3.org/ns/cid/v1`.
 
 JSON-LD is processed by Jena's **JSON-LD 1.1 reader**, so a conforming document verifies whatever shape
 it is written in — aliased terms, an `@graph` wrapper, referenced rather than embedded verification
@@ -201,16 +296,22 @@ which is an unvetted outbound fetch during verification and a dependency on `w3.
 for anything to verify at all. A document naming a context this provider does not bundle is refused as
 unverifiable rather than guessed at, with a key-reading fallback for the standardized compact shape.
 
-A document declaring a content type that is not an RDF syntax is **refused by name**, not handed to the
-Turtle parser.
+A document declaring any other content type is **refused by name**, not handed to the Turtle parser —
+including an RDF syntax this provider does not ask for (TriG, N3, RDF/JSON, the binary RDF-Thrift and
+RDF-Protobuf encodings): the verifiers read exactly the syntaxes listed above, plus `application/json`
+read as JSON-LD. The key-reading fallback reads `type` and `serviceEndpoint` arrays as the processor
+does.
 
 **DID documents** are accepted as `application/did+json`, `application/did+ld+json`, `application/did`,
 `application/ld+json` or `application/json` (or undeclared), and read by the JSON rules of the DID
 representation. **Verification method types:** `JsonWebKey` and `Multikey`, the two CID 1.0 defines.
 
 **Signature algorithms:** whatever Keycloak's `SignatureProvider` offers for the JWT suites (RS*, PS*,
-ES256/384/512, EdDSA), constrained by the published key — each `ES*` pinned to its curve (RFC 7518
-§3.4). `alg: none` is refused everywhere.
+ES256/384/512, EdDSA), constrained by the published key — RSA of 2048 bits or more, an Ed25519 or Ed448
+key a canonical point that is not of small order, each `ES*` pinned to
+its curve, and its
+signature exactly the 64, 96 or 132 octets RFC 7518 §3.4 requires, which Keycloak's ECDSA verifier does
+not check itself. `alg: none` is refused everywhere.
 
 ---
 
@@ -221,14 +322,16 @@ Each is a decision, not an oversight; each names where the reasoning lives.
 | # | Divergence | Why |
 |---|---|---|
 | 1 | The LWS `client` identifier is required but **not required to be a URI** | Core §4.1 says SHOULD, not MUST. The bundled demo realm uses `lws-app`, a bare id, which is what Keycloak conventionally issues — see **P6-8**, and use a URI in production if your relying party cares. |
-| 2 | **Audience binding is optional per request** | The suites RECOMMEND an audience restriction; enforcing one unconditionally would reject conforming credentials. A deployment that wants it mandatory sets the `audience` configuration, which applies when a request names none (**P3-6**). |
-| 3 | **Replay protection is off by default** | No suite mandates it, and a verify endpoint is legitimately asked about the same live credential repeatedly. Opt in per caller (**P2-8**). |
+| 2 | **OpenID: audience binding is optional per request** | Core RECOMMENDS an audience restriction naming the authorization server, and OpenID Connect binds an ID Token to a relying party, not to an authorization server: requiring a match would reject conforming ID Tokens. `aud` must be present (OpenID Connect Core §2); matching it is enforced when the request passes `client_id` or `audience`, or the deployment configures `audience` (**P3-6**). The **self-signed CID** suite is different: there "the `aud` claim MUST include the target authorization server", every conforming credential names one, and the match is required — a request with no target is refused (**R-16**). SAML matches the audience when the request or the configuration names one, as OpenID does, but always requires an `<AudienceRestriction>` (divergence 11). |
+| 3 | **Replay protection is off by default** | No suite mandates it, and a verify endpoint is legitimately asked about the same live credential repeatedly. A caller of the self-signed suite opts in per request with `single_use=true` (**R-34**); the OpenID and SAML verifiers have none. |
 | 4 | **`cid/{userId}` is unauthenticated** | A controlled identifier is a URL others dereference; an identity document requiring a credential would not be dereferenceable. Enumeration is bounded — random-UUID ids, a uniform response shape, and a rate limit — not closed (**P3-7**). |
-| 5 | **The SAML verifier trusts the caller's certificate** | The suite's own model: SAML trust is out of band. See the suite section above. |
+| 5 | **The SAML verifier can trust a certificate the caller supplies** | SAML trust is out of band, and a relying party may hold it rather than this deployment. By default the realm's SAML identity providers are the trust — each certificate bound to its IdP's entity ID — and a caller may instead supply one; the result names the source and the certificate's fingerprint, and `request-certificates=false` turns the second off (**R-25**). See the suite section above. |
 | 6 | **Fetch happens before the signature is known good** | Required by the specification's cold-trust algorithm and unavoidable. The exposure is addressed instead: authenticated endpoints, rate limiting, SSRF vetting at resolution time, bounded timeouts and response size, and a per-host circuit breaker (**P0-3**, **P0-5**). The same applies to a `did:web` subject. |
 | 7 | **Only `did:key` and `did:web` are resolved** | The self-signed CID suite mandates no DID method. These two need no ledger and no third-party resolver; any other is refused by name rather than resolved through a service this provider would have to trust (**S-2**). |
 | 8 | **DID documents are read as JSON, not processed as JSON-LD** | DID 1.1 is a Candidate Recommendation and its JSON-LD context is not published at a stable URL, so there is no definition to bundle, and contexts are never fetched (see *Supported formats*). The structure the verifier reads — `id`, `authentication`, `verificationMethod`, `type`, `controller`, key material — is fixed by DID 1.1 and CID 1.0 rather than by the context (**S-3**). |
 | 9 | **No `subject_identifier_types_supported`** | Core defines it as LWS *authorization server* metadata. `lws-authn` is not an authorization server and publishes no such metadata; it belongs to `lws-server`, which would list `https`, `did:key` and `did:web` for subjects this provider verifies (**S-5**). |
+| 10 | **Fetched documents are cached** | Both JWT suites encourage verifiers "to cache controlled identifier documents to reduce unnecessary network requests and the associated metadata leakage". Documents are reused for up to `http-cache-seconds` (default 300), less if their `Cache-Control` says so, never under `no-store`/`no-cache`/`private`; so a key removed from a document may verify for up to that long. A `kid` missing from a cached JWK set is asked for again, at most every 30 s (**R-26**). |
+| 11 | **SAML is read more narrowly than the Web Browser SSO profile** | The suite names no profile; these follow SAML Profiles §4.1.4 where the LWS use of an assertion allows, and are stricter where it does not (**R-32**, **R-39**). **An `<AudienceRestriction>` is always required**, even when no audience is asked for: core makes one RECOMMENDED and the suite contemplates "an authentication credential with no audience restrictions", but Profiles §4.1.4.2 says a bearer assertion "MUST contain an `<AudienceRestriction>`", and without one it is a bearer credential good anywhere. **Exactly one `<SubjectConfirmation>`**, though the profile allows several with "at least one" bearer: its `Recipient` is reported as the LWS client, and with several there would be no single one. A `NotBefore` on `<SubjectConfirmationData>`, which the profile says the bearer one "MUST NOT contain", is **honoured, not refused**. **`InResponseTo` and `Address` are not checked**: the verifier saw no `<AuthnRequest>` and does not see the presenter — a caller that sent the request checks `InResponseTo` itself. **Not supported, and refused:** `<EncryptedAssertion>`, `<EncryptedID>`, an assertion nested in another's `<Advice>`, and the Redirect binding's DEFLATE encoding; base64 must be strict apart from whitespace. |
 
 ## Security posture
 
@@ -244,7 +347,9 @@ can mint credentials for an identity they should not control. `INSTALL.md` step 
 
 ## Verification
 
-`mvn clean verify` — 179 unit tests plus 24 in `LwsAuthIT` against a real Keycloak 26.7.4 container.
+`mvn clean verify` — 419 unit tests plus 33 in `LwsAuthIT` against a real Keycloak 26.8.0 container,
+and 5 that read the built JAR. Every rule the verifiers apply has a test that fails if the rule is
+deleted (R-44).
 Roughly half the integration tests assert a *rejection*, including a full third-party OpenID Provider
 fixture broken one document at a time, because a verifier that wrongly rejects gets reported by its
 users and one that wrongly accepts does not.

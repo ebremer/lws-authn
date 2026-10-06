@@ -19,11 +19,18 @@ amplification, a network-probe oracle and a cheap denial of service.
 |---|---|---|---|---|
 | Mode | `access` | `lws.authn.verify.access` | `LWS_AUTHN_VERIFY_ACCESS` | `bearer` |
 | Shared secret | `secret` | `lws.authn.verify.secret` | `LWS_AUTHN_VERIFY_SECRET` | — |
-| Required realm role | `role` | `lws.authn.verify.role` | `LWS_AUTHN_VERIFY_ROLE` | — |
+| Required realm role (`*`: any user of the realm) | `role` | `lws.authn.verify.role` | `LWS_AUTHN_VERIFY_ROLE` | `lws-verifier` |
 | Requests per minute, per caller | `rate-limit` | `lws.authn.verify.rateLimit` | `LWS_AUTHN_VERIFY_RATE_LIMIT` | `60` |
 
-- **`bearer`** (default) — the caller presents a Keycloak access token for the realm. Set `role` to
-  additionally require a realm role.
+- **`bearer`** (default) — the caller presents a Keycloak access token for the realm, **and must hold
+  the realm role `role` names: `lws-verifier` unless you name another.** Create that role in each realm
+  that serves the verify endpoints and grant it to whatever calls them — normally your authorization
+  server's service account, not end users. Until somebody holds it, every bearer caller gets a `403`,
+  and the server log says once per realm that the role is missing. The role is checked against the
+  user's role mappings as they are *now* — directly, through a composite role or through a group — so
+  taking it away takes effect at once, not when the caller's token expires. `role=*` admits any user
+  of the realm, which was the default before; it logs a warning at startup, and is only for a realm
+  whose every user you trust to make this server fetch URLs of their choosing.
 - **`secret`** — the caller presents a pre-shared secret as `Authorization: Bearer <secret>`, for a
   verifier that is not a Keycloak client. Configuring `secret` mode with no secret falls back to
   `bearer`; it never fails open.
@@ -36,11 +43,22 @@ amplification, a network-probe oracle and a cheap denial of service.
 > set the mode to `public` explicitly.
 
 Rate limiting applies in every mode, including `public`, and is enforced before the caller is
-authenticated. Set `rate-limit` to `0` to turn it off.
+authenticated, per caller **address** — an IPv6 address by its `/64`, since one subscriber is routinely
+given a whole one. In `bearer` mode each authenticated **user** has a bucket of the same size as well,
+which no header can spoof. Set `rate-limit` to `0` to turn both off.
 
-Set the mode with either `kc.sh build --spi-realm-restapi-extension--lws--access=public` (repeat per
-provider id: `lws`, `lws-ssi-cid`, `lws-saml`) or, with no rebuild, the environment
-variable `LWS_AUTHN_VERIFY_ACCESS=public`.
+> **Behind a reverse proxy, the address is whatever the proxy says.** If it passes on the client's own
+> `X-Forwarded-For` (nginx's `$proxy_add_x_forwarded_for` appends to it), every request can name a
+> fresh address and the address bucket is no limit at all. Have the proxy overwrite the header
+> (`proxy_set_header X-Forwarded-For $remote_addr;`) and tell Keycloak to believe only the proxy
+> (`proxy-trusted-addresses=127.0.0.1`); [INSTALL step 12](INSTALL.md#12-terminate-tls-with-nginx--certbot)
+> does both.
+
+Set the mode in `keycloak.conf` (`spi-realm-restapi-extension--lws--access=public`, repeated per
+provider id: `lws`, `lws-ssi-cid`, `lws-saml`), on `kc.sh start`
+(`--spi-realm-restapi-extension--lws--access=public`), or with the environment variable
+`LWS_AUTHN_VERIFY_ACCESS=public` — **not on `kc.sh build`**, which drops it; see
+[Runtime, not build time](#runtime-not-build-time).
 
 ### What each status means
 
@@ -50,10 +68,10 @@ is in the body:
 | Status | Meaning |
 |---|---|
 | `200` | The request was answered. Read `valid` — `true` or `false`. |
-| `400` | The request could not be read: a missing or unparseable parameter. |
-| `401` / `403` | **You** may not use this endpoint. Carries a `WWW-Authenticate` challenge (RFC 9110 §15.5.2). |
+| `400` | The request could not be read: a missing or unparseable parameter, or a `credential` over 256 KiB (262 144 characters). |
+| `401` / `403` | **You** may not use this endpoint. Carries a `WWW-Authenticate` challenge (RFC 9110 §15.5.2) — with an `error` code only when the request carried a credential, as RFC 6750 §3.1 asks. |
 | `404` | This suite is not enabled on this realm. |
-| `429` | Rate limited; retry shortly. |
+| `429` | Rate limited; `Retry-After` says in how many seconds a request will be admitted. |
 
 > **A rejected credential is a `200` with `"valid": false`.** Until this release it was a bare `401`
 > with no challenge — which RFC 9110 §15.5.2 forbids, and which said the wrong thing anyway: the
@@ -68,36 +86,93 @@ whichever endpoint and whichever status produced it.
 ## Configuration reference
 
 Every setting is read from the provider's `Config.Scope` first, then a system property, then an
-environment variable, then a compiled-in default. `Config.Scope` is the supported surface
-(`kc.sh build --spi-realm-restapi-extension--<provider>--<key>=<value>`, where `<provider>` is `lws`,
-`lws-ssi-cid` or `lws-saml`) and the only one that can differ per provider; the
-environment variable is what a container deployment can set without rebuilding the image.
+environment variable, then a compiled-in default. `Config.Scope` is the supported surface —
+`spi-realm-restapi-extension--<provider>--<key>=<value>` in `keycloak.conf`, or the same with a leading
+`--` on `kc.sh start`, where `<provider>` is `lws`, `lws-ssi-cid` or `lws-saml` — and the only one that
+can differ per provider; the environment variable is what a container deployment can set without
+rebuilding the image.
+
+### Runtime, not build time
+
+Every setting here is a **runtime** option. Keycloak keeps only build-time options
+from `kc.sh build` — for a provider, the keys ending in `-provider`, `-enabled` or `-provider-default` —
+and drops anything else with no more than "run time options were found, but will be ignored during
+build time" in the build's output. A `role`, `audience` or `allowed-internal-hosts` given to `kc.sh
+build` is therefore simply not set, and the server starts without it. Put them in `keycloak.conf`, on
+`kc.sh start`, or in the environment.
+
+To see what is actually in force, read the startup log. Each provider logs one line and the server-wide
+settings one more:
+
+```
+lws-authn provider 'lws' settings in force: serve=true, access=bearer, role=lws-verifier, rate-limit=60/min, audience=(none), cid-cache-seconds=300, cid-rate-limit=600/min
+lws-authn server-wide settings in force: allowed-internal-hosts=[], http-timeout-millis=5000, http-deadline-millis=10000, http-max-response-bytes=262144, http-max-concurrent-per-caller=4, http-cache-seconds=300, clock-skew-seconds=60, max-credential-lifetime-seconds=(no limit), http-mode=guarded
+```
+
+A shared secret is shown only as `secret=(set)`.
 
 **Per provider:**
 
 | Setting | Scope key | System property | Environment variable | Default |
 |---|---|---|---|---|
-| Serve this suite at all | `enabled` | `lws.authn.enabled` | `LWS_AUTHN_ENABLED` | `true` |
-| Audience to require when the request names none | `audience` | `lws.authn.audience` | `LWS_AUTHN_AUDIENCE` | — |
+| Serve this suite at all (see *Turning a suite off* below) | `serve` | `lws.authn.enabled` | `LWS_AUTHN_ENABLED` | `true` |
+| Audience to require when the request names none — for `lws-ssi-cid`, which needs one, the target authorization server | `audience` | `lws.authn.audience` | `LWS_AUTHN_AUDIENCE` | — |
 | `Cache-Control: max-age` on a served CID | `cid-cache-seconds` | `lws.authn.cid.cacheSeconds` | `LWS_AUTHN_CID_CACHE_SECONDS` | `300` |
 | CID requests per minute, per caller | `cid-rate-limit` | `lws.authn.cid.rateLimit` | `LWS_AUTHN_CID_RATE_LIMIT` | `600` |
+| `lws-saml` only: accept an IdP certificate in the request (`certificate`). `false` leaves the realm's SAML identity providers as the only trust | `request-certificates` | `lws.authn.saml.requestCertificates` | `LWS_AUTHN_SAML_REQUEST_CERTIFICATES` | `true` |
 
 Plus the four verify-access settings in the table above.
 
 **Server-wide** (read from whichever provider's scope sets them; a provider that says nothing about a
-setting leaves it alone):
+setting leaves it alone, and the system property and environment variable apply only when no
+provider's scope names the setting):
 
 | Setting | Scope key | System property | Environment variable | Default |
 |---|---|---|---|---|
-| SSRF allow-list (comma-separated hosts) | `allowed-internal-hosts` | `lws.authn.allowedInternalHosts` | `LWS_AUTHN_ALLOWED_INTERNAL_HOSTS` | — |
+| SSRF allow-list (comma-separated hosts); also the only hosts plain `http` is fetched from | `allowed-internal-hosts` | `lws.authn.allowedInternalHosts` | `LWS_AUTHN_ALLOWED_INTERNAL_HOSTS` | — |
 | Outbound fetch timeout (ms) | `http-timeout-millis` | `lws.authn.http.timeoutMillis` | `LWS_AUTHN_HTTP_TIMEOUT_MILLIS` | `5000` |
 | Outbound response cap (bytes) | `http-max-response-bytes` | `lws.authn.http.maxResponseBytes` | `LWS_AUTHN_HTTP_MAX_RESPONSE_BYTES` | `262144` |
+| Outbound fetch deadline, whole exchange (ms) | `http-deadline-millis` | `lws.authn.http.deadlineMillis` | `LWS_AUTHN_HTTP_DEADLINE_MILLIS` | `10000` |
+| Outbound fetches one caller may have in flight | `http-max-concurrent-per-caller` | `lws.authn.http.maxConcurrentPerCaller` | `LWS_AUTHN_HTTP_MAX_CONCURRENT_PER_CALLER` | `4` |
+| Longest a fetched document is reused (s), less if its `Cache-Control` says so; `0` turns caching off | `http-cache-seconds` | `lws.authn.http.cacheSeconds` | `LWS_AUTHN_HTTP_CACHE_SECONDS` | `300` |
 | Clock skew allowed on `exp`/`nbf`/`<Conditions>` (s) | `clock-skew-seconds` | `lws.authn.clockSkewSeconds` | `LWS_AUTHN_CLOCK_SKEW_SECONDS` | `60` |
+| Longest a JWT credential may be valid for, `exp − iat` (s); `0` for no limit | `max-credential-lifetime-seconds` | `lws.authn.maxCredentialLifetimeSeconds` | `LWS_AUTHN_MAX_CREDENTIAL_LIFETIME_SECONDS` | `0` |
+| How outbound fetches are made: `guarded` or `session` (below) | `http-mode` | `lws.authn.http.mode` | `LWS_AUTHN_HTTP_MODE` | `guarded` |
 
 Out-of-range values are clamped rather than honoured (timeout 100 ms–60 s, response cap 1 KiB–16 MiB,
-skew 0–600 s), and a value that will not parse falls back to the default.
+deadline 100 ms–120 s, fetches in flight 1–64, cache 0–86 400 s, skew 0–600 s, lifetime 0–10 years). A
+value that will not parse, a negative number — every number here is a count, a size or a duration — and a
+boolean other than `true` or `false` fall back to the default. **Each is logged as a warning at
+startup**; a mistyped value used to become the default silently, and `rate-limit=-1` turned rate
+limiting off. `0` is how to turn a rate limit off.
 
-**Per realm.** `enabled` is the one setting realms of the same server sensibly differ on, so it also
+The **allow-list** matches a host however it is spelt: case is ignored, an IPv6 literal may be written
+with or without brackets and in short or full form (`[::1]`, `::1`, `0:0:0:0:0:0:0:1`), and a trailing
+dot (`kc.internal.`) is dropped.
+
+**`http-mode`.** `guarded`, the default, fetches through this provider's own HTTP client, whose DNS
+resolver checks every address before connecting to it — the SSRF guard that is safe against DNS
+rebinding. It does **not** use an HTTP proxy: neither Keycloak's proxy mappings nor the JVM's proxy
+properties. A deployment whose outbound traffic must go through an egress proxy sets `session`, which
+fetches through Keycloak's server-wide client and so honours its proxy mappings; the deadline, response
+cap, per-caller bound and https rule still apply, and redirects are still vetted hop by hop, but name
+resolution is then Keycloak's — or the proxy's — and no longer rebinding-safe. An unknown value is
+`guarded`.
+
+The **timeout** bounds each step of a fetch — waiting for a pooled connection, connecting, each read —
+and the **deadline** bounds all of them together: a server that sends one byte just inside the timeout,
+every time, is still cut off at the deadline. A caller over its **in-flight** share is refused at once
+rather than queued, so one caller cannot occupy the connection pool every verifier shares.
+
+**Per realm.** `serve` is the one setting realms of the same server sensibly differ on, so it also
 honours a realm attribute — `lws.authn.<providerId>.enabled` (for example
 `lws.authn.lws-saml.enabled`) set to `true` or `false` overrides the provider-wide flag for that realm
 alone. A disabled suite answers `404` on both its endpoints.
+
+**Turning a suite off.** `serve=false` (or `LWS_AUTHN_ENABLED=false`, for all three) turns a suite off
+while leaving it loaded: its endpoints answer this provider's JSON `404`, and a realm attribute can turn
+it back on for one realm. The scope key used to be `enabled`, but `enabled` in a provider's scope is
+**Keycloak's own switch**: `spi-realm-restapi-extension--lws-saml--enabled=false` — a build-time option,
+so on `kc.sh build` — stops Keycloak loading the provider at all. Then no realm attribute can turn it
+on, its paths answer Keycloak's own `404`, and any server-wide setting given only to that provider is
+never read. Use it to remove a suite from the server outright; use `serve=false` otherwise.

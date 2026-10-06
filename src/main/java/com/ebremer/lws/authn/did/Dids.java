@@ -60,10 +60,22 @@ public final class Dids {
      * idchar             = ALPHA / DIGIT / "." / "-" / "_" / pct-encoded
      * </pre>
      * No {@code /}, {@code ?} or {@code #}: a DID is the identifier itself, never a DID URL.
+     *
+     * <p>The method-specific id is matched as a character class — idchars and colons, not ending in a
+     * colon, which is what the grammar amounts to — and each {@code %} is checked separately by
+     * {@link #wellFormedPercentEncoding}. Written as {@code (?:[…]|%XX)*}, Java runs the repeated
+     * alternation by recursion, one stack frame per character, and a DID of a couple of thousand
+     * characters overflowed the stack (R-03).</p>
      */
-    private static final String IDCHAR = "(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})";
-    private static final Pattern DID = Pattern.compile(
-            "^did:([a-z0-9]+):((?:" + IDCHAR + "*:)*" + IDCHAR + "+)$");
+    private static final Pattern DID = Pattern.compile("^did:([a-z0-9]+):([A-Za-z0-9._%:-]*[A-Za-z0-9._%-])$");
+
+    /**
+     * The longest DID accepted. DID 1.1 sets no limit, but nothing this provider resolves comes near it:
+     * a {@code did:key} for the longest supported key is about a hundred characters, and a
+     * {@code did:web} is a domain name of at most 253 plus a path. The bound keeps everything downstream
+     * — the syntax check, multibase decoding, URL mapping — working on input of a known size (R-03).
+     */
+    public static final int MAX_DID_LENGTH = 1024;
 
     /** A DNS name label: letters, digits and hyphens, not starting or ending with a hyphen. */
     private static final Pattern LABEL = Pattern.compile("^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$");
@@ -101,11 +113,31 @@ public final class Dids {
      * @throws InvalidDidException if {@code did} is not one
      */
     public static String methodOf(String did) {
+        if (did != null && did.length() > MAX_DID_LENGTH) {
+            throw new InvalidDidException("longer than the " + MAX_DID_LENGTH + " characters this verifier accepts");
+        }
         var matcher = did == null ? null : DID.matcher(did);
-        if (matcher == null || !matcher.matches()) {
+        if (matcher == null || !matcher.matches() || !wellFormedPercentEncoding(matcher.group(2))) {
             throw new InvalidDidException("not a syntactically valid DID");
         }
         return matcher.group(1);
+    }
+
+    /** True iff every {@code %} in {@code value} begins a {@code pct-encoded} triplet. */
+    private static boolean wellFormedPercentEncoding(String value) {
+        for (int i = 0; i < value.length(); i++) {
+            if (value.charAt(i) == '%') {
+                if (i + 2 >= value.length() || !isHex(value.charAt(i + 1)) || !isHex(value.charAt(i + 2))) {
+                    return false;
+                }
+                i += 2;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isHex(char c) {
+        return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f');
     }
 
     // ----------------------------------------------------------------------------------- did:key
@@ -214,6 +246,17 @@ public final class Dids {
                 if (parts[i].isEmpty()) {
                     throw new InvalidDidException("did:web path has an empty segment");
                 }
+                // A segment is one segment of the URL's path (R-37). "." and ".." — written so, or as
+                // %2E — would climb out of the path the DID names once anything normalises the URL, and
+                // an encoded "/" or "\" would add segments the DID does not have. The document's id
+                // must still be the DID, so none of this could impersonate anyone; it is refused anyway,
+                // as a DID that does not mean what it says.
+                String segment = java.net.URLDecoder.decode(parts[i].replace("+", "%2B"),
+                        java.nio.charset.StandardCharsets.UTF_8);
+                if (segment.equals(".") || segment.equals("..") || segment.indexOf('/') >= 0
+                        || segment.indexOf('\\') >= 0) {
+                    throw new InvalidDidException("did:web path has a segment that is '.', '..' or holds a slash");
+                }
                 url.append('/').append(parts[i]);
             }
         }
@@ -221,15 +264,20 @@ public final class Dids {
     }
 
     /**
-     * True iff {@code host} is a DNS name: dot-separated labels of letters, digits and hyphens, whose
-     * last label is not all digits (which also rules out a dotted-quad IPv4 address). IPv6 literals
-     * cannot get this far — {@code [} is not a DID character.
+     * True iff {@code host} is a fully qualified DNS name: two or more dot-separated labels of letters,
+     * digits and hyphens, whose last label is not all digits (which also rules out a dotted-quad IPv4
+     * address). A single label — {@code localhost}, an intranet short name — is not fully qualified, as
+     * the method requires (R-37); it resolves through the server's search domains, to whatever they
+     * say. IPv6 literals cannot get this far — {@code [} is not a DID character.
      */
     static boolean isDomainName(String host) {
         if (host == null || host.isEmpty() || host.length() > 253) {
             return false;
         }
         String[] labels = host.split("\\.", -1);
+        if (labels.length < 2) {
+            return false;
+        }
         for (String label : labels) {
             if (!LABEL.matcher(label).matches()) {
                 return false;

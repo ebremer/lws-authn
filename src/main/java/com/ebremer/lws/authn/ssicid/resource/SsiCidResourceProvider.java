@@ -19,6 +19,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.FormParam;
 import jakarta.ws.rs.GET;
+import jakarta.ws.rs.OPTIONS;
 import jakarta.ws.rs.HeaderParam;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
@@ -36,12 +37,14 @@ import org.keycloak.util.JsonSerialization;
 
 import com.ebremer.lws.authn.config.EndpointSettings;
 import com.ebremer.lws.authn.http.CidEndpoint;
+import com.ebremer.lws.authn.http.ThisRealm;
 import com.ebremer.lws.authn.http.JsonResponses;
 import com.ebremer.lws.authn.jose.PublicJwk;
 import com.ebremer.lws.authn.ssicid.SsiCidConstants;
 import com.ebremer.lws.authn.ssicid.cid.SelfSignedControlledIdentifierDocument;
 import com.ebremer.lws.authn.ssicid.verify.SelfSignedCidVerifier;
 import com.ebremer.lws.authn.ssicid.verify.SsiCidVerificationResult;
+import com.ebremer.lws.authn.verify.SingleUse;
 import com.ebremer.lws.authn.verify.VerifyAccess;
 
 /**
@@ -75,24 +78,40 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
      *
      * <p>See {@link CidEndpoint} for why this endpoint is unauthenticated and what bounds that.</p>
      */
+    /** The CORS preflight for the document (R-36); see {@link CidEndpoint}. */
+    @OPTIONS
+    @Path(SsiCidConstants.CID_PATH + "/{userId}")
+    public Response preflightControlledIdentifierDocument() {
+        return CidEndpoint.preflight();
+    }
+
     @GET
     @Path(SsiCidConstants.CID_PATH + "/{userId}")
     @Produces({SsiCidConstants.JSON_LD, SsiCidConstants.TURTLE, SsiCidConstants.N_TRIPLES, SsiCidConstants.RDF_XML})
     public Response getControlledIdentifierDocument(@PathParam("userId") String userId,
                                                     @HeaderParam("Accept") String accept,
                                                     @HeaderParam("If-None-Match") String ifNoneMatch) {
-        return CidEndpoint.serve(session, settings, SsiCidConstants.CID_PATH, userId, accept, ifNoneMatch,
-                (user, issuer, webId, contentType) -> {
-                    SelfSignedControlledIdentifierDocument cid =
-                            new SelfSignedControlledIdentifierDocument(webId, publishableJwks(user));
-                    return switch (contentType) {
-                        case SsiCidConstants.TURTLE -> cid.toRdf(RDFFormat.TURTLE);
-                        case SsiCidConstants.N_TRIPLES -> cid.toRdf(RDFFormat.NTRIPLES);
-                        case SsiCidConstants.RDF_XML -> cid.toRdf(RDFFormat.RDFXML);
-                        default -> cid.toJsonLd();
-                    };
-                });
+        return CidEndpoint.serve(session, settings, SsiCidConstants.CID_PATH, userId, accept, ifNoneMatch, DOCUMENTS);
     }
+
+    /**
+     * How a user's controlled identifier document is rendered: for the endpoint, and for the verifier
+     * reading one of this realm's own without fetching it (R-26), so the two cannot disagree.
+     */
+    public static final CidEndpoint.DocumentRenderer DOCUMENTS = (user, issuer, webId, contentType) -> {
+        SelfSignedControlledIdentifierDocument cid = new SelfSignedControlledIdentifierDocument(webId, publishableJwks(user));
+        for (String refused : cid.refusedMethodIds()) {
+            log.warnf("Refusing to publish the '%s' values on user %s that share the key id of %s: they are "
+                    + "different keys, and a credential naming that kid could mean either", SsiCidConstants.JWK_ATTRIBUTE,
+                    user.getId(), refused);
+        }
+        return switch (contentType) {
+            case SsiCidConstants.TURTLE -> cid.toRdf(RDFFormat.TURTLE);
+            case SsiCidConstants.N_TRIPLES -> cid.toRdf(RDFFormat.NTRIPLES);
+            case SsiCidConstants.RDF_XML -> cid.toRdf(RDFFormat.RDFXML);
+            default -> cid.toJsonLd(); // JSON-LD, and application/cid, which is the same body
+        };
+    };
 
     /**
      * The user's registered JWKs, filtered to the ones that may be published.
@@ -128,10 +147,14 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
      * <em>caller's</em> own credential (see {@link com.ebremer.lws.authn.verify.VerifyAccess}), and
      * only falls back to meaning the credential to verify in {@code public} access mode.
      *
-     * <p>The optional {@code audience} parameter names the target authorization server, which the
-     * suite requires the credential's {@code aud} to include. Without it only the presence of an
-     * audience restriction can be checked, so a deployment can supply one for every request with the
-     * {@code audience} setting.</p>
+     * <p>The {@code audience} parameter names the target authorization server, which the suite requires
+     * the credential's {@code aud} to include. It is required — by the request, or for every request by
+     * the {@code audience} setting — and a request with neither is a {@code 400} before anything is
+     * fetched: without a target there is no verdict to give (R-16).</p>
+     *
+     * <p>{@code single_use=true} holds the credential to one use (R-34): it must carry a {@code jti}, and
+     * once verified this way it is refused the next time anyone asks the same. Only for a caller that
+     * treats one verification as one use; see {@link SingleUse}.</p>
      *
      * <p><strong>An invalid credential is a {@code 200}</strong> carrying {@code "valid": false}, not a
      * {@code 401}: the request was authorized and this is its answer. A {@code 401} from this endpoint
@@ -143,6 +166,7 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
     @Produces(MediaType.APPLICATION_JSON)
     public Response verify(@FormParam("credential") String credential,
                            @FormParam("audience") String expectedAudience,
+                           @FormParam("single_use") String singleUse,
                            @HeaderParam("Authorization") String authorization) {
         if (!settings.isEnabled(session.getContext().getRealm())) {
             return JsonResponses.notEnabled();
@@ -159,9 +183,26 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
         if (token == null || token.isBlank()) {
             return JsonResponses.badRequest("missing 'credential' form parameter or Bearer token");
         }
+        Response oversized = VerifyAccess.refuseOversized(token);
+        if (oversized != null) {
+            return oversized;
+        }
+        String audience = settings.audienceFor(expectedAudience);
+        if (audience == null) {
+            return JsonResponses.badRequest("missing 'audience' form parameter: the credential's 'aud' must include "
+                    + "the target authorization server, so the verifier must be told which one that is");
+        }
 
-        SsiCidVerificationResult result =
-                new SelfSignedCidVerifier(session).verify(token, settings.audienceFor(expectedAudience));
+        boolean oneUse = "true".equals(singleUse);
+        if (!oneUse && singleUse != null && !singleUse.isEmpty() && !"false".equals(singleUse)) {
+            return JsonResponses.badRequest("'single_use' must be true or false");
+        }
+
+        SelfSignedCidVerifier verifier = new SelfSignedCidVerifier(session).localTo(ThisRealm.of(session), DOCUMENTS);
+        if (oneUse) {
+            verifier.singleUse(SingleUse.of(session));
+        }
+        SsiCidVerificationResult result = verifier.verify(token, audience);
         return JsonResponses.of(Response.Status.OK, result);
     }
 }

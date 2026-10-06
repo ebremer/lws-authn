@@ -25,8 +25,10 @@ services:
       # …and the SSRF guard blocks loopback addresses unless they are allow-listed, for exactly that
       # self-dereference. Never copy this into a deployment reachable by others.
       LWS_AUTHN_ALLOWED_INTERNAL_HOSTS: localhost,127.0.0.1
+    # This machine only (R-47). Published on every interface, the bootstrap admin admin/admin and the
+    # loopback allow-list above would be open to the network the machine is on.
     ports:
-      - "${KC_PORT:-8080}:${KC_PORT:-8080}"
+      - "127.0.0.1:${KC_PORT:-8080}:${KC_PORT:-8080}"
     healthcheck:
       # The image has no curl; bash's /dev/tcp is enough to ask the management port for readiness.
       test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q UP <&3"]

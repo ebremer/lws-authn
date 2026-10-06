@@ -1,6 +1,6 @@
 # lws-authn — Keycloak providers for LWS authentication suites
 
-A [Keycloak](https://www.keycloak.org/) **26.7.4** extension implementing the authentication suites of
+A [Keycloak](https://www.keycloak.org/) **26.8** extension implementing the authentication suites of
 the W3C [Linked Web Storage (LWS)](https://www.w3.org/TR/lws10-core/) 1.0 protocol, in which a **signed
 token bound to an identity** is used as an authentication credential — all three of its suites:
 
@@ -23,14 +23,14 @@ and the changelog. Its source is [`docs/`](docs/).
 With Docker, from a checkout:
 
 ```bash
-docker compose up --build --wait     # Keycloak 26.7.4 + lws-authn + a demo realm, at http://localhost:8080
+docker compose up --build --wait     # Keycloak 26.8.0 + lws-authn + a demo realm, at http://localhost:8080
 bash scripts/lws-demo.sh             # issue an ID Token whose sub is a WebID, and verify it
 ```
 
 This is a development setup (admin `admin` / `admin`, plain HTTP); see
 [Run with Docker](https://ebremer.github.io/lws-authn/build.html#run-with-docker).
 
-Or, with JDK 21+, Maven, and a Keycloak 26.7.4 install at `$KC_HOME`:
+Or, with JDK 21+, Maven, and a Keycloak install — 26.8.0 or a later 26.8 release — at `$KC_HOME`:
 
 ```bash
 mvn clean package                                  # builds target/lws-authn-<version>.jar
@@ -49,4 +49,5 @@ Report a vulnerability by email, not in an issue — see the
 
 ## License
 
-Apache-2.0 — see [`LICENSE`](LICENSE). Every source file carries `SPDX-License-Identifier: Apache-2.0`.
+Apache-2.0 — see [`LICENSE`](LICENSE). Every source file — the Java, the scripts, the POM, the Docker files, the workflows and the
+`META-INF/services` registrations — carries `SPDX-License-Identifier: Apache-2.0`.

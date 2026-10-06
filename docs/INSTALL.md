@@ -49,14 +49,14 @@ Throughout, replace **`id.example.com`** with your server's public hostname and 
 
 | Component | Version | Notes |
 |-----------|---------|-------|
-| Keycloak server | **26.7.4** | **Must match** `keycloak.version` in the provider's `pom.xml`. |
+| Keycloak server | **26.8.0** or a later 26.8 release | The same 26.x minor as `keycloak.version` in the provider's `pom.xml`, which is the release it is built and tested against. **Apply Keycloak's patch releases as they come** — that is where Keycloak's security fixes land — without waiting for the provider to follow. |
 | `lws-authn` provider | **0.3.0-SNAPSHOT** | Unreleased work after 0.2.0, the latest release. Produces `lws-authn-0.3.0-SNAPSHOT.jar`. |
 | JDK (Keycloak runtime) | **21** | Keycloak 26.x is built and tested on OpenJDK 21. |
 | JDK (build) | **21+** | Any JDK ≥ 21 builds it; it compiles to Java 21 bytecode. |
 
 ```bash
 # Handy shell variables used in the commands below
-export KC_VERSION=26.7.4
+export KC_VERSION=26.8.0   # or a later 26.8 release
 export PROVIDER_VERSION=0.3.0-SNAPSHOT
 export KC_HOSTNAME=id.example.com     # your public hostname
 ```
@@ -136,7 +136,8 @@ sudo useradd  --system --gid keycloak \
 
 ## 5. Download & install Keycloak
 
-Download the distribution that matches the provider's build (`26.7.4`) and unpack it under `/opt`,
+Download the distribution — the 26.8 release the provider is built against (`26.8.0`) or a later 26.8
+patch — and unpack it under `/opt`,
 using a version-independent symlink so future upgrades are a one-line switch:
 
 ```bash
@@ -276,6 +277,8 @@ hostname=https://id.example.com
 # ---- Reverse-proxy TLS termination (see step 12) ----
 # Keycloak serves plain HTTP on 8080; nginx terminates HTTPS in front of it.
 proxy-headers=xforwarded
+# Believe X-Forwarded-* only from nginx itself; the rate limits key on the address it forwards.
+proxy-trusted-addresses=127.0.0.1,::1
 http-enabled=true
 
 # ---- Health endpoints (build-time option; used by systemd/monitoring) ----
@@ -315,19 +318,25 @@ You opt specific hosts back in with a comma-separated list, via **any** of:
 
 - environment variable `LWS_AUTHN_ALLOWED_INTERNAL_HOSTS`,
 - JVM system property `lws.authn.allowedInternalHosts`, or
-- the build-time provider option
-  `kc.sh build --spi-realm-restapi-extension--lws--allowed-internal-hosts=…` (set it on any one of the
-  three providers; it is a server-wide setting).
+- the provider option `spi-realm-restapi-extension--lws--allowed-internal-hosts=…` in `keycloak.conf`,
+  or `--spi-realm-restapi-extension--lws--allowed-internal-hosts=…` on `kc.sh start` (set it on any one
+  of the three providers; it is a server-wide setting). **Not on `kc.sh build`** — see the note in
+  [step 9d](#9d-decide-who-may-call-verify).
 
 We wire the environment variable into the systemd unit in the next steps. For a single-box install
 where the server can't reach its own public IP, set it to your hostname (and/or `127.0.0.1`); leave
 it empty otherwise.
 
+Every fetch is **https**: a subject, issuer or `jwks_uri` on plain `http` is refused, because anyone on
+the network path could substitute its keys. An allow-listed host is the one exception — so a server
+that reaches itself as `http://127.0.0.1:8080` works once that address is on the list.
+
 The guard is installed as the **DNS resolver** of the HTTP client the verifiers use, not as a separate
 check in front of it, so the addresses it approves are exactly the addresses connected to — there is no
-second lookup for a hostile name server to poison. That client also refuses to follow redirects.
-Neither property depends on `spi-connections-http-client-default-allow-redirects`, so changing that
-server-wide setting cannot open a hole here.
+second lookup for a hostile name server to poison. That client does not follow redirects on its own;
+dereferencing a subject follows up to three, each vetted as a new request. Neither property depends on
+`spi-connections-http-client-default-allow-redirects`, so changing that server-wide setting cannot open
+a hole here.
 
 ---
 
@@ -342,14 +351,33 @@ good, since that is the order the specification's cold-trust algorithm requires.
 |---|---|---|---|
 | Mode (`bearer` / `secret` / `public`) | `LWS_AUTHN_VERIFY_ACCESS` | `lws.authn.verify.access` | `bearer` |
 | Shared secret (mode `secret`) | `LWS_AUTHN_VERIFY_SECRET` | `lws.authn.verify.secret` | — |
-| Required realm role (mode `bearer`) | `LWS_AUTHN_VERIFY_ROLE` | `lws.authn.verify.role` | — |
+| Required realm role (mode `bearer`; `*` for any user) | `LWS_AUTHN_VERIFY_ROLE` | `lws.authn.verify.role` | `lws-verifier` |
 | Requests per minute, per caller | `LWS_AUTHN_VERIFY_RATE_LIMIT` | `lws.authn.verify.rateLimit` | `60` |
 
-The same settings are available as build-time provider options, one per provider id, e.g.
-`kc.sh build --spi-realm-restapi-extension--lws--access=public`. The environment variables need no
-rebuild, so they are what the systemd unit below uses.
+The same settings are available as provider options, one per provider id: in `keycloak.conf`
+(`spi-realm-restapi-extension--lws--access=public`) or on `kc.sh start`
+(`--spi-realm-restapi-extension--lws--access=public`). The environment variables need neither, so they
+are what the systemd unit below uses.
 
-- **`bearer`** — the caller presents a Keycloak access token for the realm.
+> **These are runtime options. Do not pass them to `kc.sh build`.** Keycloak keeps only build-time
+> options from a build — for a provider, the keys ending in `-provider`, `-enabled` or
+> `-provider-default` — and drops the rest with nothing more than "run time options were found, but
+> will be ignored during build time" in the build's output. A `role` or `audience` given to `kc.sh
+> build` is simply not set, and the server starts without it. To see what is actually in force, look
+> for these lines in the startup log, one per provider and one for the server-wide settings:
+>
+> ```
+> lws-authn provider 'lws' settings in force: serve=true, access=bearer, role=lws-verifier, rate-limit=60/min, …
+> lws-authn server-wide settings in force: allowed-internal-hosts=[…], http-timeout-millis=5000, …
+> ```
+
+- **`bearer`** — the caller presents a Keycloak access token for the realm **and holds the realm role
+  `lws-verifier`** (or the one `LWS_AUTHN_VERIFY_ROLE` names). In each realm that serves `/verify`,
+  create the role (*Realm roles → Create role*) and grant it to the caller — typically the service
+  account of the authorization server that verifies credentials (*Clients → that client → Service
+  accounts roles → Assign role*). Nobody holds it by default, so until you grant it every bearer caller
+  gets a `403`. Do **not** grant it to end users, and do not set `LWS_AUTHN_VERIFY_ROLE=*` (any user of
+  the realm) on a realm that lets people register themselves.
 - **`secret`** — the caller presents a pre-shared secret as `Authorization: Bearer <secret>`. Choosing
   `secret` without configuring one falls back to `bearer`; it never fails open.
 - **`public`** — anonymous, the pre-1.0 behaviour. Only for endpoints already restricted to a trusted
@@ -367,24 +395,31 @@ rebuild, so they are what the systemd unit below uses.
 
 Every setting is read from the provider's configuration first, then a system property, then an
 environment variable, then a compiled-in default — so the environment variables in the unit file below
-need no `kc.sh build`.
+need no `kc.sh build`. (A provider option belongs in `keycloak.conf` or on `kc.sh start`, never on
+`kc.sh build`; see the note in [step 9d](#9d-decide-who-may-call-verify).)
 
 | Setting | Environment variable | System property | Provider option | Default |
 |---|---|---|---|---|
-| Serve this suite at all | `LWS_AUTHN_ENABLED` | `lws.authn.enabled` | `enabled` | `true` |
+| Serve this suite at all | `LWS_AUTHN_ENABLED` | `lws.authn.enabled` | `serve` | `true` |
 | Audience to require when the request names none | `LWS_AUTHN_AUDIENCE` | `lws.authn.audience` | `audience` | — |
 | `Cache-Control: max-age` on a served CID | `LWS_AUTHN_CID_CACHE_SECONDS` | `lws.authn.cid.cacheSeconds` | `cid-cache-seconds` | `300` |
 | CID requests per minute, per caller | `LWS_AUTHN_CID_RATE_LIMIT` | `lws.authn.cid.rateLimit` | `cid-rate-limit` | `600` |
 | Outbound fetch timeout (ms) | `LWS_AUTHN_HTTP_TIMEOUT_MILLIS` | `lws.authn.http.timeoutMillis` | `http-timeout-millis` | `5000` |
 | Outbound response cap (bytes) | `LWS_AUTHN_HTTP_MAX_RESPONSE_BYTES` | `lws.authn.http.maxResponseBytes` | `http-max-response-bytes` | `262144` |
+| Outbound fetch deadline, whole exchange (ms) | `LWS_AUTHN_HTTP_DEADLINE_MILLIS` | `lws.authn.http.deadlineMillis` | `http-deadline-millis` | `10000` |
+| Outbound fetches one caller may have in flight | `LWS_AUTHN_HTTP_MAX_CONCURRENT_PER_CALLER` | `lws.authn.http.maxConcurrentPerCaller` | `http-max-concurrent-per-caller` | `4` |
 | Clock skew on `exp`/`nbf`/`<Conditions>` (s) | `LWS_AUTHN_CLOCK_SKEW_SECONDS` | `lws.authn.clockSkewSeconds` | `clock-skew-seconds` | `60` |
 
-The last three are server-wide: set them on any one provider and all three use them. Out-of-range
-values are clamped rather than honoured.
+The last five are server-wide: set them on any one provider and all three use them. Out-of-range
+values are clamped rather than honoured, and one that will not parse falls back to the default; either
+is logged as a warning at startup. [Configuration](configuration.md) has the full list, including
+`http-mode` for a server that can reach the internet only through an egress proxy.
 
-**Turning a suite off.** `LWS_AUTHN_ENABLED=false` (or `--spi-realm-restapi-extension--lws-saml--enabled=false`
-for just one) makes that suite's endpoints answer `404`. For one realm only, set the realm attribute
-`lws.authn.<providerId>.enabled` — for example:
+**Turning a suite off.** `LWS_AUTHN_ENABLED=false` makes the suites' endpoints answer `404`. For just
+one, `--spi-realm-restapi-extension--lws-saml--serve=false` on `kc.sh start`. (Keycloak's own
+`--spi-realm-restapi-extension--lws-saml--enabled=false` — build-time, so on `kc.sh build` — removes
+the provider entirely: it is not loaded, and no realm can turn it back on.) For one realm only, set the
+realm attribute `lws.authn.<providerId>.enabled` — for example:
 
 ```bash
 kcadm.sh update realms/myrealm -s 'attributes."lws.authn.lws-saml.enabled"=false'
@@ -466,8 +501,9 @@ sudo tee /etc/keycloak/keycloak.env >/dev/null <<'EOF'
 # Database password (maps to db-password)
 KC_DB_PASSWORD=CHANGE_ME_DB
 
-# LWS SSRF allow-list — see step 9c. Leave empty unless the server must
-# dereference its own documents over a loopback/internal address.
+# LWS SSRF allow-list — see step 9c. Leave empty unless verifying needs a
+# document on a loopback/internal address. A realm's own documents and keys
+# are read without fetching; another realm's on this server are not.
 LWS_AUTHN_ALLOWED_INTERNAL_HOSTS=
 
 # Who may call the LWS /verify endpoints — see step 9d. 'bearer' (the default)
@@ -561,13 +597,20 @@ server {
         proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host              $host;
         proxy_set_header X-Real-IP         $remote_addr;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For   $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-Host  $host;
         proxy_set_header X-Forwarded-Port  $server_port;
     }
 }
 ```
+
+`X-Forwarded-For` is **overwritten** with the address nginx sees, not appended to with
+`$proxy_add_x_forwarded_for`. Appending keeps whatever the client sent at the front of the list, and
+that is the entry Keycloak reports as the caller's address — the one the verify and CID rate limits
+bucket on. A client could then name a fresh address on every request. (If another proxy or a load
+balancer sits in front of nginx, use its `real_ip` module to recover the client address instead, and
+list that hop in `proxy-trusted-addresses` too.)
 
 Enable it and obtain a certificate (certbot rewrites the block for HTTPS and adds an HTTP→HTTPS
 redirect):
@@ -605,18 +648,27 @@ credential passes the provider's `/verify` endpoint (the same algorithm an LWS s
 ### Fast path — the bundled demo script
 
 The repo ships a script that idempotently provisions a realm (`lws-demo`), a client (`lws-app`), the
-**LWS WebID Subject** mapper, and a user (`alice`), then obtains an ID Token, dereferences the WebID,
-and runs it through `/verify`:
+**LWS WebID Subject** mapper, and a user (`alice`) holding the `lws-verifier` role, then obtains an ID
+Token, dereferences the WebID, and runs it through `/verify`:
 
 ```bash
 cd /tmp/lws-authn      # your clone from step 6
 KC_URL=https://id.example.com \
 ADMIN_USER=admin ADMIN_PASS=CHANGE_ME_ADMIN \
+PASSWORD="$(openssl rand -base64 18)" \
 bash scripts/lws-demo.sh
 ```
 
 A successful run ends with **`valid: true`** and prints the WebID — that is a working LWS identity
 issued by your server.
+
+`PASSWORD` is required against anything but `localhost`: without it the user's password would be
+`alice`, on an internet-facing server, for a user who may call `/verify`. The script's `lws-app` client
+allows only the password grant, with no redirect URIs. **When you are done, delete the realm** —
+*Realm settings → Action → Delete*, or
+`kcadm.sh delete realms/lws-demo` — so neither the test user nor the demo client outlives the test. A
+realm created by an earlier version of the script has a client with `redirectUris: ["*"]`, an
+authorization-code theft vector; delete that one in any case.
 
 ### Manual path
 
@@ -686,16 +738,23 @@ If `subjectDereferenced` is `false`, the server couldn't fetch its own WebID —
 - **Database** — PostgreSQL, not H2; the DB password lives only in the root-only env file.
 - **Bootstrap admin removed** — a permanent admin exists; `KC_BOOTSTRAP_ADMIN_*` deleted from the env
   file.
-- **SSRF allow-list** — empty unless the server must dereference its own documents over an internal
-  address, in which case it lists exactly those hosts.
+- **SSRF allow-list** — empty unless verifying needs documents at an internal address (another realm
+  on this server, say; a realm's own are read without fetching), in which case it lists exactly those
+  hosts.
 - **`/verify` access** — left at `bearer`, or set to `public` only behind a network restriction that
-  makes it unreachable from the internet ([step 9d](#9d-decide-who-may-call-verify)).
+  makes it unreachable from the internet ([step 9d](#9d-decide-who-may-call-verify)). In `bearer` mode
+  the `lws-verifier` role exists and is held only by the services that verify credentials.
+- **Settings in force** — the startup log's `lws-authn provider '…' settings in force` and `lws-authn
+  server-wide settings in force` lines show the access mode, role, audience and allow-list you meant.
+  A provider option passed to `kc.sh build` instead of `kc.sh start` is silently absent from them.
 - **User attributes are admin-only** — the realm's unmanaged attribute policy is `ADMIN_EDIT`, not
   `ENABLED` ([step 9f](#9f-make-user-attributes-admin-only-do-not-skip-this)). `lws_jwk` is the signing
   key an identity publishes and the WebID attribute becomes a credential's `sub`; a user who can write
   either can impersonate an identity. Check it with
   `kcadm.sh get realms/<realm> --fields unmanagedAttributePolicy`.
 - **Firewall** — only `22/80/443` exposed; Keycloak's `8080` stays on loopback.
+- **Demo realm gone** — the `lws-demo` realm from [step 13](#13-verify-the-openid-connect-suite-end-to-end)
+  is deleted, along with its test user and its demo client.
 - **Direct Access Grants off** for real clients (it's on in the demo only to make it scriptable).
 - **Audience** — if your LWS/resource server checks `aud`, add a Keycloak **Audience** mapper or use
   Resource Indicators (RFC 8707) / Token Exchange (RFC 8693, token type
@@ -717,7 +776,7 @@ If `subjectDereferenced` is `false`, the server couldn't fetch its own WebID —
 | `/verify` → `200` with `"valid": false` | The request was fine; the **credential** did not verify. Read `checks` and `errors` in the body, and the server log at `DEBUG` under the response's `traceId`. This used to be a `401` — see step 9d. |
 | `/verify` or `/cid/{userId}` → `404` with `{"error":"not_found"}` | Either that user id does not exist, or the suite is disabled — check `LWS_AUTHN_ENABLED` and the realm attribute `lws.authn.<providerId>.enabled` (step 9e). |
 | `/cid/{userId}` → `429` with `{"error":"slow_down"}` | The caller exceeded `LWS_AUTHN_CID_RATE_LIMIT` (default 600/minute, per source address). Raise it, or set it to `0` to disable. |
-| `/verify` → `429` with `{"error":"slow_down"}` | The caller exceeded `LWS_AUTHN_VERIFY_RATE_LIMIT` (default 60/minute, per source address). Raise it, or set it to `0` to disable rate limiting. |
+| `/verify` → `429` with `{"error":"slow_down"}` | `Retry-After` says when to try again. The caller exceeded `LWS_AUTHN_VERIFY_RATE_LIMIT` (default 60/minute, per source address — IPv6 by `/64` — and in `bearer` mode per user as well). Raise it, or set it to `0` to disable rate limiting. If every caller is limited together, Keycloak is seeing the proxy's address: check `proxy-headers` and `proxy-trusted-addresses` (steps 9b and 12). |
 | `directAccessGrantsEnabled`/token request returns `invalid_client` | The client isn't public or Direct Access Grants is off. For the demo client, enable both. |
 
 Useful commands:
@@ -740,9 +799,46 @@ sudo -u keycloak /opt/keycloak/bin/kc.sh build
 sudo systemctl restart keycloak
 ```
 
-**Upgrade Keycloak itself**: the provider must be built against the matching `keycloak.version`. Bump
-`keycloak.version` in `pom.xml`, rebuild the provider, install the new Keycloak distribution
-(step 5), re-point the `/opt/keycloak` symlink, redeploy the JAR (step 7), `kc.sh build`, restart.
+**Upgrade Keycloak itself.** A patch release of the same minor (26.8.0 → 26.8.1) needs no new provider
+build: install the new distribution (step 5), re-point the `/opt/keycloak` symlink, redeploy the same
+JAR (step 7), `kc.sh build`, restart. Take these as they come — they are where Keycloak's security
+fixes land. A new minor (26.9) needs the provider rebuilt against it: bump `keycloak.version` in
+`pom.xml`, rebuild (step 6), then as above.
+
+### Upgrading a deployment that predates the October 2026 review
+
+A server running a provider built before the fixes in [the changelog](CHANGELOG.md)'s *Security*
+section will see breaking changes, and most of them surface as `401`, `403` or `valid: false` on
+traffic that works today. Prepare, then deploy in two steps.
+
+**Before deploying**
+
+1. **Audit what your issuers send.** The claim-level checks have no opt-out: `azp`, `iat` and `kid` are
+   required; a controlled identifier document needs `id`, `type` and `controller`; `revoked`/`expires`
+   that are not one date make a key unusable; and `sub`, `iss` and `jwks_uri` must be `https` unless
+   their host is on the SSRF allow-list. Run a sample of real credentials through a test server first.
+2. **Create the `lws-verifier` realm role** in every realm that serves `/verify`, and grant it to every
+   caller — normally the authorization server's service account ([step 9d](#9d-decide-who-may-call-verify)).
+3. **Callers send the credential in the `credential` form field** and their own access token in
+   `Authorization`, which no longer means "the credential to verify" outside `public` mode.
+4. **Move any provider option off `kc.sh build`** into `keycloak.conf` or the environment
+   ([step 9d](#9d-decide-who-may-call-verify)).
+5. **Fix the proxy headers**: nginx sets `X-Forwarded-For $remote_addr`, and `keycloak.conf` has
+   `proxy-trusted-addresses` ([steps 9b](#9b-write-keycloakconf) and [12](#12-terminate-tls-with-nginx--certbot)).
+6. **Run Keycloak 26.8.0 or a later 26.8 release** — the minor this provider is built against. From 26.7
+   that is a minor upgrade: stop every node, back up the database, and read Keycloak's
+   [migration notes](https://www.keycloak.org/docs/latest/upgrading/) first.
+
+**Deploy, then tighten**
+
+7. Deploy the new JAR with `LWS_AUTHN_VERIFY_ACCESS=public` in `/etc/keycloak/keycloak.env`, so callers
+   that have not yet switched to step 3 keep working while you check. On an internet-facing server keep
+   this window short, or restrict `…/verify` in nginx to your callers' addresses while it lasts.
+   Restart, read the `settings in force` lines in the startup log, and run a known-good credential
+   through each suite you use; anything `valid: false` lists the failed check.
+8. Remove `LWS_AUTHN_VERIFY_ACCESS` (back to `bearer`), restart, and confirm your callers get `200`s —
+   a `401` means a caller without an access token, a `403` one without the role.
+9. Delete any `lws-demo` realm the [fast path](#fast-path--the-bundled-demo-script) created on this server.
 
 **Uninstall**:
 

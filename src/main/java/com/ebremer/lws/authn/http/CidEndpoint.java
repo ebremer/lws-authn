@@ -13,8 +13,6 @@ import jakarta.ws.rs.core.Response;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
-import org.keycloak.services.Urls;
-import org.keycloak.urls.UrlType;
 
 import com.ebremer.lws.authn.config.EndpointSettings;
 import com.ebremer.lws.authn.rdf.RdfContentNegotiation;
@@ -51,6 +49,14 @@ import com.ebremer.lws.authn.verify.VerifyAccess;
  *       it off.</li>
  * </ul>
  *
+ * <h2>Readable from a browser</h2>
+ *
+ * <p>Every answer carries {@code Access-Control-Allow-Origin: *}, and a preflight is answered (R-36), so
+ * a verifier running in a web page can read the document. That is safe because the document is public
+ * and the request carries no credential: CORS protects what a browser's cookies or authorization would
+ * unlock, and there is nothing here to unlock. {@code ETag} is exposed so such a verifier can revalidate
+ * its copy. The {@code verify} endpoints, which do take a credential, carry no CORS headers.</p>
+ *
  * @author Erich Bremer
  */
 public final class CidEndpoint {
@@ -78,6 +84,33 @@ public final class CidEndpoint {
     public static Response serve(KeycloakSession session, EndpointSettings settings, String cidPath,
                                  String userId, String accept, String ifNoneMatch,
                                  DocumentRenderer renderer) {
+        return readableAnywhere(answer(session, settings, cidPath, userId, accept, ifNoneMatch, renderer));
+    }
+
+    /**
+     * The answer to a CORS preflight for a document: any origin, {@code GET} or {@code HEAD}, with the
+     * two request headers a verifier sends — {@code Accept}, safelisted anyway, and {@code If-None-Match},
+     * which is not — cached for a day.
+     */
+    public static Response preflight() {
+        return Response.noContent()
+                .header("Access-Control-Allow-Origin", "*")
+                .header("Access-Control-Allow-Methods", "GET, HEAD")
+                .header("Access-Control-Allow-Headers", "Accept, If-None-Match")
+                .header("Access-Control-Max-Age", "86400")
+                .build();
+    }
+
+    private static Response readableAnywhere(Response response) {
+        return Response.fromResponse(response)
+                .header("Access-Control-Allow-Origin", "*")
+                .header("Access-Control-Expose-Headers", "ETag")
+                .build();
+    }
+
+    private static Response answer(KeycloakSession session, EndpointSettings settings, String cidPath,
+                                   String userId, String accept, String ifNoneMatch,
+                                   DocumentRenderer renderer) {
         RealmModel realm = session.getContext().getRealm();
         if (!settings.isEnabled(realm)) {
             return JsonResponses.notEnabled();
@@ -89,20 +122,51 @@ public final class CidEndpoint {
             return JsonResponses.notAcceptable(RdfContentNegotiation.SUPPORTED);
         }
         RateLimiter limiter = settings.getCidLimiter();
-        if (limiter != null && !limiter.tryAcquire(VerifyAccess.callerKey(session))) {
-            return JsonResponses.error(Response.Status.TOO_MANY_REQUESTS, "slow_down",
-                    "too many requests for identity documents; retry shortly");
+        String caller = VerifyAccess.callerKey(session);
+        if (limiter != null && !limiter.tryAcquire(caller)) {
+            return JsonResponses.tooManyRequests("too many requests for identity documents; retry shortly",
+                    limiter.retryAfterSeconds(caller));
         }
         UserModel user = session.users().getUserById(realm, userId);
         if (user == null) {
             return JsonResponses.notFound("no controlled identifier document for that identifier");
         }
 
-        String issuer = Urls.realmIssuer(session.getContext().getUri(UrlType.FRONTEND).getBaseUri(), realm.getName());
-        String webId = issuer + "/" + settings.getProviderId() + "/" + cidPath + "/" + user.getId();
+        String issuer = ThisRealm.issuerOf(session, realm);
+        String webId = documentUrl(issuer, settings.getProviderId(), cidPath, user.getId());
 
         String body = renderer.render(user, issuer, webId, contentType);
         return withValidators(contentType, body, ifNoneMatch, settings.getCidCacheSeconds());
+    }
+
+    /**
+     * The URL of {@code userId}'s document: {@code {issuer}/{providerId}/{cidPath}/{userId}}, the id
+     * percent-encoded as one path segment (R-30). A Keycloak user id is a UUID, which encoding leaves
+     * alone; a user-storage provider's id is {@code f:<component>:<external id>}, and the external id
+     * may hold anything — a {@code /} or {@code #} in it used to give the user an identifier for another
+     * path, or with a fragment.
+     */
+    public static String documentUrl(String issuer, String providerId, String cidPath, String userId) {
+        return issuer + "/" + providerId + "/" + cidPath + "/" + pathSegment(userId);
+    }
+
+    /** {@code value} as one RFC 3986 path segment: {@code pchar}s kept, everything else UTF-8 encoded. */
+    static String pathSegment(String value) {
+        if (value.equals(".") || value.equals("..")) {
+            return value.replace(".", "%2E");
+        }
+        StringBuilder out = new StringBuilder(value.length());
+        for (byte b : value.getBytes(java.nio.charset.StandardCharsets.UTF_8)) {
+            int c = b & 0xff;
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+                    || "-._~!$&'()*+,;=:@".indexOf(c) >= 0) {
+                out.append((char) c);
+            } else {
+                out.append('%').append(Character.toUpperCase(Character.forDigit(c >> 4, 16)))
+                        .append(Character.toUpperCase(Character.forDigit(c & 0xf, 16)));
+            }
+        }
+        return out.toString();
     }
 
     /**

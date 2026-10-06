@@ -43,6 +43,7 @@ class JsonResponsesTest {
                 JsonResponses.notFound("gone"),
                 JsonResponses.notEnabled(),
                 JsonResponses.error(Response.Status.TOO_MANY_REQUESTS, "slow_down", "later"),
+                JsonResponses.tooManyRequests("later", 7),
                 JsonResponses.notAcceptable(RdfContentNegotiation.SUPPORTED)}) {
             assertEquals(MediaType.APPLICATION_JSON, response.getMediaType().toString(),
                     "an untyped response becomes a 500 in Keycloak, whatever status it carried");
@@ -76,5 +77,28 @@ class JsonResponsesTest {
                 JsonResponses.errorBody("code", "description"));
         assertEquals(200, response.getStatus());
         assertEquals("code", body(response).get("error").asText());
+    }
+
+    /** R-36. A {@code 429} says when to come back. */
+    @Test
+    void tooManyRequestsCarriesRetryAfter() throws Exception {
+        Response response = JsonResponses.tooManyRequests("later", 7);
+        assertEquals(429, response.getStatus());
+        assertEquals("7", String.valueOf(response.getHeaderString("Retry-After")));
+        assertEquals("slow_down", body(response).get("error").asText());
+        assertEquals("1", String.valueOf(JsonResponses.tooManyRequests("later", 0).getHeaderString("Retry-After")));
+    }
+
+    /**
+     * R-36. A controlled identifier document is public and fetched without credentials, so a browser may
+     * read it from any origin, including after a preflight for {@code If-None-Match}.
+     */
+    @Test
+    void theDocumentPreflightAllowsAnyOrigin() {
+        Response preflight = CidEndpoint.preflight();
+        assertEquals(204, preflight.getStatus());
+        assertEquals("*", preflight.getHeaderString("Access-Control-Allow-Origin"));
+        assertTrue(preflight.getHeaderString("Access-Control-Allow-Methods").contains("GET"));
+        assertTrue(preflight.getHeaderString("Access-Control-Allow-Headers").contains("If-None-Match"));
     }
 }

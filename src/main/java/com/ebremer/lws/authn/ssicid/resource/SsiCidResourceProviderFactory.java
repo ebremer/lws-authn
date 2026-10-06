@@ -40,7 +40,7 @@ public class SsiCidResourceProviderFactory implements RealmResourceProviderFacto
 
     @Override
     public void postInit(KeycloakSessionFactory factory) {
-        // nothing to do
+        settings.logEffective();
     }
 
     @Override

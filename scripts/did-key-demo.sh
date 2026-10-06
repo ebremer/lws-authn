@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright Erich Bremer.
+#
+# SPDX-License-Identifier: Apache-2.0
 #
 # did-key-demo.sh — mint a self-signed did:key credential and verify it end to end.
 #
@@ -11,7 +14,7 @@
 # endpoint. So this verifies at /lws-ssi-cid/verify, with a 'kid' naming the verification method the
 # did:key's DID document lists (<did>#<multibase>) — that suite requires one.
 #
-# Requirements: curl, jq, node, and a running Keycloak 26.7.4 with the lws-authn provider deployed.
+# Requirements: curl 7.76 or later, jq, node, and a running Keycloak 26.8 (26.8.0 or later) with the lws-authn provider deployed.
 # Defaults target `kc.sh start-dev` on http://localhost:8080, realm `master` (any realm works —
 # the verifier is realm-agnostic).
 #
@@ -26,20 +29,69 @@ KC_URL="${KC_URL:-http://localhost:8080}"
 REALM="${REALM:-master}"
 KEYTYPE="${KEYTYPE:-p256}"   # p256 (zDn…, ES256) or ed25519 (z6Mk…, EdDSA)
 # The verify endpoints are authenticated by default (docs/configuration.md, "Securing the verify endpoints").
-# Supply a caller token directly, or let the script fetch one with these realm credentials.
+# Supply a caller token directly, or let the script fetch one with these realm credentials — after
+# granting that user the role a caller must hold (VERIFY_ROLE, the endpoints' `role` setting), for which
+# it logs in as the admin.
 VERIFY_TOKEN="${VERIFY_TOKEN:-}"
 VERIFY_USER="${VERIFY_USER:-admin}"
 VERIFY_PASS="${VERIFY_PASS:-admin}"
+VERIFY_ROLE="${VERIFY_ROLE:-lws-verifier}"
+ADMIN_USER="${ADMIN_USER:-admin}"
+ADMIN_PASS="${ADMIN_PASS:-admin}"
 
 for t in curl jq node; do command -v "$t" >/dev/null || { echo "$t is required"; exit 1; }; done
 
+umask 077
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+die()  { printf '\033[1;31m%s\033[0m\n' "$*" >&2; exit 1; }
+# A field of the JSON on stdin, or nothing when it is not JSON.
+json() { jq -r "$1" 2>/dev/null || true; }
+
+# Passwords and tokens never go on a command line, where `ps` shows them to everyone on the machine:
+# passwords reach curl on stdin, tokens through a header file only this user can read.
+bearer_header() { printf 'Authorization: Bearer %s\n' "$2" > "$1"; }
+
+# POSTs to the token endpoint of realm $1 for client $2, user $3, with the password on stdin.
+password_grant() {
+  curl -sS -X POST "$KC_URL/realms/$1/protocol/openid-connect/token" \
+    -d grant_type=password --data-urlencode "client_id=$2" --data-urlencode "username=$3" \
+    --data-urlencode "password@-" "${@:4}"
+}
+
+# The admin API. A request it refuses stops the script with Keycloak's answer.
+api()        { curl -sS --fail-with-body -H @"$WORK/admin.h" "$@" || { echo >&2; die "The admin API refused that request (above)."; }; }
+api_status() { curl -sS -o /dev/null -w '%{http_code}' -H @"$WORK/admin.h" "$@"; }
+
+# A bearer caller of a verify endpoint must hold the verifier realm role (docs/configuration.md,
+# "Securing the verify endpoints"). Create it if this realm lacks it, and grant it to user $1.
+ensure_verifier_role() {
+  if [ "$(api_status "$KC_URL/admin/realms/$REALM/roles/$VERIFY_ROLE")" = 404 ]; then
+    jq -n --arg name "$VERIFY_ROLE" '{name: $name, description: "May call the lws-authn verify endpoints"}' \
+      | api -X POST "$KC_URL/admin/realms/$REALM/roles" -H 'Content-Type: application/json' --data-binary @-
+    echo "created realm role $VERIFY_ROLE"
+  fi
+  api "$KC_URL/admin/realms/$REALM/roles/$VERIFY_ROLE" | jq -c '[.]' \
+    | api -X POST "$KC_URL/admin/realms/$REALM/users/$1/role-mappings/realm" \
+          -H 'Content-Type: application/json' --data-binary @-
+  echo "granted $VERIFY_ROLE"
+}
+
 if [ -z "$VERIFY_TOKEN" ]; then
-  VERIFY_TOKEN=$(curl -sS -X POST "$KC_URL/realms/$REALM/protocol/openid-connect/token" \
-    -d grant_type=password -d client_id=admin-cli \
-    -d username="$VERIFY_USER" -d password="$VERIFY_PASS" | jq -r '.access_token // empty')
+  ADMIN_TOKEN=$(printf '%s' "$ADMIN_PASS" | password_grant master admin-cli "$ADMIN_USER" | json '.access_token // empty')
+  VERIFY_USER_ID=""
+  if [ -n "$ADMIN_TOKEN" ]; then
+    bearer_header "$WORK/admin.h" "$ADMIN_TOKEN"
+    VERIFY_USER_ID=$(api --get --data-urlencode "username=$VERIFY_USER" -d exact=true \
+                         "$KC_URL/admin/realms/$REALM/users" | json '.[0].id // empty')
+  fi
+  if [ -n "$VERIFY_USER_ID" ]; then
+    ensure_verifier_role "$VERIFY_USER_ID" >&2
+  else
+    echo "warning: could not grant $VERIFY_ROLE to $VERIFY_USER; /verify will refuse unless they hold it" >&2
+  fi
+  VERIFY_TOKEN=$(printf '%s' "$VERIFY_PASS" | password_grant "$REALM" admin-cli "$VERIFY_USER" | json '.access_token // empty')
   [ -n "$VERIFY_TOKEN" ] || echo "warning: no caller token; /verify will refuse unless it runs in 'public' mode" >&2
 fi
 
@@ -47,9 +99,10 @@ fi
 verify_post() {
   local url="$1"; shift
   if [ -n "${VERIFY_TOKEN:-}" ]; then
-    curl -sS -X POST "$url" -H "Authorization: Bearer $VERIFY_TOKEN" "$@"
+    bearer_header "$WORK/verify.h" "$VERIFY_TOKEN"
+    curl -sS -X POST -H @"$WORK/verify.h" "$@" "$url"
   else
-    curl -sS -X POST "$url" "$@"
+    curl -sS -X POST "$@" "$url"
   fi
 }
 
@@ -91,11 +144,11 @@ JWT=$(KEYTYPE="$KEYTYPE" node "$WORK/mint.mjs")
 printf '\n\033[1;36m== minted a %s did:key self-signed JWT\033[0m\n%s\n' "$KEYTYPE" "$JWT"
 
 printf '\n\033[1;36m== verifying at %s\033[0m\n' "$KC_URL/realms/$REALM/lws-ssi-cid/verify"
-RESULT=$(verify_post "$KC_URL/realms/$REALM/lws-ssi-cid/verify" \
-  --data-urlencode "credential=$JWT" --data-urlencode "audience=https://as.example")
-echo "$RESULT" | jq .
+RESULT=$(printf '%s' "$JWT" | verify_post "$KC_URL/realms/$REALM/lws-ssi-cid/verify" \
+  --data-urlencode "credential@-" --data-urlencode "audience=https://as.example")
+printf '%s' "$RESULT" | jq . 2>/dev/null || printf '%s\n' "$RESULT"
 
-if [ "$(printf '%s' "$RESULT" | jq -r '.valid // false')" = true ]; then
+if [ "$(printf '%s' "$RESULT" | json '.valid // false')" = true ]; then
   printf '\n\033[1;36m== PASS\033[0m\n'
   echo "The did:key carries its own key, so any LWS server can verify this with no prior setup:"
   echo "    curl https://pod.example/ -H \"Authorization: Bearer \$JWT\""

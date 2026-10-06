@@ -38,9 +38,20 @@ public final class PublicJwk {
 
     /**
      * Members that carry private/secret key material across the JWK key types of RFC 7518: RSA
-     * ({@code d, p, q, dp, dq, qi, oth}), EC and OKP ({@code d}) and symmetric ({@code k}).
+     * ({@code d, p, q, dp, dq, qi, oth}), EC and OKP ({@code d}) and symmetric ({@code k}); and the
+     * {@code AKP} type of the ML-DSA JOSE draft ({@code priv}), which Keycloak's JWK parser reads since
+     * 26.7.4 (R-38). Without {@code priv} here an AKP key pair was trimmed to its public members rather
+     * than refused.
      */
-    public static final Set<String> PRIVATE_MEMBERS = Set.of("d", "p", "q", "dp", "dq", "qi", "k", "oth");
+    public static final Set<String> PRIVATE_MEMBERS = Set.of("d", "p", "q", "dp", "dq", "qi", "k", "oth", "priv");
+
+    /**
+     * The key types a published key may have: the ones the self-signed verifier can check a signature
+     * with. {@code kty} is case-sensitive (RFC 7517 §4.1). Anything else — {@code oct}, {@code AKP}, a type
+     * not yet defined — is refused by name (R-38) rather than published with whichever members happen to
+     * share a name with an RSA, EC or OKP key's.
+     */
+    public static final Set<String> PUBLISHABLE_TYPES = Set.of("RSA", "EC", "OKP");
 
     /**
      * Members that may be published, in the order they are emitted. RFC 7517 common parameters plus the
@@ -54,9 +65,9 @@ public final class PublicJwk {
      * Returns the publishable projection of {@code jwk}, or empty when it must not be published at all.
      *
      * <p>Empty is returned when the value is not a JSON object, when it carries any
-     * {@linkplain #PRIVATE_MEMBERS private member}, when it has no {@code kty}, or when {@code kty} is
-     * {@code oct} (a symmetric key is secret material by definition and can never appear in a
-     * controlled identifier document).</p>
+     * {@linkplain #PRIVATE_MEMBERS private member}, or when its {@code kty} is not one of the
+     * {@linkplain #PUBLISHABLE_TYPES publishable types} — {@code oct} among them: a symmetric key is
+     * secret material by definition and can never appear in a controlled identifier document.</p>
      */
     public static Optional<JsonNode> sanitize(JsonNode jwk) {
         if (jwk == null || !jwk.isObject()) {
@@ -66,7 +77,7 @@ public final class PublicJwk {
             return Optional.empty();
         }
         String kty = jwk.path("kty").asText(null);
-        if (kty == null || kty.isBlank() || "oct".equalsIgnoreCase(kty)) {
+        if (kty == null || !PUBLISHABLE_TYPES.contains(kty)) {
             return Optional.empty();
         }
         ObjectNode out = JsonSerialization.mapper.createObjectNode();
@@ -105,6 +116,10 @@ public final class PublicJwk {
         }
         if ("oct".equalsIgnoreCase(kty)) {
             return "JWK is a symmetric key (kty=oct) and MUST NOT be published";
+        }
+        if (!PUBLISHABLE_TYPES.contains(kty)) {
+            return "JWK has kty '" + kty.replaceAll("[^A-Za-z0-9_-]", "?") + "', which is not a key type this "
+                    + "provider verifies (RSA, EC or OKP)";
         }
         return "JWK is not publishable";
     }

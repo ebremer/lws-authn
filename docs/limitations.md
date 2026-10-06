@@ -9,9 +9,10 @@ nav_order: 4
 - **Key/identity hosting.** The OpenID and self-signed-CID `cid/{userId}` endpoints serve
   Keycloak-hosted identifiers; private keys never reach Keycloak (only public JWKs are registered). The
   SAML suite hosts nothing, and neither do DID subjects.
-- **SAML trust is out-of-band.** The verifier requires the trusted IdP certificate as input; it
-  validates the XML signature, the `<Conditions>` window (±60 s skew by default, `clock-skew-seconds`)
-  and the audience, but does not fetch metadata or build a trust chain.
+- **SAML trust is out-of-band.** The verifier trusts the signing certificates configured on the realm's
+  SAML identity providers, matched by IdP entity ID, or a certificate the caller supplies; it does not
+  fetch metadata or build a trust chain. An identity provider that takes its keys from a metadata
+  descriptor URL at login, with no certificate configured, offers none to the verifier.
 - **DID methods and key types.** `did:key` and `did:web` are resolved; other methods are refused.
   Ed25519, P-256, P-384 and P-521 are supported for `did:key` and `Multikey`; secp256k1 (which the JDK
   cannot do without BouncyCastle), BLS12-381, SM2 and RSA are not. No BouncyCastle is used, so this
@@ -40,8 +41,10 @@ nav_order: 4
 - **Verification-method identifiers.** A JWK `kid` is arbitrary text, so the self-signed-CID document
   percent-encodes it into the `<subject>#<kid>` fragment rather than producing an IRI Jena refuses to
   serialize. Every method has an `id`, as CID 1.0 requires: when the `kid` cannot supply the fragment —
-  absent, blank, over-long, or not well-formed text — the position stands in as `#key-<n>`. The
-  verifier matches a credential's `kid` against a method's fragment both raw and decoded, so documents
+  absent, blank, over-long, or not well-formed text — the position stands in as `#key-<n>`, skipping any
+  id a `kid` already took. No two methods share an id: the same key registered twice is published once,
+  and different keys registered under one `kid` are not published at all, with a warning in the log —
+  a credential naming that `kid` could mean either. The verifier matches a credential's `kid` against a method's fragment both raw and decoded, so documents
   from other implementations still resolve.
 - **Audience / token exchange.** Every `/verify` endpoint accepts an `audience` parameter (and the
   OpenID one a `client_id`) so the credential can be bound to the party checking it — and a deployment

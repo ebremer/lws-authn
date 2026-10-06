@@ -43,7 +43,7 @@ for some other purpose, or has marked `revoked` or let `expire`. The JWT must al
 
 ## Prerequisites
 
-- Keycloak **26.7.4** with the `lws-authn` provider deployed — see [Build and deploy](build.md).
+- Keycloak **26.8.0** or a later 26.8 release, with the `lws-authn` provider deployed — see [Build and deploy](build.md).
 - `curl`, `jq`, and `openssl`.
 - For a quick local run: `docker compose up --build --wait` in a checkout — see
   [Run with Docker](build.md#run-with-docker) — which serves `http://localhost:8080` with admin/admin
@@ -148,11 +148,15 @@ Sign `base64url(header) + "." + base64url(payload)`; ES256 needs the signature a
 ```bash
 curl -s -X POST "$KC/realms/$REALM/lws-ssi-cid/verify" \
   -H "Authorization: Bearer $CALLER_ACCESS_TOKEN" \
-  --data-urlencode "credential=$JWT" | jq
+  --data-urlencode "credential=$JWT" --data-urlencode "audience=https://as.example" | jq
 ```
 
+`audience` is the authorization server you verify for, and the credential's `aud` must include it:
+the suite requires that, so a request without one — and without a configured `audience` — is a `400`.
+
 > `Authorization` identifies **you**, the caller: the `…/verify` endpoints are authenticated by
-> default. The credential being checked always travels in the request body. See
+> default, and the caller must hold the realm role `lws-verifier`. The credential being checked always
+> travels in the request body. See
 > [Securing the verify endpoints](configuration.md#securing-the-verify-endpoints).
 
 ```json
@@ -166,7 +170,10 @@ curl -s -X POST "$KC/realms/$REALM/lws-ssi-cid/verify" \
     "verificationMethodFound": true,
     "signatureValid": true,
     "notExpired": true,
-    "audiencePresent": true
+    "issuedAtPresent": true,
+    "issuedAtConsistent": true,
+    "audiencePresent": true,
+    "audienceMatched": true
   }
 }
 ```

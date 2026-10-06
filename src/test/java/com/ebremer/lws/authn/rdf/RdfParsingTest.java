@@ -5,7 +5,9 @@
  */
 package com.ebremer.lws.authn.rdf;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -164,5 +166,162 @@ class RdfParsingTest {
                 "<" + SUBJECT + "> <https://www.w3.org/ns/did#service> <" + SUBJECT + "#op> .",
                 "text/turtle", SUBJECT);
         assertTrue(declaresProvider(turtle));
+    }
+
+    /**
+     * R-04. Only the syntaxes the verifiers ask for are read. Jena reads many more, and one of them —
+     * the binary RDF-Thrift encoding — turned these eight bytes into a 95 MB allocation and an empty
+     * graph, without an error.
+     */
+    @Test
+    void refusesRdfSyntaxesNobodyAskedFor() {
+        String thrift = new String(new byte[]{0x1C, 0x18, (byte) 0xE5, (byte) 0x80, (byte) 0x80, 0x2D},
+                java.nio.charset.StandardCharsets.UTF_8);
+        RdfParsing.UnsupportedSyntaxException refused = assertThrows(RdfParsing.UnsupportedSyntaxException.class,
+                () -> RdfParsing.parse(thrift, "application/rdf+thrift", SUBJECT));
+        assertEquals("application/rdf+thrift", refused.getContentType());
+        for (String other : new String[]{"application/rdf+protobuf", "application/trig", "text/n3",
+                "application/n-quads", "application/trix+xml", "application/rdf+json", "text/plain"}) {
+            assertThrows(RdfParsing.UnsupportedSyntaxException.class,
+                    () -> RdfParsing.parse("<" + SUBJECT + "> <" + SUBJECT + "#p> <" + SUBJECT + "#o> .", other, SUBJECT),
+                    other);
+        }
+    }
+
+    /** The syntaxes the verifiers do ask for are all still read, by their registered media types. */
+    @Test
+    void readsEverySyntaxTheVerifiersAskFor() {
+        String triple = "<" + SUBJECT + "> <https://www.w3.org/ns/did#service> <" + SUBJECT + "#op> .";
+        assertTrue(declaresProvider(RdfParsing.parse(triple, "text/turtle; charset=utf-8", SUBJECT)));
+        assertTrue(declaresProvider(RdfParsing.parse(triple, "application/n-triples", SUBJECT)));
+        String rdfXml = "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" "
+                + "xmlns:did=\"https://www.w3.org/ns/did#\"><rdf:Description rdf:about=\"" + SUBJECT + "\">"
+                + "<did:service rdf:resource=\"" + SUBJECT + "#op\"/></rdf:Description></rdf:RDF>";
+        assertTrue(declaresProvider(RdfParsing.parse(rdfXml, "application/rdf+xml", SUBJECT)));
+        assertNotNull(RdfParsing.parse(COMPACT_OPENID, "application/json", SUBJECT));
+    }
+
+    /**
+     * R-09. Jena's Turtle parser recurses once per blank node or collection: 5 000 levels — 120 KB, under
+     * the response cap — overflowed the stack, and the error escaped every handler as a 500.
+     */
+    @Test
+    void refusesTurtleNestedTooDeep() {
+        String bnodes = "<" + SUBJECT + "> <" + SUBJECT + "#p> " + ("[<" + SUBJECT + "#p> ").repeat(5_000)
+                + "1" + "]".repeat(5_000) + " .";
+        assertThrows(RdfParsing.TooDeeplyNestedException.class, () -> RdfParsing.parse(bnodes, "text/turtle", SUBJECT));
+        String lists = "<" + SUBJECT + "> <" + SUBJECT + "#p> " + "(".repeat(5_000) + ")".repeat(5_000) + " .";
+        assertThrows(RdfParsing.TooDeeplyNestedException.class, () -> RdfParsing.parse(lists, null, SUBJECT),
+                "undeclared, and so read as Turtle");
+    }
+
+    /** R-09. The JSON-LD processor recurses per nested context: 500 of them overflowed. */
+    @Test
+    void refusesJsonLdNestedTooDeep() {
+        String contexts = "{\"@context\":{\"p\":\"" + SUBJECT + "#p\"},\"@id\":\"" + SUBJECT + "\",\"p\":"
+                + ("{\"@context\":{\"q\":\"" + SUBJECT + "#q\"},\"q\":").repeat(500) + "1" + "}".repeat(500) + "}";
+        assertThrows(RdfParsing.TooDeeplyNestedException.class,
+                () -> RdfParsing.parse(contexts, "application/ld+json", SUBJECT),
+                "refused, not handed to the compact reader as a shape it might understand");
+        String arrays = "{\"@id\":\"" + SUBJECT + "\",\"x\":" + "[".repeat(100) + "]".repeat(100) + "}";
+        assertThrows(RdfParsing.TooDeeplyNestedException.class, () -> RdfParsing.parse(arrays, "application/json", SUBJECT));
+    }
+
+    /** Up to the limit is fine; brackets inside strings, IRIs and comments are not nesting. */
+    @Test
+    void countsOnlyStructuralNesting() {
+        int depth = RdfParsing.MAX_NESTING_DEPTH;
+        String deepEnough = "<" + SUBJECT + "> <" + SUBJECT + "#p> " + ("[<" + SUBJECT + "#p> ").repeat(depth) + "1"
+                + "]".repeat(depth) + " .";
+        assertEquals(depth + 1, RdfParsing.parse(deepEnough, "text/turtle", SUBJECT).size());
+
+        String brackets = "[(".repeat(100);
+        String turtle = "# " + brackets + "\n"
+                + "<" + SUBJECT + "> <" + SUBJECT + "#p> \"" + brackets + "\\\"" + brackets + "\" ;\n"
+                + "  <" + SUBJECT + "#q> '" + brackets + "' ;\n"
+                + "  <" + SUBJECT + "#r> \"\"\"" + brackets + "\" \"\" " + brackets + "\"\"\" ;\n"
+                + "  <" + SUBJECT + "#s> '''" + brackets + "' '' " + brackets + "''' ;\n"
+                + "  <" + SUBJECT + "#t> <" + SUBJECT + "#" + "[".repeat(100) + "> .";
+        assertEquals(5, assertDoesNotThrow(() -> RdfParsing.parse(turtle, "text/turtle", SUBJECT)).size());
+
+        String json = "{\"@context\":{\"p\":\"" + SUBJECT + "#p\"},\"@id\":\"" + SUBJECT + "\","
+                + "\"p\":\"" + "{[".repeat(100) + "\\\"" + "{[".repeat(100) + "\"}";
+        assertEquals(1, assertDoesNotThrow(() -> RdfParsing.parse(json, "application/ld+json", SUBJECT)).size());
+    }
+
+    /** R-19. CID 1.0 Appendix A's media type is JSON-LD in the CID context, and is read as that. */
+    @Test
+    void readsApplicationCidAsJsonLd() {
+        assertDoesNotThrow(() -> RdfParsing.requireSupported("application/cid; charset=utf-8"));
+        assertTrue(RdfParsing.isJsonLd("application/cid", COMPACT_OPENID));
+        assertTrue(declaresProvider(RdfParsing.parse(COMPACT_OPENID, "application/cid", SUBJECT)));
+    }
+
+    /**
+     * R-19. CID 1.0 §4.2.1: a consumer "MUST inject or append an {@code @context}" when a document has
+     * none. Without it every term was undefined and the graph came out empty.
+     */
+    @Test
+    void readsADocumentWithoutAContextInTheCidContext() {
+        String contextless = COMPACT_OPENID.replace("\"@context\":[\"https://www.w3.org/ns/cid/v1\"],", "");
+        assertFalse(contextless.contains("@context"));
+        assertTrue(declaresProvider(RdfParsing.parse(contextless, "application/ld+json", SUBJECT)));
+        assertTrue(declaresProvider(RdfParsing.parse(contextless, "application/json", SUBJECT)));
+        // a context of its own is left alone: here, one that defines nothing the document uses
+        String own = COMPACT_OPENID.replace("[\"https://www.w3.org/ns/cid/v1\"]", "{\"x\":\"https://x.example/\"}");
+        assertFalse(declaresProvider(RdfParsing.parse(own, "application/ld+json", SUBJECT)));
+    }
+
+    /** Everything the verifiers ask for is something they read. */
+    @Test
+    void everyTypeTheVerifiersAcceptIsOneTheyRead() {
+        for (String range : RdfParsing.ACCEPT.split(",")) {
+            String type = range.split(";")[0].trim();
+            assertDoesNotThrow(() -> RdfParsing.requireSupported(type), type);
+        }
+        assertTrue(RdfParsing.ACCEPT.contains("application/cid"));
+        assertTrue(RdfParsing.ACCEPT.contains("application/json"));
+    }
+
+    /** R-18. The topmost map's id, resolved against the document's URL. */
+    @Test
+    void readsTheTopmostId() throws Exception {
+        assertEquals(SUBJECT, RdfParsing.topmostId(COMPACT_OPENID, SUBJECT));
+        assertEquals(SUBJECT, RdfParsing.topmostId("{\"@id\":\"" + SUBJECT + "\"}", SUBJECT));
+        assertEquals(SUBJECT, RdfParsing.topmostId("{\"id\":\"end-user\"}", SUBJECT), "a relative id resolves");
+        assertNull(RdfParsing.topmostId("{\"id\":\"\"}", SUBJECT), "an empty id names nothing");
+        assertEquals(SUBJECT + "#me", RdfParsing.topmostId("{\"id\":\"#me\"}", SUBJECT));
+        assertEquals("https://other.example/doc", RdfParsing.topmostId(
+                "{\"id\":\"https://other.example/doc\",\"alsoKnownAs\":[{\"id\":\"" + SUBJECT + "\"}]}", SUBJECT));
+        assertNull(RdfParsing.topmostId("{\"@graph\":[{\"id\":\"" + SUBJECT + "\"}]}", SUBJECT), "no topmost id");
+        assertNull(RdfParsing.topmostId("[{\"id\":\"" + SUBJECT + "\"}]", SUBJECT), "no topmost map");
+        assertNull(RdfParsing.topmostId("{\"id\":[\"" + SUBJECT + "\"]}", SUBJECT), "not one string");
+        assertThrows(java.io.IOException.class, () -> RdfParsing.topmostId("not json", SUBJECT));
+    }
+
+    /**
+     * R-44. The nesting limit is exact: {@link RdfParsing#MAX_NESTING_DEPTH} levels are read and one more
+     * is refused, in JSON as in Turtle. And a document served as {@code application/cid} (R-19), which
+     * came after the limit (R-09), is held to it like any other JSON-LD.
+     *
+     * <p>RDF/XML has no such count and needs none: Jena reads it without recursing — 6 000 levels parse
+     * on a 128 KB stack — and the JDK's XML parser has a depth limit of its own.</p>
+     */
+    @Test
+    void theNestingLimitIsExact() {
+        int max = RdfParsing.MAX_NESTING_DEPTH;
+        String json = "{\"a\":" + "[".repeat(max - 1) + "]".repeat(max - 1) + "}";
+        assertDoesNotThrow(() -> RdfParsing.requireShallow(json, true), "the topmost map and max − 1 arrays");
+        String deeperJson = "{\"a\":" + "[".repeat(max) + "]".repeat(max) + "}";
+        assertThrows(RdfParsing.TooDeeplyNestedException.class, () -> RdfParsing.requireShallow(deeperJson, true));
+
+        String deeperTurtle = "<" + SUBJECT + "> <" + SUBJECT + "#p> " + ("[<" + SUBJECT + "#p> ").repeat(max + 1)
+                + "1" + "]".repeat(max + 1) + " .";
+        assertThrows(RdfParsing.TooDeeplyNestedException.class,
+                () -> RdfParsing.parse(deeperTurtle, "text/turtle", SUBJECT));
+
+        String deeperCid = "{\"id\":\"" + SUBJECT + "\",\"x\":" + "[".repeat(max) + "]".repeat(max) + "}";
+        assertThrows(RdfParsing.TooDeeplyNestedException.class,
+                () -> RdfParsing.parse(deeperCid, "application/cid", SUBJECT));
     }
 }

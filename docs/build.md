@@ -8,7 +8,7 @@ nav_order: 2
 ## Run with Docker
 
 The quickest way to try the suites. [`compose.yaml`](https://github.com/ebremer/lws-authn/blob/master/compose.yaml)
-builds the provider from your checkout into a Keycloak 26.7.4 image and starts it with a demo realm
+builds the provider from your checkout into a Keycloak 26.8.0 image and starts it with a demo realm
 already imported. It needs only Docker with Compose: no JDK, Maven or Keycloak install.
 
 ```bash
@@ -17,8 +17,10 @@ bash scripts/lws-demo.sh            # or any walkthrough
 docker compose down                 # stop, and discard everything
 ```
 
-Keycloak is at `http://localhost:8080`, and its admin console signs in as `admin` / `admin`. The
-image's build skips the tests, so run `mvn verify` for those.
+Keycloak is at `http://localhost:8080`, and its admin console signs in as `admin` / `admin`. The port
+is published on `127.0.0.1` only, so nothing else on your network can reach that admin. The image's
+build skips the tests, so run `mvn verify` for those. Both base images are pinned by digest;
+Dependabot proposes new digests.
 
 The realm is [`examples/lws-demo-realm.json`](https://github.com/ebremer/lws-authn/blob/master/examples/lws-demo-realm.json),
 which is also what the walkthroughs import by hand:
@@ -44,9 +46,9 @@ KC_PORT=8081 docker compose up --build --wait
 KC_URL=http://localhost:8081 bash scripts/lws-demo.sh
 ```
 
-Keycloak then listens on that port inside the container too, and it has to. The OpenID verifier
-dereferences the credential's own issuer, `http://localhost:<port>/realms/lws-demo`, and inside the
-container `localhost` is Keycloak itself. So the issuer URL works only if Keycloak listens on the
+Keycloak then listens on that port inside the container too, and it has to. Tokens name their issuer
+`http://localhost:<port>/realms/lws-demo`, and inside the container `localhost` is Keycloak itself, so
+that URL means the same server on both sides of the container boundary only if Keycloak listens on the
 port the host sees.
 
 **This is a development setup**, and differs from a deployment in ways that matter:
@@ -54,43 +56,60 @@ port the host sees.
 - `start-dev` serves plain HTTP and takes its hostname from each request.
 - The database lives in the container. `docker compose stop` keeps it; `down` discards it.
 - `LWS_AUTHN_ALLOWED_INTERNAL_HOSTS=localhost,127.0.0.1` opens the SSRF guard to loopback, which the
-  self-dereference above needs. On a server anyone else can reach, that setting lets a credential
-  point the verifier at the server's own internal services.
+  plain-`http` issuer above needs: an `http` issuer is accepted only from an allow-listed host. On a
+  server anyone else can reach, that setting lets a credential point the verifier at the server's own
+  internal services.
 - The admin and `alice` have well-known passwords, and `lws-app` allows the password grant.
 
 For a real server, follow the [install guide](INSTALL.md).
 
 ## Build
 
-Requires JDK 21+ and Maven. (The build compiles to Java 21 bytecode so the provider loads in
-Keycloak's runtime; a newer build JDK such as 25 is fine.)
+Requires JDK 21+. Maven 3.9 or later works; `./mvnw` (`mvnw.cmd` on Windows) fetches the Maven 3.9.16
+this tree is built with, and checks its SHA-256, which is what CI uses. (The build compiles to Java 21
+bytecode so the provider loads in Keycloak's runtime; a newer build JDK such as 25 is fine.)
 
 ```bash
-mvn clean package
+./mvnw clean package
 ```
+
+The build is reproducible: every archive entry carries `project.build.outputTimestamp` rather than the
+build's clock, so the same commit built twice with the same JDK gives the same JAR, byte for byte.
+`mvn verify` also runs `dependency:analyze`, which fails on a class used from a library nobody
+declared, or on a declaration nothing uses; the POM lists what it ignores, and why.
 
 This produces a single, self-contained provider JAR: **`target/lws-authn-<version>.jar`** — this tree is
 `0.3.0-SNAPSHOT`, unreleased work after 0.2.0 — plus a CycloneDX
-SBOM (`target/bom.json`, `target/bom.xml`) listing exactly what is inside it and under what licence.
+SBOM (`target/bom.json`, `target/bom.xml`) listing exactly what is inside it and under what licence:
+the 20 bundled libraries, not the Keycloak libraries the provider compiles against. Relocated libraries
+appear under their own coordinates — relocation renames the packages, not the code. The CycloneDX plugin
+does not run in an offline build (`mvn -o`), so build online when you need the SBOM. Inside the JAR,
+`META-INF/LICENSE-lws-authn.txt` is this project's licence, `META-INF/NOTICE` merges the bundled
+libraries' notices, and `META-INF/licenses/` holds `THIRD-PARTY.txt` — every bundled library and its
+licence — with the text of each licence.
 
 Apache Jena and its dependencies are shaded in. Where Jena and Keycloak want the same library, the
 build picks one of two strategies deliberately, because the wrong one is a runtime failure either way:
 
 | Situation | Treatment | Examples |
 |---|---|---|
-| An interface or facade whose Keycloak copy satisfies Jena | `provided` — use the server's, bundle nothing | `slf4j-api`, `jcl-over-slf4j`, `jakarta.json`, `jspecify` |
-| A library carrying behaviour Jena depends on | bundle the version Jena declares and **relocate** it | `commons-codec` 1.22.0, `titanium-json-ld` 1.7.0, `commons-collections4` 4.5.0, `caffeine` 3.2.4 |
+| An interface or facade whose Keycloak copy satisfies Jena | `provided` — use the server's, bundle nothing | `slf4j-api`, `jcl-over-slf4j`, `jakarta.json`, `jspecify`, `error_prone_annotations` |
+| A library carrying behaviour Jena depends on | bundle the version Jena declares and **relocate** it | `commons-codec` 1.22.0, `titanium-json-ld` 1.7.0, `commons-collections4` 4.5.0, `caffeine` 3.2.4, `gson` 2.14.0, `commons-io` 2.22.0, `commons-lang3` 3.20.0 |
 
 Bundling an unrelocated second copy of a library the server already has puts two implementations of one
 package on the classpath; marking one `provided` when the server's copy is older silently downgrades
-it — Keycloak 26.7.4 runs Titanium 1.3.3 and Caffeine 3.2.3 against Jena's 1.7.0 and 3.2.4. The bundled
+it — Keycloak 26.8.0 runs Titanium 1.3.3 against Jena's 1.7.0. The bundled
 versions are pinned explicitly, because Maven would otherwise resolve the older versions Keycloak's own
 POMs declare (commons-codec 1.11, commons-collections4 4.4, Titanium 1.3.3, Caffeine 3.2.3). The shade
 plugin's comment in `pom.xml` tabulates all three columns.
 
 `mvn package` enforces this: `maven-enforcer-plugin` fails the build on duplicate classes among the
-bundled artifacts, and the shade plugin's `artifactSet` excludes hold regardless of what Maven's scope
-mediation decides. Keycloak's own SAML, crypto and HTTP libraries are `provided` — they are part of the
+bundled artifacts, and on a bundled library that Maven resolved to an older version than something in
+the tree asks for (`requireUpperBoundDeps`); the shade plugin's `artifactSet` excludes hold regardless
+of what Maven's scope mediation decides. `mvn verify` then reads the JAR (`ShadedJarContentsIT`, no
+Docker needed) and fails on any class bundled under its own package name unless that package is on a
+short list the server does not have — Jena itself, Thrift, RoaringBitmap, Dexx, commons-compress and
+commons-csv. Keycloak's own SAML, crypto and HTTP libraries are `provided` — they are part of the
 server runtime.
 
 Getting this wrong does not fail a unit test: it fails when Jena loads inside Keycloak. `mvn verify`
@@ -99,8 +118,9 @@ serving, parsing and SPARQL — run it after touching dependencies.
 
 ### Tests
 
-`mvn test` runs 179 unit tests. `mvn verify` additionally runs 24 in `LwsAuthIT`, which needs Docker
-and is skipped without it.
+`mvn test` runs 419 unit tests. `mvn verify` additionally runs 5 in `ShadedJarContentsIT`, which read
+the built JAR and SBOM, and 33 in `LwsAuthIT`, which needs Docker and is skipped without it — unless `-Dlws.authn.requireDocker=true` is given, as CI does, and then a
+missing Docker fails the build instead of passing it untested.
 
 **`LwsAuthIT` binds host port 8080 and cannot run in parallel with itself.** The OpenID verifier
 dereferences its own issuer, so that URL has to resolve to Keycloak both from the test JVM and from
@@ -116,14 +136,20 @@ exactly one of the three, asserting *which* check fails rather than merely that 
 refused.
 
 CI (`.github/workflows/ci.yml`) runs that on JDK 21, builds again on JDK 25 and asserts the class files
-are still Java 21, and runs CodeQL. Actions are pinned by commit SHA; Dependabot proposes the bumps.
+are still Java 21, and runs CodeQL — for every pull request and every push to `master`; push any other
+branch through a pull request, or run the workflow by hand. On a pull request it also reviews dependency
+changes for advisories, and on `master` it submits the resolved Maven dependency graph to GitHub, so that
+Jena's transitive libraries are in the graph the review and Dependabot read. Both need the repository's
+dependency graph enabled (Settings → Advanced Security); while it is off they warn instead of failing.
+Actions and the runner image (`ubuntu-24.04`) are pinned; Dependabot proposes the action bumps, and is
+told to leave alone the versions that follow Keycloak or Jena (`.github/dependabot.yml`).
 
 ## Deploy
 
 Keycloak loads provider JARs from its `providers/` directory.
 
 ```bash
-# from the project root, with $KC_HOME pointing at your Keycloak 26.7.4 install
+# from the project root, with $KC_HOME pointing at your Keycloak 26.8 install (26.8.0 or later)
 cp target/lws-authn-*.jar "$KC_HOME/providers/"   # the one shaded JAR `mvn package` produced
 
 "$KC_HOME/bin/kc.sh" build      # re-augment with the new provider

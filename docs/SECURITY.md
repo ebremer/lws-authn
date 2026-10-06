@@ -38,12 +38,14 @@ refuse, or that reaches beyond the verifier:
 
 **Out of scope** — real, but not bugs in this project:
 
-- **The SAML verifier trusts the certificate the caller supplies.** That is the suite's model: SAML
-  trust is established out of band, so `POST …/lws-saml/verify` answers "is this Response signed by
-  *that* certificate", not "does this deployment trust that IdP". Anyone can therefore get
-  `"valid": true` for an assertion they signed themselves with a certificate they also supplied. That
-  is the API doing its job. Treating its answer as a deployment-level trust decision is a relying-party
-  bug — see `COMPLIANCE.md`.
+- **The SAML verifier trusts a certificate the caller supplies, when one is supplied.** SAML trust is
+  established out of band, so given a `certificate`, `POST …/lws-saml/verify` answers "is this Response
+  signed by *that* certificate", not "does this deployment trust that IdP" — and says so, with
+  `trustSource: request` and the certificate's fingerprint. Anyone can therefore get `"valid": true` for
+  an assertion they signed themselves with a certificate they also supplied. That is the API doing its
+  job; treating that answer as a deployment-level trust decision is a relying-party bug. Without a
+  certificate the realm's SAML identity providers decide, and `request-certificates=false` makes that
+  the only way — see `COMPLIANCE.md`.
 - **Identifier enumeration on `cid/{userId}`.** A controlled identifier is a URL other people
   dereference; an identity document that needed a credential would not be dereferenceable. The ids are
   random UUIDs and the endpoint is rate limited. See `CidEndpoint`.
@@ -71,10 +73,12 @@ Not a claim of completeness — context, so a report can say something new. Each
 - `verify` endpoints authenticated by default, rate limited, and answering `200` with `"valid": false`
   rather than a bare `401`
 - SSRF vetting installed as the HTTP client's **DNS resolver**, so the addresses approved are the
-  addresses connected to; redirects disabled independently of Keycloak's setting
+  addresses connected to; the client follows no redirect itself, independently of Keycloak's setting,
+  and the up to three a subject's dereference follows are each vetted as a new request
 - responses carry no upstream status codes, resolved addresses or exception text — only a `traceId`
 - private key material refused rather than trimmed before publication
-- SAML: XSW-resistant navigation, DTDs disallowed, `<Status>`, certificate validity and bearer
-  `<SubjectConfirmationData>` all checked
+- SAML: XSW-resistant navigation, SAML Core §5.4's signature profile (one reference, no
+  content-excluding transforms, SHA-2, RSA-2048 / P-256 keys), DTDs disallowed, `<Status>`,
+  `<Conditions>`, certificate validity and bearer `<SubjectConfirmationData>` all checked
 - algorithm pinned to the published key on every suite; `alg: none` and unknown `crit` refused
 - JSON-LD contexts resolved from copies bundled in the JAR, never fetched

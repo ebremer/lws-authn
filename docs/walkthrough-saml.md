@@ -17,7 +17,7 @@ validates the assertion's XML signature against a *pre-configured* IdP certifica
 |-------|------|
 | **Keycloak + `lws-authn`** | SAML 2.0 IdP that issues signed assertions, **and** a verifier. |
 | **A SAML SP / client app** | Initiates SAML login and receives the assertion. |
-| **An LWS server** | The verifier — validates the assertion's signature against the IdP certificate it holds out-of-band, and reads the subject from `<NameID>`. |
+| **An LWS server** | The verifier — validates the assertion's signature against the IdP certificate it holds out-of-band, and reads the subject from `<NameID>`. `lws-authn` holds it as a SAML identity provider in the realm, or takes it from the caller. |
 
 **The idea:** the subject (controlled identifier / WebID) is carried in `<Subject><NameID>`, the
 issuer in `<Issuer>`. Because the spec leaves trust out-of-band, the verifier must already hold the
@@ -27,7 +27,7 @@ IdP's signing certificate; LWS adds no discovery mechanism on top of SAML.
 
 ## Prerequisites
 
-- Keycloak **26.7.4** with the `lws-authn` provider deployed — see [Build and deploy](build.md).
+- Keycloak **26.8.0** or a later 26.8 release, with the `lws-authn` provider deployed — see [Build and deploy](build.md).
 - `curl`, `jq`, `openssl`.
 - For a quick local run: `docker compose up --build --wait` in a checkout — see
   [Run with Docker](build.md#run-with-docker) — which serves `http://localhost:8080` with admin/admin
@@ -47,9 +47,23 @@ Create a SAML client (your SP) in the realm and arrange for the assertion's `<Na
 user's WebID (controlled identifier) — via the client's *Name ID format* / NameID settings. Keycloak
 signs assertions with the realm SAML signing key by default.
 
-## 2. Obtain the IdP signing certificate (out-of-band)
+The `<NameID>` has to be a URI: LWS core says the subject "MUST be a URI", and the verifier refuses a
+username or an email address (`subjectIsUri`). Keycloak's `<Issuer>` is the realm URL, an entity URI,
+as the verifier requires (`issuerWellFormed`).
 
-The realm publishes its SAML metadata, including the signing certificate, at the descriptor endpoint:
+## 2. Establish trust in the IdP (out-of-band)
+
+The verifier needs the IdP's signing certificate ahead of time. Either give it to the realm that does
+the verifying, once, or send it with each request.
+
+**In the realm (recommended).** Add the IdP under *Identity providers → SAML v2.0* in the realm whose
+`…/lws-saml/verify` you call, with the IdP's entity ID — `$KC/realms/$REALM` for a Keycloak IdP — and
+its signing certificate (or import its metadata from the descriptor below). Leave it enabled. The
+verifier then trusts that certificate for assertions whose `<Issuer>` is that entity ID, and for no
+other issuer.
+
+**With each request.** The realm publishes its SAML metadata, including the signing certificate, at
+the descriptor endpoint:
 
 ```bash
 KC=https://keycloak.example; REALM=myrealm
@@ -61,7 +75,9 @@ openssl x509 -in idp.pem -noout -subject -issuer      # sanity-check it parses
 ```
 
 A verifier (or LWS server) obtains this certificate once, ahead of time — that is the "out-of-band"
-trust establishment the spec refers to.
+trust establishment the spec refers to. Sending it to `lws-authn` makes the trust decision yours: the
+result can only say that this certificate signed the credential. A deployment can refuse certificates
+in requests with `request-certificates=false`.
 
 ## 3. Obtain a signed SAML Response
 
@@ -75,12 +91,16 @@ test SP can capture it. Save the base64 (or decoded XML) to `response.b64`.
 curl -s -X POST "$KC/realms/$REALM/lws-saml/verify" \
   -H "Authorization: Bearer $CALLER_ACCESS_TOKEN" \
   --data-urlencode "credential@response.b64" \
-  --data-urlencode "certificate@idp.pem" \
-  --data-urlencode "audience=https://app.example/SAML" | jq
+  --data-urlencode "audience=https://app.example/SAML" \
+  --data-urlencode "recipient=https://app.example/SAML" | jq
 ```
 
+With the certificate in the request instead, add `--data-urlencode "certificate@idp.pem"`, and
+`--data-urlencode "issuer=$KC/realms/$REALM"` so that the certificate is bound to the IdP you meant.
+
 > `Authorization` identifies **you**, the caller: the `…/verify` endpoints are authenticated by
-> default. The credential being checked always travels in the request body. See
+> default, and the caller must hold the realm role `lws-verifier`. The credential being checked always
+> travels in the request body. See
 > [Securing the verify endpoints](configuration.md#securing-the-verify-endpoints).
 
 The assertion must also satisfy the parts of SAML 2.0 that make a bearer assertion an authentication
@@ -90,6 +110,8 @@ credential, none of which `<Conditions>` implies on its own:
 - there is exactly one `<SubjectConfirmation>`, with `Method="…:cm:bearer"`;
 - its `<SubjectConfirmationData>` carries a `Recipient` — the LWS client identifier, which the suite
   makes mandatory — and a `NotOnOrAfter` that has not passed;
+- its `<Conditions>` hold nothing the verifier does not understand — an extension `<Condition>`, a
+  second `<OneTimeUse>` — and every `<AudienceRestriction>` names your `audience`;
 - the IdP certificate you supply is itself inside its validity period. Pass
   `allowExpiredCertificate=true` to override that, but only for offline analysis of an old
   credential — an expired certificate is not a trust anchor.
@@ -103,8 +125,12 @@ credential, none of which `<Conditions>` implies on its own:
   "recipient": "https://app.example/SAML",
   "notBefore": "2026-…Z",
   "notOnOrAfter": "2026-…Z",
+  "trustSource": "identity-provider",
+  "identityProvider": "keycloak-idp",
+  "certificateSha256": "3A:F1:…:9C",
   "checks": {
     "signaturePresent": true,
+    "trustedCertificateFound": true,
     "signatureValid": true,
     "withinValidityWindow": true,
     "audienceMatched": true
@@ -112,8 +138,12 @@ credential, none of which `<Conditions>` implies on its own:
 }
 ```
 
+`trustSource` says where the certificate came from — `identity-provider`, or `request` when you sent
+it — and `certificateSha256` which one it was, as `openssl x509 -noout -fingerprint -sha256` prints it.
+
 The verifier: validates the enveloped XML signature against the supplied certificate, reads the
-subject from `<NameID>` and the issuer from `<Issuer>`, enforces the `<Conditions>` validity window
+subject from `<NameID>` (a URI, its `Format` reported as `subjectFormat`) and the issuer from
+`<Issuer>` (an entity URI), enforces the `<Conditions>` validity window
 (±60 s clock skew), and checks the audience restriction.
 
 ## 5. Present it to an LWS server
@@ -128,12 +158,18 @@ the credential is presented as a bearer token (`Authorization: Bearer …`) with
 ## Notes
 
 - **Out-of-band trust.** This suite adds no discovery — the verifier must already trust the IdP's
-  certificate (e.g. pinned, or taken from the realm metadata as above). Rotating the IdP's SAML key
-  means re-distributing the certificate.
-- **What is validated.** The XML-DSig signature against the supplied certificate; that the certificate
-  is itself within its validity period; the Response's `<samlp:StatusCode>`; a single bearer
-  `<SubjectConfirmation>` with a `Recipient` and an unexpired `NotOnOrAfter`; the `<Conditions>` time
-  window; and the audience. The verifier does not build an X.509 trust chain or fetch metadata — it
+  certificate: configured on a SAML identity provider in the realm, or pinned by the caller. Rotating
+  the IdP's SAML key means adding the new certificate to the identity provider (both are tried until
+  the old one is removed) or re-distributing it to callers. An identity provider that loads its keys
+  from a metadata URL at login, with no certificate configured, gives the verifier none.
+- **What is validated.** Every XML-DSig signature on the Response or the assertion, against the
+  supplied certificate, under SAML Core §5.4's profile — one reference, to the signed element; only the
+  enveloped-signature and exclusive-canonicalization transforms; SHA-2 — and that the certificate is
+  itself within its validity period, with an RSA-2048 or P-256 key at least; SAML version 2.0, one
+  assertion, and an `IssueInstant` that is not in the future; the Response's `<samlp:StatusCode>`; a single bearer
+  `<SubjectConfirmation>` with a `Recipient` and an unexpired `NotOnOrAfter`; the `<Conditions>` —
+  understood, and within their time window; and the audience, in every `<AudienceRestriction>`. A
+  `<OneTimeUse>` assertion is reported as `oneTimeUse: true`; do not cache the verdict on one. The verifier does not build an X.509 trust chain or fetch metadata — it
   trusts the certificate you give it, and only checks that the certificate has not expired.
 - **Audience / token exchange.** Restrict the assertion's audience to the target server, and use OAuth
   2.0 Token Exchange (RFC 8693, token type `urn:ietf:params:oauth:token-type:saml2`) where a broadly

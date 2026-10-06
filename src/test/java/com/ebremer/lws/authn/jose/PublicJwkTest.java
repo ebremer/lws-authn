@@ -86,4 +86,24 @@ class PublicJwkTest {
                 json("{\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"XX\",\"y\":\"YY\",\"d\":\"SUPERSECRET\"}"));
         assertFalse(description.contains("SUPERSECRET"), "the private value must not reach the log: " + description);
     }
+
+    /**
+     * R-38. {@code priv} is the private member of the {@code AKP} type (ML-DSA), which Keycloak now
+     * parses: a JWK carrying it was trimmed rather than refused. And a key type this provider does not
+     * verify with is refused by name, with or without private members.
+     */
+    @Test
+    void refusesAnAkpPrivateKeyAndEveryUnknownKeyType() throws Exception {
+        JsonNode akpPair = json("{\"kty\":\"AKP\",\"alg\":\"ML-DSA-44\",\"pub\":\"PUB\",\"priv\":\"SECRET\"}");
+        assertEquals(Optional.empty(), PublicJwk.sanitize(akpPair));
+        assertTrue(PublicJwk.describeRejection(akpPair).contains("private key material (priv)"),
+                PublicJwk.describeRejection(akpPair));
+
+        for (String kty : new String[]{"AKP", "rsa", "Ec", "XYZ"}) {
+            JsonNode jwk = json("{\"kty\":\"" + kty + "\",\"x\":\"XX\",\"pub\":\"PUB\"}");
+            assertEquals(Optional.empty(), PublicJwk.sanitize(jwk), kty);
+            assertTrue(PublicJwk.describeRejection(jwk).contains("not a key type"), PublicJwk.describeRejection(jwk));
+        }
+        assertTrue(PublicJwk.sanitize(json("{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"x\":\"XX\"}")).isPresent());
+    }
 }

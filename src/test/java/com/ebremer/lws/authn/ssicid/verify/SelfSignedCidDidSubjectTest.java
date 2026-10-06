@@ -12,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.security.KeyPair;
 import java.security.interfaces.ECPublicKey;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
@@ -19,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import com.ebremer.lws.authn.did.DidKey;
 import com.ebremer.lws.authn.ssicid.SsiCidConstants;
 import com.ebremer.lws.authn.testsupport.SelfIssuedJwts;
+import com.ebremer.lws.authn.verify.SingleUse;
 
 /**
  * DID subjects under the self-signed CID suite, verified end to end.
@@ -208,5 +210,198 @@ class SelfSignedCidDidSubjectTest {
         assertFalse(result.isValid(), "expected a rejection at " + failedCheck);
         assertEquals(Boolean.FALSE, result.getChecks().get(failedCheck),
                 () -> failedCheck + " should have failed; checks=" + result.getChecks() + " errors=" + result.getErrors());
+    }
+
+    /**
+     * R-05. {@code at+jwt} is RFC 9068's marker for an OAuth access token. A credential that says it is
+     * one is not a self-issued authentication credential, however good its signature.
+     */
+    @Test
+    void aCredentialTypedAsAnAccessTokenIsRejected() throws Exception {
+        KeyPair pair = SelfIssuedJwts.ed25519();
+        String did = DidKey.encodeEd25519(pair.getPublic());
+        for (String typ : new String[]{"at+jwt", "application/at+jwt"}) {
+            String jwt = SelfIssuedJwts.sign(SelfIssuedJwts.claims(did), "EdDSA", methodId(did),
+                    pair.getPrivate(), "Ed25519", typ);
+            SsiCidVerificationResult result = verify(jwt);
+            assertFalse(result.isValid(), typ);
+            assertEquals(Boolean.FALSE, result.getChecks().get("typeIsJwt"), typ);
+        }
+    }
+
+    // ---------------------------------------------------------------------------------- R-34
+
+    /** A single-use record in a map, standing in for Keycloak's store: key → lifespan. */
+    private static SingleUse uses(Map<String, Long> recorded) {
+        return new SingleUse((key, lifespan) -> recorded.putIfAbsent(key, lifespan) == null);
+    }
+
+    private static SsiCidVerificationResult verifyOnce(String jwt, Map<String, Long> recorded) {
+        return new SelfSignedCidVerifier(null).singleUse(uses(recorded)).verify(jwt, SelfIssuedJwts.AUDIENCE);
+    }
+
+    /**
+     * R-34. A caller that treats one verification as one use asks for it, and the second time the same
+     * credential is refused — until its {@code exp} and the clock skew have passed, not a fixed window.
+     * A caller that does not ask is not affected: a storage server looks at the same token many times.
+     */
+    @Test
+    void aCredentialHeldToSingleUseIsRefusedTheSecondTime() throws Exception {
+        KeyPair pair = SelfIssuedJwts.ed25519();
+        String did = DidKey.encodeEd25519(pair.getPublic());
+        Map<String, Object> claims = SelfIssuedJwts.claims(did);
+        claims.put("jti", "8c1f0a2e");
+        String jwt = edDsaCredential(pair, did, claims);
+        Map<String, Long> recorded = new java.util.HashMap<>();
+
+        SsiCidVerificationResult first = verifyOnce(jwt, recorded);
+        assertTrue(first.isValid(), () -> String.valueOf(first.getErrors()));
+        assertEquals(Boolean.TRUE, first.getChecks().get("notReplayed"));
+        assertRejected(verifyOnce(jwt, recorded), "notReplayed");
+
+        SsiCidVerificationResult unasked = verify(jwt);
+        assertTrue(unasked.isValid(), () -> String.valueOf(unasked.getErrors()));
+        assertEquals(null, unasked.getChecks().get("notReplayed"));
+
+        long lifespan = recorded.values().iterator().next();
+        long expected = 300 + com.ebremer.lws.authn.jose.JwsChecks.clockSkewSeconds();
+        assertTrue(lifespan > expected - 5 && lifespan <= expected, "remembered until exp + skew: " + lifespan);
+    }
+
+    /** With no {@code jti} there is nothing to remember; valid for days, too long to remember. */
+    @Test
+    void aCredentialThatCannotBeHeldToSingleUseIsRefusedWhenThatIsAsked() throws Exception {
+        KeyPair pair = SelfIssuedJwts.ed25519();
+        String did = DidKey.encodeEd25519(pair.getPublic());
+        Map<String, Long> recorded = new java.util.HashMap<>();
+
+        SsiCidVerificationResult noJti = verifyOnce(edDsaCredential(pair, did, SelfIssuedJwts.claims(did)), recorded);
+        assertRejected(noJti, "notReplayed");
+        assertTrue(noJti.getErrors().toString().contains("'jti'"), noJti.getErrors().toString());
+
+        Map<String, Object> longLived = SelfIssuedJwts.claims(did);
+        longLived.put("jti", "8c1f0a2f");
+        longLived.put("exp", java.time.Instant.now().getEpochSecond() + 2 * 24 * 3600);
+        assertRejected(verifyOnce(edDsaCredential(pair, did, longLived), recorded), "notReplayed");
+        assertTrue(recorded.isEmpty());
+    }
+
+    /** Only a credential that verified is recorded: otherwise anyone could spend an issuer's next jti. */
+    @Test
+    void aCredentialThatFailsIsNotRecorded() throws Exception {
+        KeyPair pair = SelfIssuedJwts.ed25519();
+        String did = DidKey.encodeEd25519(pair.getPublic());
+        Map<String, Object> claims = SelfIssuedJwts.claims(did);
+        claims.put("jti", "8c1f0a30");
+        claims.put("aud", List.of("https://another-as.example"));
+        Map<String, Long> recorded = new java.util.HashMap<>();
+        assertRejected(verifyOnce(edDsaCredential(pair, did, claims), recorded), "audienceMatched");
+        assertTrue(recorded.isEmpty());
+    }
+
+    private static String edDsaCredential(KeyPair pair, String did, Map<String, Object> claims) throws Exception {
+        return SelfIssuedJwts.sign(claims, "EdDSA", methodId(did), pair.getPrivate(), "Ed25519");
+    }
+
+    /**
+     * R-16. "The {@code aud} claim MUST include the target authorization server." With no target to
+     * compare against, a credential minted for any authorization server used to verify; it now does not.
+     */
+    @Test
+    void withoutATargetAuthorizationServerNothingIsValid() throws Exception {
+        KeyPair pair = SelfIssuedJwts.ed25519();
+        String did = DidKey.encodeEd25519(pair.getPublic());
+        String jwt = edDsaCredential(pair, did, SelfIssuedJwts.claims(did));
+        for (String target : new String[]{null, "", " "}) {
+            assertRejected(new SelfSignedCidVerifier(null).verify(jwt, target), "audienceMatched");
+        }
+        assertRejected(new SelfSignedCidVerifier(null).verify(jwt, "https://another-as.example"), "audienceMatched");
+        assertTrue(verify(jwt).isValid(), "the control: the right target verifies");
+    }
+
+    /** R-16. A blank audience names nothing, and used to count as "present" on its own. */
+    @Test
+    void aBlankAudienceIsNotAnAudience() throws Exception {
+        KeyPair pair = SelfIssuedJwts.ed25519();
+        String did = DidKey.encodeEd25519(pair.getPublic());
+        for (java.util.List<String> aud : java.util.List.of(java.util.List.of(""), java.util.List.of(" "),
+                java.util.List.of(SelfIssuedJwts.AUDIENCE, ""))) {
+            Map<String, Object> claims = SelfIssuedJwts.claims(did);
+            claims.put("aud", aud);
+            assertRejected(verify(edDsaCredential(pair, did, claims)), "audiencePresent");
+        }
+    }
+
+    /** R-28, with R-17. A credential issued in the future, or after it expires, was not issued by a clock. */
+    @Test
+    void anIssuedAtInTheFutureOrAfterExpiryIsRejected() throws Exception {
+        KeyPair pair = SelfIssuedJwts.ed25519();
+        String did = DidKey.encodeEd25519(pair.getPublic());
+        long now = Instant.now().getEpochSecond();
+
+        Map<String, Object> future = SelfIssuedJwts.claims(did);
+        future.put("iat", now + 10 * 365 * 86_400L);
+        future.put("exp", now + 11 * 365 * 86_400L);
+        assertRejected(verify(edDsaCredential(pair, did, future)), "issuedAtConsistent");
+
+        Map<String, Object> afterExpiry = SelfIssuedJwts.claims(did);
+        afterExpiry.put("iat", now + 50);   // within the clock skew, so not "in the future"
+        afterExpiry.put("exp", now + 30);
+        assertRejected(verify(edDsaCredential(pair, did, afterExpiry)), "issuedAtConsistent");
+
+        Map<String, Object> slightlyAhead = SelfIssuedJwts.claims(did);
+        slightlyAhead.put("iat", now + 30);  // a clock a little fast is still a clock
+        assertTrue(verify(edDsaCredential(pair, did, slightlyAhead)).isValid());
+    }
+
+    /**
+     * R-28. A deployment may bound a credential's lifetime, {@code exp − iat}; by default nothing does, and
+     * a self-issued credential valid until 9999 verified.
+     */
+    @Test
+    void aConfiguredMaximumLifetimeIsEnforced() throws Exception {
+        KeyPair pair = SelfIssuedJwts.ed25519();
+        String did = DidKey.encodeEd25519(pair.getPublic());
+        Map<String, Object> forever = SelfIssuedJwts.claims(did);
+        forever.put("exp", 253_402_300_799L); // 9999-12-31T23:59:59Z
+        String longLived = edDsaCredential(pair, did, forever);
+        assertTrue(verify(longLived).isValid(), "no limit unless one is configured");
+        assertEquals(null, verify(longLived).getChecks().get("lifetimeWithinLimit"));
+
+        System.setProperty("lws.authn.maxCredentialLifetimeSeconds", "3600");
+        try {
+            com.ebremer.lws.authn.config.ServerSettings.contribute("test", null);
+            assertRejected(verify(longLived), "lifetimeWithinLimit");
+            SsiCidVerificationResult shortLived = verify(edDsaCredential(pair, did, SelfIssuedJwts.claims(did)));
+            assertTrue(shortLived.isValid(), () -> String.valueOf(shortLived.getErrors()));
+            assertEquals(Boolean.TRUE, shortLived.getChecks().get("lifetimeWithinLimit"));
+        } finally {
+            System.clearProperty("lws.authn.maxCredentialLifetimeSeconds");
+            com.ebremer.lws.authn.config.ServerSettings.reset();
+        }
+    }
+
+    /**
+     * R-27. The identity point as a did:key: {@code (R = identity, S = 0)} is a valid Ed25519 signature on
+     * any message under it, which the JDK verifier accepts — so anyone could sign as this subject.
+     */
+    @Test
+    void aSmallOrderKeyCannotSignForAnyone() throws Exception {
+        byte[] multicodec = new byte[34];
+        multicodec[0] = (byte) 0xed;
+        multicodec[1] = 0x01;
+        multicodec[2] = 0x01; // y = 1: the identity
+        String did = "did:key:z" + DidKey.base58Encode(multicodec);
+        java.util.Base64.Encoder b64 = java.util.Base64.getUrlEncoder().withoutPadding();
+        com.fasterxml.jackson.databind.ObjectMapper json = new com.fasterxml.jackson.databind.ObjectMapper();
+        String input = b64.encodeToString(json.writeValueAsBytes(Map.of("alg", "EdDSA", "typ", "JWT",
+                "kid", did + "#" + DidKey.multibaseValue(did))))
+                + "." + b64.encodeToString(json.writeValueAsBytes(SelfIssuedJwts.claims(did)));
+        byte[] signature = new byte[64];
+        signature[0] = 0x01; // R = identity, S = 0
+        SsiCidVerificationResult result = verify(input + "." + b64.encodeToString(signature));
+
+        assertFalse(result.isValid(), "a credential nobody signed verified");
+        assertEquals(Boolean.FALSE, result.getChecks().get("subjectDereferenced"));
     }
 }

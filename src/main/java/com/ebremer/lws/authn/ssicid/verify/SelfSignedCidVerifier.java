@@ -32,20 +32,27 @@ import java.security.PublicKey;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
 import com.ebremer.lws.authn.did.DidKey;
 import com.ebremer.lws.authn.did.Dids;
+import com.ebremer.lws.authn.config.ServerSettings;
+import com.ebremer.lws.authn.http.CidEndpoint;
+import com.ebremer.lws.authn.http.ThisRealm;
 import com.ebremer.lws.authn.jose.JwsChecks;
 import com.ebremer.lws.authn.jose.JwsSignatures;
 import com.ebremer.lws.authn.jose.KeyIdFragment;
 import com.ebremer.lws.authn.jose.PublicJwk;
 import com.ebremer.lws.authn.net.OutboundHttp;
+import com.ebremer.lws.authn.net.SsrfGuard;
 import com.ebremer.lws.authn.rdf.RdfParsing;
 import com.ebremer.lws.authn.verify.Trace;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -55,10 +62,12 @@ import org.apache.jena.query.QueryExecution;
 import org.apache.jena.query.QueryExecutionFactory;
 import org.apache.jena.query.QuerySolution;
 import org.apache.jena.query.ResultSet;
-import org.apache.jena.rdf.model.Literal;
 import org.apache.jena.rdf.model.Model;
+import org.apache.jena.rdf.model.Property;
 import org.apache.jena.rdf.model.RDFNode;
-import org.keycloak.broker.provider.util.SimpleHttp;
+import org.apache.jena.rdf.model.Resource;
+import org.apache.jena.rdf.model.StmtIterator;
+import org.apache.jena.vocabulary.RDF;
 import org.keycloak.crypto.KeyType;
 import org.keycloak.crypto.KeyUse;
 import org.keycloak.crypto.KeyWrapper;
@@ -72,7 +81,7 @@ import org.keycloak.representations.JsonWebToken;
 import org.keycloak.util.JsonSerialization;
 
 import com.ebremer.lws.authn.ssicid.SsiCidConstants;
-import com.ebremer.lws.authn.verify.ReplayCache;
+import com.ebremer.lws.authn.verify.SingleUse;
 
 /**
  * @author Erich Bremer
@@ -82,7 +91,6 @@ public class SelfSignedCidVerifier {
     private static final Logger log = Logger.getLogger(SelfSignedCidVerifier.class);
 
     private final KeycloakSession session;
-    private final ReplayCache replayCache;
 
     /**
      * @param session the Keycloak session, used for outbound fetches and for Keycloak's own signature
@@ -91,18 +99,64 @@ public class SelfSignedCidVerifier {
      *                checked with the JDK.
      */
     public SelfSignedCidVerifier(KeycloakSession session) {
-        this(session, null);
+        this.session = session;
     }
 
+    private SingleUse singleUse;
+
     /**
-     * @param replayCache optional, and normally {@code null}. See {@link ReplayCache}: a verify
-     *                    endpoint is asked about the same live credential repeatedly, so refusing a
-     *                    second look is only correct for a caller that treats one verification as one
-     *                    use.
+     * Holds each credential this verifies to one use, recorded in {@code uses} (R-34). Only for a caller
+     * that treats one verification as one use: see {@link SingleUse}.
      */
-    public SelfSignedCidVerifier(KeycloakSession session, ReplayCache replayCache) {
-        this.session = session;
-        this.replayCache = replayCache;
+    public SelfSignedCidVerifier singleUse(SingleUse uses) {
+        this.singleUse = uses;
+        return this;
+    }
+
+    private ThisRealm thisRealm;
+    private CidEndpoint.DocumentRenderer ownDocuments;
+
+    /**
+     * Reads a subject whose document {@code realm} hosts — one of its {@code lws-ssi-cid/cid/{userId}}
+     * documents — as {@code documents} renders it, rather than fetching it from this server (R-26).
+     *
+     * @param realm     the request's realm, or {@code null} to fetch everything
+     * @param documents how the realm's {@code lws-ssi-cid/cid} endpoint renders a document
+     */
+    public SelfSignedCidVerifier localTo(ThisRealm realm, CidEndpoint.DocumentRenderer documents) {
+        this.thisRealm = realm;
+        this.ownDocuments = documents;
+        return this;
+    }
+
+    /** How this verifier fetches a document: {@link OutboundHttp} unless a test says otherwise (R-44). */
+    @FunctionalInterface
+    interface Fetcher {
+        /**
+         * @param followRedirects {@code true} for an HTTPS subject ({@link OutboundHttp#dereference}),
+         *                        {@code false} for a did:web document ({@link OutboundHttp#fetch})
+         */
+        OutboundHttp.Fetched fetch(String url, String accept, boolean followRedirects) throws IOException;
+    }
+
+    private Fetcher fetcher;
+
+    /**
+     * Test seam: answers this verifier's fetches from {@code fetcher} instead of the network, so what it
+     * makes of an HTTPS subject's or a did:web DID's answer — a 404, the wrong media type, a document
+     * about someone else — can be tested without a TLS server (R-44). Package-private and per instance:
+     * nothing outside this package can reach it, and no other verifier is affected.
+     */
+    SelfSignedCidVerifier fetchingWith(Fetcher fetcher) {
+        this.fetcher = fetcher;
+        return this;
+    }
+
+    private OutboundHttp.Fetched fetchDocument(String url, String accept, boolean followRedirects) throws IOException {
+        if (fetcher != null) {
+            return fetcher.fetch(url, accept, followRedirects);
+        }
+        return followRedirects ? OutboundHttp.dereference(url, accept, session) : OutboundHttp.fetch(url, accept, session);
     }
 
     public SsiCidVerificationResult verify(String credential) {
@@ -113,15 +167,25 @@ public class SelfSignedCidVerifier {
      * @param credential       the self-issued JWT
      * @param expectedAudience the authorization server this verifier speaks for. The suite says the
      *                         {@code aud} claim "MUST include the target authorization server", which
-     *                         only means anything if the verifier knows which one it is; without it
-     *                         only the presence of an audience can be checked.
+     *                         only means anything if the verifier knows which one it is; without it the
+     *                         credential is not valid (R-16).
      */
     public SsiCidVerificationResult verify(String credential, String expectedAudience) {
         SsiCidVerificationResult result = new SsiCidVerificationResult();
         result.setTraceId(Trace.newId());
         result.setTokenType(SsiCidConstants.TOKEN_TYPE_JWT);
         try {
-            JWSInput jws = new JWSInput(credential);
+            // RFC 7515 §5.2 steps 1-2: strict base64url, so every decoder reads the same header (R-24).
+            // Whitespace around the token belongs to the form field, not to the JWS.
+            String compact = credential == null ? null : credential.strip();
+            boolean wellFormed = JwsChecks.compactSerializationWellFormed(compact);
+            result.check("compactSerializationWellFormed", wellFormed);
+            if (!wellFormed) {
+                result.error("Credential is not a JWS in compact serialization: three base64url segments, "
+                        + "with no padding, whitespace or other characters");
+                return result.fail();
+            }
+            JWSInput jws = new JWSInput(compact);
             JWSHeader header = jws.getHeader();
             JsonWebToken token = JsonSerialization.readValue(jws.getContent(), JsonWebToken.class);
 
@@ -151,6 +215,14 @@ public class SelfSignedCidVerifier {
             result.check("typeIsJwt", typeOk);
             if (!typeOk) {
                 result.error("Credential 'typ' header is not a JWT type");
+                return result.fail();
+            }
+
+            // RFC 7519 §2: exp, nbf and iat are JSON numbers. "1900000000" read as the same Long (R-24).
+            List<String> nonNumericDates = JwsChecks.nonNumericDates(jws.getContent());
+            result.check("numericDatesWellFormed", nonNumericDates.isEmpty());
+            if (!nonNumericDates.isEmpty()) {
+                result.error("Credential date claims are not JSON numbers: " + nonNumericDates);
                 return result.fail();
             }
 
@@ -221,13 +293,29 @@ public class SelfSignedCidVerifier {
             // one algorithm that key type signs with.)
             String jwkUse = jwk.path("use").asText(null);
             String jwkAlg = jwk.path("alg").asText(null);
-            boolean jwkUsable = (jwkUse == null || "sig".equals(jwkUse)) && (jwkAlg == null || jwkAlg.equals(alg));
+            boolean jwkUsable = (jwkUse == null || "sig".equals(jwkUse)) && (jwkAlg == null || jwkAlg.equals(alg))
+                    && JwsChecks.keyOpsAllowVerify(jwk);
             result.check("verificationMethodUsableForSigning", jwkUsable);
             if (!jwkUsable) {
                 result.error("The selected verification method is not published for signing with " + alg);
                 return result.fail();
             }
 
+            // RFC 7518 §3.3: an RSA key "of size 2048 bits or larger MUST be used" (R-27).
+            boolean keyStrong = JwsChecks.keyStrongEnough(publicKey);
+            result.check("signingKeyStrong", keyStrong);
+            if (!keyStrong) {
+                result.error("The selected verification method is an RSA key under " + JwsChecks.MIN_RSA_BITS + " bits");
+                return result.fail();
+            }
+
+            // RFC 7518 §3.4 fixes an ES* signature's length, which Keycloak's ECDSA verifier does not
+            // check, so an over-long signature verified here but not on the JDK path (R-24).
+            if (!JwsChecks.signatureLengthValid(alg, jws.getSignature())) {
+                result.check("signatureValid", false);
+                result.error("Credential " + alg + " signature is not the length RFC 7518 requires");
+                return result.fail();
+            }
             boolean signatureValid;
             if (session == null) {
                 signatureValid = JwsSignatures.verify(alg, publicKey, jws);
@@ -278,30 +366,66 @@ public class SelfSignedCidVerifier {
                 result.error("Credential is missing the required 'iat' claim");
                 return result.fail();
             }
-
-            // the suite REQUIRES an audience restriction, and that it name the target authorization server
-            String[] aud = token.getAudience();
-            boolean audiencePresent = aud != null && aud.length > 0;
-            result.check("audiencePresent", audiencePresent);
-            if (!audiencePresent) {
-                result.error("Credential is missing the required 'aud' claim");
+            boolean issuedAtConsistent = JwsChecks.issuedAtConsistent(token);
+            result.check("issuedAtConsistent", issuedAtConsistent);
+            if (!issuedAtConsistent) {
+                result.error("Credential 'iat' is in the future, or after its 'exp'");
                 return result.fail();
             }
-            if (expectedAudience != null && !expectedAudience.isBlank()) {
-                boolean audienceMatched = JwsChecks.audienceIncludes(aud, expectedAudience);
-                result.check("audienceMatched", audienceMatched);
-                if (!audienceMatched) {
-                    result.error("Credential 'aud' does not include the target audience <" + expectedAudience + ">");
+            // A deployment may bound how long a credential lives, so a stolen one ages out (R-28).
+            if (ServerSettings.maxCredentialLifetimeSeconds() > 0) {
+                boolean lifetimeWithinLimit = JwsChecks.lifetimeWithinLimit(token);
+                result.check("lifetimeWithinLimit", lifetimeWithinLimit);
+                if (!lifetimeWithinLimit) {
+                    result.error("Credential is valid for longer than this server accepts: 'exp' - 'iat' is over "
+                            + ServerSettings.maxCredentialLifetimeSeconds() + " seconds");
                     return result.fail();
                 }
             }
 
-            if (replayCache != null) {
-                boolean firstSighting = replayCache.firstSighting(iss, token.getId());
-                result.check("notReplayed", firstSighting);
-                if (!firstSighting) {
-                    result.error("Credential 'jti' has already been verified within the replay window");
-                    return result.fail();
+            // "The `aud` claim MUST include the target authorization server." Every conforming credential
+            // names its target, so requiring the match rejects none of them — and without it a credential
+            // minted for authorization server A was accepted on behalf of B, the replay the requirement
+            // exists to stop (R-16). With no target to compare against, there is no verdict to give.
+            String[] aud = token.getAudience();
+            boolean audiencePresent = JwsChecks.audiencePresent(aud);
+            result.check("audiencePresent", audiencePresent);
+            if (!audiencePresent) {
+                result.error("Credential is missing the required 'aud' claim, or names a blank audience");
+                return result.fail();
+            }
+            boolean audienceMatched = expectedAudience != null && !expectedAudience.isBlank()
+                    && JwsChecks.audienceIncludes(aud, expectedAudience);
+            result.check("audienceMatched", audienceMatched);
+            if (!audienceMatched) {
+                result.error(expectedAudience == null || expectedAudience.isBlank()
+                        ? "No target authorization server was given to match 'aud' against"
+                        : "Credential 'aud' does not include the target audience <" + expectedAudience + ">");
+                return result.fail();
+            }
+
+            // Last, once everything else holds: recording a use of a credential that then failed would let
+            // anyone who knows an issuer's next jti spend it first.
+            if (singleUse != null) {
+                SingleUse.Outcome use = singleUse.use(iss, token.getId(), exp,
+                        java.time.Instant.now().getEpochSecond(), JwsChecks.clockSkewSeconds());
+                result.check("notReplayed", use == SingleUse.Outcome.FIRST_USE);
+                switch (use) {
+                    case FIRST_USE -> {
+                    }
+                    case REPLAYED -> {
+                        result.error("Credential has already been used: it was verified for single use before");
+                        return result.fail();
+                    }
+                    case NO_JTI -> {
+                        result.error("Credential has no 'jti', so it cannot be held to single use");
+                        return result.fail();
+                    }
+                    case TOO_LONG_LIVED -> {
+                        result.error("Credential is valid for more than " + SingleUse.MAX_LIFESPAN_SECONDS
+                                + " seconds more, too long to be held to single use");
+                        return result.fail();
+                    }
                 }
             }
 
@@ -319,45 +443,71 @@ public class SelfSignedCidVerifier {
     /** Dereferences an HTTP(S) subject and returns the verification methods its CID document offers. */
     private List<VerificationMethod> dereference(String sub, SsiCidVerificationResult result) {
         try {
-            // OutboundHttp applies the SSRF policy, refuses a host that has been failing, and fetches
-            // through a client that follows no redirects and resolves only vetted addresses.
-            SimpleHttp.Response response = OutboundHttp.get(sub, session)
-                    .header("Accept", SsiCidConstants.TURTLE + ", " + SsiCidConstants.JSON_LD + ";q=0.9, "
-                            + SsiCidConstants.N_TRIPLES + ";q=0.8, " + SsiCidConstants.RDF_XML + ";q=0.7")
-                    .asResponse();
-            if (response.getStatus() != 200) {
+            // OutboundHttp applies the SSRF policy, refuses a host that cannot currently be reached, and
+            // fetches through a client that resolves only vetted addresses, following up to three
+            // redirects, each vetted the same way (R-29). It keeps the breaker's books itself: what
+            // happens here after the fetch — a 404, the wrong media type, a document that does not parse
+            // — says nothing about the host's health (R-02). The document must still be about sub.
+            OutboundHttp.Fetched response = thisRealm == null || ownDocuments == null ? null
+                    : thisRealm.document(sub, SsiCidConstants.RESOURCE_PROVIDER_ID, SsiCidConstants.CID_PATH, ownDocuments);
+            if (response == null) {
+                response = fetchDocument(sub, RdfParsing.ACCEPT, true);
+            }
+            if (response.status() != 200) {
                 log.debugf("[%s] dereferencing sub <%s> returned HTTP %d", result.getTraceId(), sub,
-                        response.getStatus());
-                OutboundHttp.recordFailure(sub);
+                        response.status());
                 result.check("subjectDereferenced", false);
                 result.error("Dereferencing 'sub' <" + sub + "> did not return a controlled identifier document");
                 return null;
             }
-            String contentType = response.getFirstHeader("Content-Type");
-            String body = response.asString();
+            String contentType = response.contentType();
+            String body = response.body();
+            RdfParsing.requireSupported(contentType);
+            // The suite requires "a valid controlled identifier document with an `id` value equal to the
+            // subject identifier". For a JSON document that is the topmost map's id, read from the JSON
+            // itself (R-18); an RDF syntax has no topmost map, so there the graph must describe sub.
+            boolean json = RdfParsing.isJsonLd(contentType, body);
+            if (json && !sub.equals(RdfParsing.topmostId(body, sub))) {
+                throw new SubjectIdMismatchException();
+            }
             // Processed as real JSON-LD where possible, so a conforming document from another
             // implementation works regardless of how it spells things; the compact reader remains for
             // a document naming a context this provider does not bundle.
             Model model = RdfParsing.parse(body, contentType, sub);
             List<VerificationMethod> methods;
             if (model != null) {
+                if (!json && !model.contains(model.createResource(sub), null, (RDFNode) null)) {
+                    throw new SubjectIdMismatchException();
+                }
                 methods = collectFromRdf(model, sub);
             } else {
                 log.debugf("[%s] sub <%s> is JSON-LD this provider cannot process; reading the compact shape",
                         result.getTraceId(), sub);
                 methods = collectFromJsonLd(body, sub);
             }
-            OutboundHttp.recordSuccess(sub);
             result.check("subjectDereferenced", true);
             result.check("subjectIdMatches", true);
             return methods;
+        } catch (SubjectIdMismatchException wrongDocument) {
+            // A document was fetched and read; it is just not this subject's. Reported as that, not as a
+            // failure to dereference, which is a different problem with a different fix.
+            result.check("subjectDereferenced", true);
+            result.check("subjectIdMatches", false);
+            result.error("The document at 'sub' <" + sub + "> is not a controlled identifier document for it");
+            return null;
+        } catch (SsrfGuard.InsecureSchemeException insecure) {
+            // The suite works with "subject identifiers that use HTTPS URIs as well as DID URIs"; over
+            // plain http anyone on the network path could substitute the subject's keys (R-07).
+            log.debugf("[%s] sub <%s> is plain http: %s", result.getTraceId(), sub, insecure.getMessage());
+            result.check("subjectDereferenced", false);
+            result.error("'sub' <" + sub + "> is neither an https URL nor a DID");
+            return null;
         } catch (RdfParsing.UnsupportedSyntaxException wrongSyntax) {
             // Distinguished from the generic failure below because it is actionable and gives nothing
             // away: the media type is one the remote server chose to advertise publicly, and naming it
             // is the difference between "your document is not RDF" and "something went wrong".
             log.debugf("[%s] sub <%s> was served as '%s', which is not an RDF syntax this verifier reads",
                     result.getTraceId(), sub, wrongSyntax.getContentType());
-            OutboundHttp.recordFailure(sub);
             result.check("subjectDereferenced", false);
             result.error("The document at 'sub' <" + sub + "> was served as '" + wrongSyntax.getContentType()
                     + "', which is not an RDF syntax this verifier reads");
@@ -365,7 +515,6 @@ public class SelfSignedCidVerifier {
         } catch (Exception e) {
             // The cause can name the address the host resolved to, so it is logged, not returned.
             log.debugf(e, "[%s] could not dereference or parse sub <%s>", result.getTraceId(), sub);
-            OutboundHttp.recordFailure(sub);
             result.check("subjectDereferenced", false);
             result.error("Failed to dereference 'sub' <" + sub + "> as a controlled identifier document");
             return null;
@@ -424,38 +573,31 @@ public class SelfSignedCidVerifier {
      */
     private JsonNode fetchDidWebDocument(String did, String url, SsiCidVerificationResult result) {
         try {
-            SimpleHttp.Response response = OutboundHttp.get(url, session)
-                    .header("Accept", Dids.DID_DOCUMENT_ACCEPT)
-                    .asResponse();
-            if (response.getStatus() != 200) {
+            OutboundHttp.Fetched response = fetchDocument(url, Dids.DID_DOCUMENT_ACCEPT, false);
+            if (response.status() != 200) {
                 log.debugf("[%s] resolving <%s> via %s returned HTTP %d", result.getTraceId(), did, url,
-                        response.getStatus());
-                OutboundHttp.recordFailure(url);
+                        response.status());
                 result.check("subjectDereferenced", false);
                 result.error("Resolving 'sub' <" + did + "> did not return a DID document");
                 return null;
             }
-            String contentType = response.getFirstHeader("Content-Type");
+            String contentType = response.contentType();
             if (!Dids.isDidDocumentMediaType(contentType)) {
-                OutboundHttp.recordFailure(url);
                 result.check("subjectDereferenced", false);
                 result.error("The DID document for 'sub' <" + did + "> was served as '"
                         + contentType.split(";")[0].trim() + "', which is not a DID document media type");
                 return null;
             }
-            JsonNode document = JsonSerialization.mapper.readTree(response.asString());
+            JsonNode document = JsonSerialization.mapper.readTree(response.body());
             if (document == null || !document.isObject()) {
-                OutboundHttp.recordFailure(url);
                 result.check("subjectDereferenced", false);
                 result.error("Resolving 'sub' <" + did + "> did not return a DID document");
                 return null;
             }
-            OutboundHttp.recordSuccess(url);
             return document;
         } catch (Exception e) {
             // As for an HTTPS subject: the cause can describe this server's network, so it is logged.
             log.debugf(e, "[%s] could not resolve <%s> via %s", result.getTraceId(), did, url);
-            OutboundHttp.recordFailure(url);
             result.check("subjectDereferenced", false);
             result.error("Failed to resolve 'sub' <" + did + "> to a DID document");
             return null;
@@ -469,7 +611,7 @@ public class SelfSignedCidVerifier {
      * document.
      *
      * @param id           the method's own identifier, absolute ({@code <subject>#<fragment>} by
-     *                     convention), or {@code null} for a method written without one
+     *                     convention). The readers refuse a method without one (CID 1.0 §2.2)
      * @param publicKeyJwk its public key as a JWK: the {@code publicKeyJwk} of a {@code JsonWebKey}, or
      *                     the JWK a {@code Multikey}'s {@code publicKeyMultibase} decodes to
      * @param type         {@code JsonWebKey} or {@code Multikey}
@@ -524,13 +666,13 @@ public class SelfSignedCidVerifier {
      *       relationship" — so a key listed under {@code verificationMethod} alone, perhaps meant for
      *       key agreement or assertions, is not one the subject authenticates with. A reference is
      *       resolved within this document (CID 1.0 §3.4); it is not followed to another one.</li>
-     *   <li>Each method must be controlled by the subject — a document may embed methods controlled by
-     *       someone else, and those are not keys this subject may authenticate with — and its
-     *       identifier must be in the subject's document (CID 1.0 §3.3).</li>
-     *   <li>{@code JsonWebKey} with a {@code publicKeyJwk}, or {@code Multikey} with a
-     *       {@code publicKeyMultibase} — the two types CID 1.0 defines. A method publishing private key
-     *       material, or a key this provider cannot decode, is not a conforming verification method
-     *       and is skipped.</li>
+     *   <li>Each method must have an identifier, in the subject's document (CID 1.0 §2.2, §3.3), and be
+     *       controlled by the subject — a document may embed methods controlled by someone else, and
+     *       those are not keys this subject may authenticate with.</li>
+     *   <li>One {@code type}: {@code JsonWebKey} with a {@code publicKeyJwk}, or {@code Multikey} with a
+     *       {@code publicKeyMultibase} — the two types CID 1.0 defines — and not both key properties. A
+     *       method publishing private key material, or a key this provider cannot decode, is not a
+     *       conforming verification method and is skipped.</li>
      * </ul>
      *
      * @throws SubjectIdMismatchException if the document's {@code id} is not {@code sub}
@@ -540,7 +682,8 @@ public class SelfSignedCidVerifier {
         if (doc == null || !doc.isObject()) {
             throw new IOException("controlled identifier document is not a JSON object");
         }
-        String id = firstText(doc, "id", "@id");
+        // Resolved as RdfParsing.topmostId resolves it, so both paths agree on what the id is.
+        String id = RdfParsing.resolveReference(firstText(doc, "id", "@id"), sub);
         if (id == null || !id.equals(sub)) {
             throw new SubjectIdMismatchException();
         }
@@ -550,11 +693,17 @@ public class SelfSignedCidVerifier {
             return out;
         }
         Set<String> seen = new HashSet<>();
+        Map<String, JsonNode> byId = null;
         for (JsonNode entry : authentication.isArray() ? authentication : List.of(authentication)) {
             JsonNode method = null;
             if (entry.isTextual()) {
-                String reference = resolveReference(entry.asText(), id);
-                method = reference == null ? null : findById(doc, reference, id);
+                String reference = RdfParsing.resolveReference(entry.asText(), id);
+                if (reference != null) {
+                    if (byId == null) {
+                        byId = indexById(doc, id);
+                    }
+                    method = byId.get(reference);
+                }
             } else if (entry.isObject()) {
                 method = entry;
             }
@@ -562,7 +711,7 @@ public class SelfSignedCidVerifier {
                 continue; // unresolvable here, or a reference to a method in another document
             }
             toVerificationMethod(method, sub, id).ifPresent(vm -> {
-                if (vm.id() == null || seen.add(vm.id())) {
+                if (seen.add(vm.id())) {
                     out.add(vm);
                 }
             });
@@ -572,20 +721,34 @@ public class SelfSignedCidVerifier {
 
     /** Reads one verification method map; empty if it is not one the subject may authenticate with. */
     private static Optional<VerificationMethod> toVerificationMethod(JsonNode method, String sub, String base) {
-        String type = firstText(method, "type", "@type");
-        String methodId = resolveReference(firstText(method, "id", "@id"), base);
-        String controller = resolveReference(firstText(method, "controller"), base);
-        if (!sub.equals(controller) || !inSubjectsDocument(methodId, sub)) {
+        String methodId = RdfParsing.resolveReference(firstText(method, "id", "@id"), base);
+        // CID 1.0 §2.2: a verification method "MUST include id, type, controller", each one value, and
+        // "MUST NOT contain multiple verification material properties". A method without an id was
+        // selectable by its JWK's kid, which §3.3 — retrieval by the method's identifier — never is; one
+        // with two types, or two keys, leaves it to the reader which applies (R-23). A type or controller
+        // written as an array of one is the same single value to a JSON-LD processor, and is read as one.
+        if (methodId == null) {
+            log.debugf("skipping a verification method of <%s> that has no id", sub);
+            return Optional.empty();
+        }
+        String type = soleText(method, "type", "@type");
+        String controller = RdfParsing.resolveReference(soleText(method, "controller"), base);
+        if (type == null || !sub.equals(controller) || !inSubjectsDocument(methodId, sub)) {
+            return Optional.empty();
+        }
+        if (method.has("publicKeyJwk") && method.has("publicKeyMultibase")) {
+            log.debugf("skipping verification method <%s>: it has more than one verification material property",
+                    methodId);
             return Optional.empty();
         }
         Instant revoked;
         Instant expires;
         try {
-            revoked = dateTimeStamp(firstText(method, "revoked"));
-            expires = dateTimeStamp(firstText(method, "expires"));
-        } catch (DateTimeParseException malformed) {
+            revoked = soleDateTime(method, "revoked");
+            expires = soleDateTime(method, "expires");
+        } catch (DateTimeParseException | IllegalArgumentException malformed) {
             // An unreadable revocation date is not evidence that the key was never revoked.
-            log.debugf("skipping verification method <%s>: 'revoked'/'expires' is not an xsd:dateTimeStamp", methodId);
+            log.debugf("skipping verification method <%s>: 'revoked'/'expires' is not one xsd:dateTimeStamp", methodId);
             return Optional.empty();
         }
         if (SsiCidConstants.TYPE_JSON_WEB_KEY.equals(type)) {
@@ -609,6 +772,13 @@ public class SelfSignedCidVerifier {
         if (!privateMembers.isEmpty()) {
             log.debugf("skipping verification method <%s>: its publicKeyJwk carries private members %s",
                     methodId, privateMembers);
+            return Optional.empty();
+        }
+        // An Ed25519 or Ed448 key must be one only its holder can sign for: canonical, on the curve, not of
+        // small order. The JDK accepts the identity point, against which any message verifies (R-27, R-38).
+        String weakEdwards = JwsChecks.edwardsKeyProblem(jwk);
+        if (weakEdwards != null) {
+            log.debugf("skipping verification method <%s>: %s", methodId, weakEdwards);
             return Optional.empty();
         }
         return Optional.of(new VerificationMethod(methodId, jwk, SsiCidConstants.TYPE_JSON_WEB_KEY, null,
@@ -642,68 +812,114 @@ public class SelfSignedCidVerifier {
      * that triple is exactly "associated with the relationship by value or by reference".</p>
      */
     public static List<VerificationMethod> collectFromRdf(Model model, String sub) {
+        // Only each method and its type are selected; its values are then read one property at a time.
+        // Selecting them here as OPTIONALs, as this once did, returned the cross product of every value
+        // of every one of them, and a method that failed to decode was decoded again on every row: a
+        // 36 KiB document with one bad key and a few hundred revoked/expiration values took 271 seconds,
+        // growing with the square of the document's size (R-03).
         ParameterizedSparqlString pss = new ParameterizedSparqlString();
-        pss.setCommandText("SELECT ?m ?type ?jwk ?multibase ?revoked ?expires WHERE { "
+        pss.setCommandText("SELECT DISTINCT ?m ?type WHERE { "
                 + "?sub ?authentication ?m . ?m a ?type ; ?controller ?sub . "
-                + "FILTER(?type = ?jsonWebKey || ?type = ?multikey) "
-                + "OPTIONAL { ?m ?publicKeyJwk ?jwk } "
-                + "OPTIONAL { ?m ?publicKeyMultibase ?multibase } "
-                + "OPTIONAL { ?m ?revokedProperty ?revoked } "
-                + "OPTIONAL { ?m ?expirationProperty ?expires } }");
+                + "FILTER(?type = ?jsonWebKey || ?type = ?multikey) }");
         pss.setIri("sub", sub);
         pss.setIri("authentication", SsiCidConstants.SEC_AUTHENTICATION);
         pss.setIri("jsonWebKey", SsiCidConstants.JSON_WEB_KEY_TYPE);
         pss.setIri("multikey", SsiCidConstants.MULTIKEY_TYPE);
         pss.setIri("controller", SsiCidConstants.SEC_CONTROLLER);
-        pss.setIri("publicKeyJwk", SsiCidConstants.SEC_PUBLIC_KEY_JWK);
-        pss.setIri("publicKeyMultibase", SsiCidConstants.SEC_PUBLIC_KEY_MULTIBASE);
-        pss.setIri("revokedProperty", SsiCidConstants.SEC_REVOKED);
-        pss.setIri("expirationProperty", SsiCidConstants.SEC_EXPIRATION);
+        Property publicKeyJwk = model.createProperty(SsiCidConstants.SEC_PUBLIC_KEY_JWK);
+        Property publicKeyMultibase = model.createProperty(SsiCidConstants.SEC_PUBLIC_KEY_MULTIBASE);
+        Property controllerProperty = model.createProperty(SsiCidConstants.SEC_CONTROLLER);
+        Property revokedProperty = model.createProperty(SsiCidConstants.SEC_REVOKED);
+        Property expirationProperty = model.createProperty(SsiCidConstants.SEC_EXPIRATION);
+
         List<VerificationMethod> out = new ArrayList<>();
-        Set<String> seen = new HashSet<>();
+        Set<String> accepted = new HashSet<>();
         try (QueryExecution qe = QueryExecutionFactory.create(pss.asQuery(), model)) {
             ResultSet rs = qe.execSelect();
             while (rs.hasNext()) {
                 QuerySolution row = rs.next();
-                RDFNode node = row.get("m");
+                Resource node = row.getResource("m");
                 String key = node.toString();
-                if (seen.contains(key)) {
-                    continue;
+                if (accepted.contains(key)) {
+                    continue; // already read: named by authentication more than once
                 }
-                String methodId = node.isURIResource() ? node.asResource().getURI() : null;
+                // A blank node is a method with no id (CID 1.0 §2.2), and is refused like one (R-23).
+                String methodId = node.isURIResource() ? node.getURI() : null;
                 if (!inSubjectsDocument(methodId, sub)) {
                     continue;
                 }
-                Instant revoked;
-                Instant expires;
-                try {
-                    revoked = dateTimeStamp(lexical(row.get("revoked")));
-                    expires = dateTimeStamp(lexical(row.get("expires")));
-                } catch (DateTimeParseException malformed) {
-                    log.debugf("skipping verification method <%s>: 'revoked'/'expires' is not an xsd:dateTimeStamp", methodId);
+                // One type, one controller, one kind of key material (CID 1.0 §2.2, R-23). The query found
+                // a JsonWebKey or Multikey type and the subject among the controllers; neither may share.
+                if (count(node, RDF.type) != 1 || count(node, controllerProperty) != 1
+                        || (node.hasProperty(publicKeyJwk) && node.hasProperty(publicKeyMultibase))) {
+                    log.debugf("skipping verification method <%s>: more than one type, controller or key", methodId);
                     continue;
                 }
-                String type = row.getResource("type").getURI();
-                Optional<VerificationMethod> method = Optional.empty();
-                if (SsiCidConstants.JSON_WEB_KEY_TYPE.equals(type)) {
-                    String jwkLexical = lexical(row.get("jwk"));
-                    if (jwkLexical != null) {
-                        try {
-                            method = fromJwk(methodId, JsonSerialization.mapper.readTree(jwkLexical), revoked, expires);
-                        } catch (Exception notJson) {
-                            // skip non-JSON literals
-                        }
+                Optional<VerificationMethod> method;
+                try {
+                    Instant revoked = dateTimeStamp(soleLiteral(node, revokedProperty));
+                    Instant expires = dateTimeStamp(soleLiteral(node, expirationProperty));
+                    if (SsiCidConstants.JSON_WEB_KEY_TYPE.equals(row.getResource("type").getURI())) {
+                        String jwk = soleLiteral(node, publicKeyJwk);
+                        method = jwk == null ? Optional.empty()
+                                : fromJwk(methodId, JsonSerialization.mapper.readTree(jwk), revoked, expires);
+                    } else {
+                        method = fromMultibase(methodId, soleLiteral(node, publicKeyMultibase), revoked, expires);
                     }
-                } else {
-                    method = fromMultibase(methodId, lexical(row.get("multibase")), revoked, expires);
+                } catch (IOException | RuntimeException unusable) {
+                    // An unreadable revocation date is not evidence that the key was never revoked, and
+                    // two values for one property leave it undecided which applies — including a
+                    // revocation and an expiry the reader would otherwise have picked one of at random.
+                    log.debugf("skipping verification method <%s>: %s", methodId, unusable.getMessage());
+                    continue;
                 }
                 if (method.isPresent()) {
-                    seen.add(key);
+                    accepted.add(key);
                     out.add(method.get());
                 }
             }
         }
         return out;
+    }
+
+    /** How many values {@code node} has for {@code property}. */
+    private static int count(Resource node, Property property) {
+        StmtIterator values = node.listProperties(property);
+        try {
+            int n = 0;
+            while (values.hasNext()) {
+                values.next();
+                n++;
+            }
+            return n;
+        } finally {
+            values.close();
+        }
+    }
+
+    /**
+     * The lexical form of {@code method}'s one value for {@code property}, or {@code null} if it has
+     * none.
+     *
+     * @throws IllegalArgumentException if it has more than one, or one that is not a literal
+     */
+    private static String soleLiteral(Resource method, Property property) {
+        StmtIterator values = method.listProperties(property);
+        try {
+            if (!values.hasNext()) {
+                return null;
+            }
+            RDFNode value = values.next().getObject();
+            if (values.hasNext()) {
+                throw new IllegalArgumentException("more than one value for <" + property.getURI() + ">");
+            }
+            if (!value.isLiteral()) {
+                throw new IllegalArgumentException("<" + property.getURI() + "> is not a literal");
+            }
+            return value.asLiteral().getLexicalForm();
+        } finally {
+            values.close();
+        }
     }
 
     /**
@@ -714,10 +930,15 @@ public class SelfSignedCidVerifier {
      *       retrieves by, and the usual {@code kid} for a DID ({@code did:key:z…#z…}). Every candidate
      *       is already a method of the subject's own document, so an exact match can never reach into
      *       another document;</li>
-     *   <li>by the JWK's own {@code kid};</li>
      *   <li>by the fragment of the method's {@code id}, which is where CID 1.0 conventionally puts it
-     *       ({@code <subject>#<kid>}), a leading {@code #} on the {@code kid} allowed.</li>
+     *       ({@code <subject>#<kid>}), a leading {@code #} on the {@code kid} allowed — the method a
+     *       relative reference {@code #<kid>} resolves to under CID 1.0 §3.4;</li>
+     *   <li>by the JWK's own {@code kid}, for a method whose id does not carry it.</li>
      * </ol>
+     *
+     * <p>The JWK's {@code kid} used to come second. When one method's JWK {@code kid} was another
+     * method's fragment, the {@code kid} picked the first method where §3.4 names the second, and the
+     * credential failed (R-23).</p>
      *
      * <p>There is no fallback to "the only key": the credential says which key signed it, and
      * honouring that is the point of the check.</p>
@@ -736,11 +957,6 @@ public class SelfSignedCidVerifier {
                 return method;
             }
         }
-        for (VerificationMethod method : methods) {
-            if (kid.equals(method.publicKeyJwk().path("kid").asText(null))) {
-                return method;
-            }
-        }
         String wanted = kid.startsWith("#") ? kid.substring(1) : kid;
         for (VerificationMethod method : methods) {
             String id = method.id();
@@ -750,6 +966,11 @@ public class SelfSignedCidVerifier {
             }
             String fragment = id.substring(hash + 1);
             if (wanted.equals(fragment) || wanted.equals(KeyIdFragment.decode(fragment))) {
+                return method;
+            }
+        }
+        for (VerificationMethod method : methods) {
+            if (kid.equals(method.publicKeyJwk().path("kid").asText(null))) {
                 return method;
             }
         }
@@ -765,51 +986,20 @@ public class SelfSignedCidVerifier {
     // ---- small helpers ----
 
     /**
-     * Resolves a reference found in a document against the document's {@code id}: an absolute URL or
-     * DID URL as it is, a fragment ({@code #key-1}) appended to the id — DID 1.1 §3.2.1's relative DID
-     * URL — and any other relative reference by RFC 3986 against a hierarchical id.
-     *
-     * @return the absolute form, or {@code null} if there is none
-     */
-    static String resolveReference(String reference, String base) {
-        if (reference == null || reference.isBlank()) {
-            return null;
-        }
-        if (reference.matches("^[A-Za-z][A-Za-z0-9+.-]*:.*")) {
-            return reference;
-        }
-        if (base == null) {
-            return null;
-        }
-        int hash = base.indexOf('#');
-        String document = hash >= 0 ? base.substring(0, hash) : base;
-        if (reference.startsWith("#")) {
-            return document + reference;
-        }
-        try {
-            java.net.URI uri = new java.net.URI(document);
-            return uri.isOpaque() ? null : uri.resolve(reference).toString();
-        } catch (java.net.URISyntaxException | IllegalArgumentException invalid) {
-            return null;
-        }
-    }
-
-    /**
-     * True iff a method identifier, when there is one, is a fragment of the subject's own document.
+     * True iff a method identifier is a fragment of the subject's own document.
      *
      * <p>CID 1.0 §3.3 takes the document a method lives in from the method's identifier — the URL
      * without its fragment — and requires that document's {@code id}, and the method's
      * {@code controller}, to be that URL. Here the document is always the subject's, so a method whose
      * identifier names a different document is one that §3.3 would have gone and fetched from there,
-     * not accepted from here. (A method written with no {@code id} at all is tolerated, as it always has
-     * been, and can then only be selected by its JWK's {@code kid}.)</p>
+     * not accepted from here. A method with no identifier is not one §3.3 can retrieve at all (R-23).</p>
      *
      * <p>Document is compared with document, not with the subject as written: a subject identifier
      * may itself carry a fragment — a Solid-style WebID such as {@code https://alice.example/card#me}
      * — and its keys ({@code …/card#key-1}) are still in its document.</p>
      */
     private static boolean inSubjectsDocument(String methodId, String sub) {
-        return methodId == null || documentOf(methodId).equals(documentOf(sub));
+        return methodId != null && documentOf(methodId).equals(documentOf(sub));
     }
 
     /** An identifier without its fragment: the document it names. */
@@ -818,24 +1008,53 @@ public class SelfSignedCidVerifier {
         return hash >= 0 ? identifier.substring(0, hash) : identifier;
     }
 
-    /** The first map anywhere in {@code node} whose {@code id} resolves to {@code reference}. */
-    private static JsonNode findById(JsonNode node, String reference, String base) {
-        if (node == null) {
-            return null;
-        }
-        if (node.isObject()) {
-            String id = firstText(node, "id", "@id");
-            if (id != null && reference.equals(resolveReference(id, base))) {
-                return node;
-            }
-        }
-        if (node.isObject() || node.isArray()) {
-            for (Iterator<JsonNode> children = node.elements(); children.hasNext(); ) {
-                JsonNode found = findById(children.next(), reference, base);
-                if (found != null) {
-                    return found;
+    /**
+     * Every map in {@code document} that has an {@code id}, by that id resolved against {@code base}; the
+     * first in document order wins, as a search from the top would find it.
+     *
+     * <p>Built once per document. Searching the whole document again for every reference in
+     * {@code authentication} made resolution cost the number of references times the size of the
+     * document: a 163&nbsp;KiB DID document of 8&nbsp;000 references that resolve to nothing took 30
+     * seconds (R-03). The walk keeps its own stack rather than recursing, so nesting depth costs no
+     * thread stack either.</p>
+     */
+    private static Map<String, JsonNode> indexById(JsonNode document, String base) {
+        Map<String, JsonNode> byId = new HashMap<>();
+        Deque<JsonNode> pending = new ArrayDeque<>();
+        pending.push(document);
+        while (!pending.isEmpty()) {
+            JsonNode node = pending.pop();
+            if (node.isObject()) {
+                String resolved = RdfParsing.resolveReference(firstText(node, "id", "@id"), base);
+                if (resolved != null) {
+                    byId.putIfAbsent(resolved, node);
                 }
             }
+            if (node.isContainerNode() && node.size() > 0) {
+                List<JsonNode> children = new ArrayList<>(node.size());
+                node.elements().forEachRemaining(children::add);
+                for (int i = children.size() - 1; i >= 0; i--) {
+                    pending.push(children.get(i)); // reversed, so the first child is visited first
+                }
+            }
+        }
+        return byId;
+    }
+
+    /**
+     * The one string the first of {@code names} present on {@code node} holds — a string, or an array of
+     * exactly one — or {@code null} if it holds none, several, or something else.
+     */
+    private static String soleText(JsonNode node, String... names) {
+        for (String name : names) {
+            JsonNode value = node.get(name);
+            if (value == null) {
+                continue;
+            }
+            if (value.isArray() && value.size() == 1) {
+                value = value.get(0);
+            }
+            return value.isTextual() ? value.asText() : null;
         }
         return null;
     }
@@ -851,13 +1070,40 @@ public class SelfSignedCidVerifier {
         return null;
     }
 
+    /**
+     * The one date-time a method's {@code revoked} or {@code expires} gives, or {@code null} if it has
+     * none.
+     *
+     * <p>A string, as CID 1.0 writes it; or the shapes JSON-LD gives the same single value — a value
+     * object ({@code {"@value": "…", "@type": "xsd:dateTime"}}) or an array of one. {@code null} is no
+     * value, as it is to a JSON-LD processor. Anything else fails rather than reading as "no date": this
+     * used to look for a string and, finding a value object, an array of two dates or a number instead,
+     * report the key as never revoked (R-06). The RDF path applies the same rule through
+     * {@link #soleLiteral}.</p>
+     *
+     * @throws IllegalArgumentException if present and not exactly one string
+     * @throws DateTimeParseException   if that string is not an {@code xsd:dateTimeStamp}
+     */
+    private static Instant soleDateTime(JsonNode method, String name) {
+        JsonNode value = method.get(name);
+        if (value == null || value.isNull()) {
+            return null;
+        }
+        if (value.isArray() && value.size() == 1) {
+            value = value.get(0);
+        }
+        if (value.isObject() && value.has("@value")) {
+            value = value.get("@value");
+        }
+        if (!value.isTextual()) {
+            throw new IllegalArgumentException("'" + name + "' is not one date-time string");
+        }
+        return dateTimeStamp(value.asText());
+    }
+
     /** An {@code xsd:dateTimeStamp} (a date-time with a time zone), or {@code null} if absent. */
     private static Instant dateTimeStamp(String value) {
         return value == null ? null : OffsetDateTime.parse(value.trim()).toInstant();
-    }
-
-    private static String lexical(RDFNode node) {
-        return node != null && node.isLiteral() ? ((Literal) node).getLexicalForm() : null;
     }
 
     private static String asString(Object value) {

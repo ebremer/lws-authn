@@ -40,7 +40,7 @@ public class LWSResourceProviderFactory implements RealmResourceProviderFactory 
 
     @Override
     public void postInit(KeycloakSessionFactory factory) {
-        // nothing to do
+        settings.logEffective();
     }
 
     @Override

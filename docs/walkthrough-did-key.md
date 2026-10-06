@@ -32,11 +32,12 @@ client_id ==` the `did:key`, and the verifier reconstructs the public key from i
 
 ## Prerequisites
 
-- Keycloak **26.7.4** with the `lws-authn` provider deployed — see [Build and deploy](build.md).
+- Keycloak **26.8.0** or a later 26.8 release, with the `lws-authn` provider deployed — see [Build and deploy](build.md).
 - `curl`, `jq`, and `node` (Node is used to mint the key/JWT; base58btc is impractical in pure shell).
 - For a quick local run: `docker compose up --build --wait` in a checkout — see
   [Run with Docker](build.md#run-with-docker) — which serves `http://localhost:8080` with admin/admin.
-  The script needs no realm of its own; it uses `master`.
+  The script needs no realm of its own; it uses `master`, and calls `/verify` as the `admin` user,
+  whom it first grants the realm role `lws-verifier` that a caller needs.
 
 ---
 
@@ -92,11 +93,12 @@ suite validates against — one `Multikey` method, referenced from `authenticati
 ```bash
 curl -s -X POST "$KC/realms/$REALM/lws-ssi-cid/verify" \
   -H "Authorization: Bearer $CALLER_ACCESS_TOKEN" \
-  --data-urlencode "credential=$JWT" | jq
+  --data-urlencode "credential=$JWT" --data-urlencode "audience=https://as.example" | jq
 ```
 
 > `Authorization` identifies **you**, the caller: the `…/verify` endpoints are authenticated by
-> default. The credential being checked always travels in the request body. See
+> default, and the caller must hold the realm role `lws-verifier`. The credential being checked always
+> travels in the request body. See
 > [Securing the verify endpoints](configuration.md#securing-the-verify-endpoints).
 
 ```json
@@ -112,7 +114,10 @@ curl -s -X POST "$KC/realms/$REALM/lws-ssi-cid/verify" \
     "algorithmMatchesKey": true,
     "signatureValid": true,
     "notExpired": true,
-    "audiencePresent": true
+    "issuedAtPresent": true,
+    "issuedAtConsistent": true,
+    "audiencePresent": true,
+    "audienceMatched": true
   }
 }
 ```
@@ -141,6 +146,6 @@ prior relationship and no lookups.
 - **No hosting, no rotation endpoint.** A new key means a new `did:key` (a new identifier). There is
   nothing to publish or update.
 - **Audience / token type.** The credential carries token type `urn:ietf:params:oauth:token-type:jwt`
-  when exchanged, and the result reports it. The verifier requires `aud` and `iat`; pass
-  `audience=<authorization server>` to require that `aud` actually names the server doing the checking,
-  which is what the suite means by "the `aud` claim MUST include the target authorization server".
+  when exchanged, and the result reports it. The verifier requires `aud` and `iat`, and requires
+  `audience=<authorization server>` — or a configured `audience` — so that `aud` is checked against the
+  server doing the checking: "the `aud` claim MUST include the target authorization server".

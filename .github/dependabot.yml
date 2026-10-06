@@ -1,3 +1,7 @@
+# Copyright Erich Bremer.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Dependabot keeps the two things CI cannot check for itself up to date: the Maven dependencies that
 # end up inside the shaded provider JAR, and the pinned action SHAs in .github/workflows.
 #
@@ -11,6 +15,37 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # Versions that are not this repository's to choose (R-41). Each was a Dependabot pull request that
+    # would have broken a rule pom.xml states; they move with the server or with Jena, by hand.
+    ignore:
+      # APIs Keycloak supplies at runtime (`provided`): compiling against a version the server does not
+      # ship builds a provider that fails to load. They follow keycloak.version. jakarta.ws.rs-api 4.0.0
+      # is a Jakarta EE 12 API no Keycloak 26 provides.
+      - dependency-name: "jakarta.ws.rs:jakarta.ws.rs-api"
+      - dependency-name: "org.apache.httpcomponents:httpclient"
+      - dependency-name: "org.jboss.logging:jboss-logging"
+      - dependency-name: "org.glassfish:jakarta.json"
+      - dependency-name: "org.jspecify:jspecify"
+      - dependency-name: "org.slf4j:*"
+      # Libraries bundled and relocated at the version Jena declares ("Jena's version" in pom.xml).
+      # A minor or major update moves with jena.version; a patch release is still proposed.
+      - dependency-name: "com.apicatalog:titanium-json-ld"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "com.github.ben-manes.caffeine:caffeine"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "org.apache.commons:*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "commons-codec:commons-codec"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "commons-io:commons-io"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "com.google.code.gson:gson"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "com.google.errorprone:error_prone_annotations"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      # JUnit 6 is a migration of its own (P4-4), not a version bump.
+      - dependency-name: "org.junit.jupiter:*"
+        update-types: ["version-update:semver-major"]
     groups:
       # One PR for the routine version drift, so a genuinely interesting update is not buried in it.
       # Keycloak is excluded: this provider is compiled against a specific server version and the
@@ -21,6 +56,20 @@ updates:
           - patch
         exclude-patterns:
           - "org.keycloak:*"
+
+  # The Dockerfile's base images, pinned by digest (R-47): Dependabot proposes the new digest when a tag
+  # is rebuilt — the Maven image's tag is a moving one, so that is how its security fixes arrive.
+  # Keycloak's version is not Dependabot's to move: it is keycloak.version in pom.xml, which
+  # KeycloakVersionPinsTest holds the Dockerfile to, so only its digest is updated here.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: "quay.io/keycloak/keycloak"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "maven"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
 
   - package-ecosystem: github-actions
     directory: /

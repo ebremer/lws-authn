@@ -44,6 +44,15 @@ public final class DidKey {
 
     private static final String BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
+    /**
+     * The longest multibase value decoded, {@code z} included. The longest supported key — a compressed
+     * P-521 point and its two-byte multicodec header, 69 bytes — is 95 base58 characters, and the
+     * secret-key headers recognised by name are shorter still. Base58 decoding is quadratic in its input,
+     * and a {@code publicKeyMultibase} is attacker-supplied: unbounded, a 250&nbsp;000-character value
+     * took 18 seconds to refuse (R-03).
+     */
+    public static final int MAX_MULTIBASE_LENGTH = 256;
+
     // multicodec varint prefixes
     private static final byte[] MC_ED25519 = {(byte) 0xed, (byte) 0x01}; // 0xed
     private static final byte[] MC_P256 = {(byte) 0x80, (byte) 0x24};    // 0x1200
@@ -144,6 +153,9 @@ public final class DidKey {
     public static DecodedKey decodeMultibase(String multibase) {
         if (multibase == null || multibase.isEmpty() || multibase.charAt(0) != 'z') {
             throw new IllegalArgumentException("key must use base58btc multibase (leading 'z')");
+        }
+        if (multibase.length() > MAX_MULTIBASE_LENGTH) {
+            throw new IllegalArgumentException("key is longer than any supported public key");
         }
         byte[] bytes = base58Decode(multibase.substring(1));
 
@@ -281,10 +293,24 @@ public final class DidKey {
 
     // ---- key building ----
 
+    /**
+     * Why {@code raw} — the 32 bytes RFC 8032 encodes an Ed25519 public key as — is not one a verifier
+     * should accept, or {@code null} if it is: it must be canonically encoded, on the curve, and not of
+     * small order (R-27; see {@link Ed25519Points}). Applied to every Ed25519 key, however it arrived —
+     * a {@code did:key}, a {@code Multikey} or an {@code OKP} JWK.
+     */
+    public static String ed25519KeyProblem(byte[] raw) {
+        return Ed25519Points.problem(raw);
+    }
+
     private static PublicKey ed25519PublicKey(byte[] raw32) {
         try {
             if (raw32.length != 32) {
                 throw new IllegalArgumentException("Ed25519 key must be 32 bytes");
+            }
+            String problem = Ed25519Points.problem(raw32);
+            if (problem != null) {
+                throw new IllegalArgumentException(problem);
             }
             return KeyFactory.getInstance("Ed25519")
                     .generatePublic(new X509EncodedKeySpec(concat(ED25519_SPKI_PREFIX, raw32)));
@@ -340,6 +366,10 @@ public final class DidKey {
 
     // ---- base58btc ----
 
+    /**
+     * Decodes base58btc. Quadratic in the length of {@code input}: a caller handing it untrusted input
+     * must bound the length first, as {@link #decodeMultibase} does.
+     */
     public static byte[] base58Decode(String input) {
         BigInteger value = BigInteger.ZERO;
         BigInteger base = BigInteger.valueOf(58);

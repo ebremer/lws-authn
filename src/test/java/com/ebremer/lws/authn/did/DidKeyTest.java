@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigInteger;
@@ -19,6 +20,7 @@ import java.security.SecureRandom;
 import java.security.interfaces.ECPublicKey;
 import java.security.spec.ECPoint;
 import java.security.spec.ECPublicKeySpec;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Map;
@@ -133,5 +135,107 @@ class DidKeyTest {
         assertEquals("z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
                 DidKey.multibaseValue("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK#z6Mkha"));
         assertThrows(IllegalArgumentException.class, () -> DidKey.multibaseValue("did:web:example.com"));
+    }
+
+    /**
+     * R-03. Base58 decoding is quadratic in its input, and a {@code publicKeyMultibase} is
+     * attacker-supplied: unbounded, a 250 000-character value took 18 seconds to refuse.
+     */
+    @Test
+    void refusesAMultibaseLongerThanAnySupportedKeyBeforeDecodingIt() {
+        String huge = "z" + "2".repeat(250_000);
+        IllegalArgumentException refused = assertTimeoutPreemptively(Duration.ofMillis(500),
+                () -> assertThrows(IllegalArgumentException.class, () -> DidKey.decodeMultibase(huge)));
+        assertTrue(refused.getMessage().contains("longer than any supported public key"), refused.getMessage());
+        assertThrows(IllegalArgumentException.class,
+                () -> DidKey.decodeMultibase("z" + "2".repeat(DidKey.MAX_MULTIBASE_LENGTH)));
+    }
+
+    // ------------------------------------------------------------------- Ed25519 points (R-27)
+
+    private static final BigInteger P = BigInteger.TWO.pow(255).subtract(BigInteger.valueOf(19));
+
+    /** RFC 8032 §5.1.2: y little-endian, with the sign of x in the top bit. */
+    private static byte[] encodePoint(BigInteger y, boolean sign) {
+        byte[] bigEndian = y.toByteArray();
+        byte[] out = new byte[32];
+        for (int i = 0; i < Math.min(32, bigEndian.length); i++) {
+            out[i] = bigEndian[bigEndian.length - 1 - i];
+        }
+        if (sign) {
+            out[31] |= (byte) 0x80;
+        }
+        return out;
+    }
+
+    private static String didKeyOf(byte[] raw) {
+        byte[] bytes = new byte[34];
+        bytes[0] = (byte) 0xed;
+        bytes[1] = 0x01;
+        System.arraycopy(raw, 0, bytes, 2, 32);
+        return "did:key:z" + DidKey.base58Encode(bytes);
+    }
+
+    /**
+     * R-27. The points of small order: the identity (y = 1), its negation's partner (0, −1) of order 2,
+     * and (±√−1, 0) of order 4. With the identity as a key, {@code (R = identity, S = 0)} is a valid
+     * signature on any message, so a did:key built from it is one anybody can sign for.
+     */
+    @Test
+    void aKeyOfSmallOrderIsRefused() {
+        byte[][] smallOrder = {
+                encodePoint(BigInteger.ONE, false),                    // identity, order 1
+                encodePoint(P.subtract(BigInteger.ONE), false),        // (0, -1), order 2
+                encodePoint(BigInteger.ZERO, false),                   // (sqrt(-1), 0), order 4
+                encodePoint(BigInteger.ZERO, true)};                   // (-sqrt(-1), 0), order 4
+        for (byte[] raw : smallOrder) {
+            String problem = DidKey.ed25519KeyProblem(raw);
+            assertTrue(problem != null && problem.contains("small order"), String.valueOf(problem));
+            IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
+                    () -> DidKey.decode(didKeyOf(raw)));
+            assertTrue(refused.getMessage().contains("small order"), refused.getMessage());
+        }
+    }
+
+    /**
+     * R-27. RFC 8032 §5.1.3: decoding fails for y ≥ p. The JDK keeps the bytes as given, so y + p
+     * re-encoded to itself and one point had two did:keys.
+     */
+    @Test
+    void aNonCanonicalKeyIsRefused() {
+        int found = 0;
+        for (int y = 2; y < 19; y++) {
+            BigInteger value = BigInteger.valueOf(y);
+            if (DidKey.ed25519KeyProblem(encodePoint(value, false)) != null) {
+                continue; // not on the curve
+            }
+            found++;
+            byte[] alias = encodePoint(value.add(P), false);
+            String problem = DidKey.ed25519KeyProblem(alias);
+            assertTrue(problem != null && problem.contains("canonical"), y + ": " + problem);
+            assertThrows(IllegalArgumentException.class, () -> DidKey.decode(didKeyOf(alias)));
+        }
+        assertTrue(found > 0, "some y below 19 is on the curve, so y + p is a second spelling of it");
+        String negativeZero = DidKey.ed25519KeyProblem(encodePoint(BigInteger.ONE, true));
+        assertTrue(negativeZero != null && negativeZero.contains("canonical"), negativeZero);
+    }
+
+    /** Most 32-byte strings are not points at all; the others, from real keys, are fine. */
+    @Test
+    void anEd25519KeyMustBeOnTheCurve() throws Exception {
+        int offCurve = 0;
+        for (int y = 2; y < 40; y++) {
+            String problem = DidKey.ed25519KeyProblem(encodePoint(BigInteger.valueOf(y), false));
+            if (problem != null) {
+                assertTrue(problem.contains("not a point on the curve"), problem);
+                offCurve++;
+            }
+        }
+        assertTrue(offCurve > 0);
+        for (int i = 0; i < 20; i++) {
+            KeyPair pair = SelfIssuedJwts.ed25519();
+            byte[] spki = pair.getPublic().getEncoded();
+            assertEquals(null, DidKey.ed25519KeyProblem(Arrays.copyOfRange(spki, spki.length - 32, spki.length)));
+        }
     }
 }

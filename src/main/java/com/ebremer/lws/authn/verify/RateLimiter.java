@@ -21,6 +21,10 @@ import java.util.Map;
  * steady rate. Callers are tracked in an access-ordered map capped at {@link #MAX_TRACKED_CALLERS}
  * entries, so the limiter cannot itself become a memory-exhaustion vector.</p>
  *
+ * <p>Time is {@link System#nanoTime()}, not the wall clock (R-36): with the wall clock, a step backwards
+ * — an NTP correction, a VM resumed — left an empty bucket empty until the clock caught up again, and
+ * the caller refused for that long.</p>
+ *
  * @author Erich Bremer
  */
 public final class RateLimiter {
@@ -54,7 +58,32 @@ public final class RateLimiter {
 
     /** Takes one permit for {@code key}, or returns {@code false} when the caller is over its rate. */
     public boolean tryAcquire(String key) {
-        return tryAcquire(key, System.currentTimeMillis());
+        return tryAcquire(key, monotonicMillis());
+    }
+
+    /**
+     * Whole seconds until {@code key} has a permit again — at least 1 — for a {@code Retry-After}
+     * header (R-36).
+     */
+    public long retryAfterSeconds(String key) {
+        return retryAfterSeconds(key, monotonicMillis());
+    }
+
+    /** As {@link #retryAfterSeconds(String)}, with an explicit clock (for tests). */
+    synchronized long retryAfterSeconds(String key, long nowMillis) {
+        Bucket bucket = buckets.get(key);
+        if (bucket == null) {
+            return 1;
+        }
+        double tokens = Math.min(permitsPerMinute,
+                bucket.tokens + Math.max(0, nowMillis - bucket.lastRefillMillis) * permitsPerMinute / 60_000.0d);
+        double missing = Math.max(0, 1.0d - tokens);
+        // Less a hair, so floating-point dust on an exact second does not round it up to the next one.
+        return Math.max(1, (long) Math.ceil(missing * 60.0d / permitsPerMinute - 1e-9));
+    }
+
+    private static long monotonicMillis() {
+        return System.nanoTime() / 1_000_000L;
     }
 
     /** As {@link #tryAcquire(String)}, with an explicit clock (for tests). */

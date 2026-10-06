@@ -1,0 +1,24 @@
+Third-party software in lws-authn
+=================================
+
+This JAR bundles the libraries below, most of them relocated under com.ebremer.lws.authn.shaded.
+Relocation renames their packages; their code, copyright and licences are unchanged. The attribution
+notices of the Apache-licensed libraries are merged into META-INF/NOTICE. target/bom.json, which the
+build produces beside the JAR, lists the same libraries with their exact versions.
+
+Apache License, Version 2.0 (text: META-INF/licenses/Apache-2.0.txt)
+  org.apache.jena:jena-arq, jena-core, jena-base, jena-iri3986, jena-langtag
+  org.apache.commons:commons-collections4, commons-compress, commons-csv, commons-lang3
+  commons-codec:commons-codec
+  commons-io:commons-io
+  org.apache.thrift:libthrift
+  com.apicatalog:titanium-json-ld, titanium-jcs, titanium-rdf-api, titanium-rdf-n-quads
+  com.github.ben-manes.caffeine:caffeine
+  com.google.code.gson:gson
+  org.roaringbitmap:RoaringBitmap
+
+MIT License (text: META-INF/licenses/dexx-collection-MIT.txt)
+  com.github.andrewoma.dexx:collection
+
+W3C Software and Document License, 2023 (text: META-INF/licenses/W3C-cid-v1-context.txt)
+  contexts/cid-v1.jsonld, the JSON-LD context https://www.w3.org/ns/cid/v1, unmodified
