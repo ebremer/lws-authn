@@ -17,8 +17,10 @@ bash scripts/lws-demo.sh            # or any walkthrough
 docker compose down                 # stop, and discard everything
 ```
 
-Keycloak is at `http://localhost:8080`, and its admin console signs in as `admin` / `admin`. The
-image's build skips the tests, so run `mvn verify` for those.
+Keycloak is at `http://localhost:8080`, and its admin console signs in as `admin` / `admin`. The port
+is published on `127.0.0.1` only, so nothing else on your network can reach that admin. The image's
+build skips the tests, so run `mvn verify` for those. Both base images are pinned by digest;
+Dependabot proposes new digests.
 
 The realm is [`examples/lws-demo-realm.json`](https://github.com/ebremer/lws-authn/blob/master/examples/lws-demo-realm.json),
 which is also what the walkthroughs import by hand:

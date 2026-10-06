@@ -18,7 +18,7 @@ import org.junit.jupiter.api.Test;
 
 /**
  * R-14. The Keycloak release is named in the POM, and two places that cannot read the POM repeat it:
- * the {@code Dockerfile}'s default and {@code LwsAuthIT}'s fallback image. A Keycloak upgrade that
+ * the {@code Dockerfile}'s base image and {@code LwsAuthIT}'s fallback image. A Keycloak upgrade that
  * misses one of them builds the Docker demo, or runs the integration test outside Failsafe, against
  * the old release — the one the upgrade was for. This fails the build instead.
  */
@@ -33,7 +33,9 @@ class KeycloakVersionPinsTest {
     @Test
     void theDockerfileAndTheIntegrationTestUseThePomsKeycloak() throws IOException {
         String pom = find(Path.of("pom.xml"), "<keycloak\\.version>([^<]+)</keycloak\\.version>");
-        assertEquals(pom, find(Path.of("Dockerfile"), "ARG KEYCLOAK_VERSION=(\\S+)"), "Dockerfile");
+        // A literal tag, so Dependabot can read the line; the digest after it pins the image (R-47).
+        assertEquals(pom, find(Path.of("Dockerfile"), "FROM quay\\.io/keycloak/keycloak:([^@\\s]+)@sha256:[0-9a-f]{64}"),
+                "Dockerfile");
         assertEquals(pom, find(Path.of("src/test/java/com/ebremer/lws/authn/LwsAuthIT.java"),
                 "\"quay\\.io/keycloak/keycloak:([^\"]+)\""), "LwsAuthIT's fallback image");
     }

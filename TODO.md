@@ -1200,10 +1200,18 @@ is needed.
   every copy. `ShadedJarContentsIT` checks the files, the NOTICE header, and that every component of the
   SBOM is named in `THIRD-PARTY.txt`.
 
-- [ ] **R-47 · Docker quickstart.** `Low` · security/maintainability · `S` · *verified*
+- [x] **R-47 · Docker quickstart.** `Low` · security/maintainability · `S` · *verified*
   `compose.yaml` publishes the port on all interfaces with `admin`/`admin` and a loopback SSRF allow-list
   — bind `127.0.0.1:8080:8080`. Base images are tag-only (no digest) and Dependabot has no `docker`
   ecosystem entry.
+  **Done.** `compose.yaml` publishes on `127.0.0.1` only. Both `FROM` lines are tag plus digest — the
+  OCI index digests, read from quay.io and Docker Hub on 6 October 2026 (`maven:3.9-eclipse-temurin-21`
+  `sha256:99e61abc…`, `keycloak:26.8.0` `sha256:b0f60d48…`) — and written out literally, since Dependabot
+  cannot read an `ARG` in `FROM`; so the `KEYCLOAK_VERSION` build argument is gone and
+  `KeycloakVersionPinsTest` now reads the Keycloak tag from the `FROM` line and requires a digest after
+  it. A `docker` entry in `dependabot.yml` proposes digest updates for both and never a version change
+  (Keycloak follows `keycloak.version`; the Maven tag stays on JDK 21). The image was not built here (no
+  Docker daemon).
 
 - [x] **R-48 · Demo scripts.** `Low` · maintainability · `S` · *verified*
   Admin API calls use `curl -sS` without `--fail`, so a failed realm/client/user creation still prints

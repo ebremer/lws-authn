@@ -523,6 +523,10 @@ each may reject a document that used to verify. Check your issuers' documents be
   value containing a quote no longer breaks it. The user is now `DEMO_USER`: `USERNAME`, which
   Windows sets to the login name, made the scripts create that user under Git Bash. They need curl
   7.76 or later.
+- **Docker quickstart** (R-47). `compose.yaml` publishes Keycloak on `127.0.0.1` only: on every
+  interface, its `admin`/`admin` bootstrap admin and loopback allow-list were open to the network. The
+  `Dockerfile`'s base images are pinned by digest, and Dependabot proposes digest updates; the
+  `KEYCLOAK_VERSION` build argument is gone, since Dependabot cannot read a `FROM` line built from one.
 - **Dependabot leaves deliberate pins alone** (R-41): the APIs Keycloak supplies, and minor or major
   updates of the libraries bundled at Jena's version, are ignored, as are JUnit majors.
 
