@@ -6,7 +6,8 @@
  * Outbound HTTP policy for verifier fetches driven by attacker-influenced URLs (the OpenID and
  * self-signed CID verifiers dereference the credential's `sub`/`iss` and fetch OIDC discovery / JWKS).
  * Every such fetch is bounded in time and in the number of bytes consumed, resolves through
- * {@link GuardedDnsResolver} so it can only reach vetted addresses, and never follows a redirect.
+ * {@link GuardedDnsResolver} so it can only reach vetted addresses, and follows a redirect only when
+ * dereferencing a subject, re-vetting each hop.
  */
 package com.ebremer.lws.authn.net;
 
@@ -47,9 +48,9 @@ import com.ebremer.lws.authn.config.ServerSettings;
 import com.ebremer.lws.authn.verify.VerifyAccess;
 
 /**
- * Fetches a document for a verifier: SSRF-vetted name resolution, no redirects, bounded timeouts, a
- * hard deadline on the whole exchange, a response-size cap, and a bound on how many fetches one caller
- * may have in flight.
+ * Fetches a document for a verifier: SSRF-vetted name resolution, redirects only where a subject is
+ * dereferenced and then re-vetted per hop, bounded timeouts, a hard deadline on the whole exchange, a
+ * response-size cap, and a bound on how many fetches one caller may have in flight.
  *
  * <p><strong>Why not the session's client.</strong> Keycloak's server-wide HTTP client resolves the
  * target host itself, after {@link SsrfGuard} has already resolved it — a rebinding window — and
@@ -171,7 +172,15 @@ public final class OutboundHttp {
     private static final ConcurrentHashMap<String, Integer> IN_FLIGHT = new ConcurrentHashMap<>();
 
     /**
-     * GETs {@code url} for a verifier.
+     * The most redirects {@link #dereference} follows. Three is enough for an http→https upgrade, a
+     * trailing-slash fix and a {@code 303 See Other} from a WebID to its document, and no more.
+     */
+    public static final int MAX_REDIRECTS = 3;
+
+    /**
+     * GETs {@code url} for a verifier, following no redirect: a {@code 3xx} is returned as it is. For
+     * the documents whose URL is itself the trust anchor — OpenID discovery and its {@code jwks_uri}, a
+     * {@code did:web} document — and that are not identifiers people put in a browser.
      *
      * @param accept  the {@code Accept} header to send, or {@code null}
      * @param session the request's session: whose caller the fetch counts against, and — in
@@ -183,6 +192,34 @@ public final class OutboundHttp {
      * @throws IOException                 if the fetch fails or overruns its deadline
      */
     public static Fetched fetch(String url, String accept, KeycloakSession session) throws IOException {
+        return get(url, accept, session, 0);
+    }
+
+    /**
+     * GETs a subject's document, following up to {@link #MAX_REDIRECTS} redirects (R-29).
+     *
+     * <p>A WebID that answers {@code 303 See Other} — the httpRange-14 pattern, an identifier for a person
+     * redirecting to the document about them — or redirects http to https used to fail as "did not return
+     * a controlled identifier document". Following is safe because nothing about the target is taken on
+     * trust: each hop is checked by {@link SsrfGuard} and its origin's breaker before it is requested,
+     * {@link GuardedDnsResolver} vets the address actually connected to, a downgrade to plain http is
+     * refused as any http URL is, and the whole chain shares one deadline. The document that comes back
+     * must still have the <em>original</em> subject as its {@code id}; where it was found changes
+     * nothing about whom it must describe.</p>
+     *
+     * @throws SsrfGuard.BlockedException if any hop must not be fetched
+     * @see #fetch for the other exceptions
+     */
+    public static Fetched dereference(String url, String accept, KeycloakSession session) throws IOException {
+        return get(url, accept, session, MAX_REDIRECTS);
+    }
+
+    /** One response, with where it redirects to if it does. */
+    private record Hop(Fetched fetched, String location) {
+    }
+
+    private static Fetched get(String url, String accept, KeycloakSession session, int maxRedirects)
+            throws IOException {
         // The breaker comes first: its whole purpose is to stop paying for an origin that cannot be
         // reached, and resolving the name before consulting it would pay part of that cost anyway.
         String origin = originOf(url);
@@ -191,16 +228,42 @@ public final class OutboundHttp {
         String caller = VerifyAccess.callerKey(session);
         acquire(caller);
         try {
-            Fetched fetched = execute(url, accept, client(session));
-            markSuccess(origin); // it answered; whatever the answer, the origin is reachable
-            return fetched;
-        } catch (IOException e) {
-            if (isOriginFailure(e)) {
-                markFailure(origin);
+            long deadlineAt = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(deadlineMillis());
+            String current = url;
+            for (int hop = 0; ; hop++) {
+                if (hop > 0) {
+                    origin = originOf(current);
+                    requireClosedCircuit(origin);
+                    SsrfGuard.verify(current);
+                }
+                Hop answer;
+                try {
+                    answer = execute(current, accept, client(session), deadlineAt);
+                    markSuccess(origin); // it answered; whatever the answer, the origin is reachable
+                } catch (IOException e) {
+                    if (isOriginFailure(e)) {
+                        markFailure(origin);
+                    }
+                    throw e;
+                }
+                if (hop >= maxRedirects || answer.location() == null) {
+                    return answer.fetched();
+                }
+                current = resolve(current, answer.location());
             }
-            throw e;
         } finally {
             release(caller);
+        }
+    }
+
+    /** A redirect's {@code Location}, resolved against the URL that sent it, without any fragment. */
+    private static String resolve(String base, String location) throws IOException {
+        try {
+            String target = URI.create(base).resolve(location.trim()).toString();
+            int fragment = target.indexOf('#');
+            return fragment < 0 ? target : target.substring(0, fragment);
+        } catch (IllegalArgumentException malformed) {
+            throw new IOException("redirect to a malformed Location", malformed);
         }
     }
 
@@ -231,7 +294,17 @@ public final class OutboundHttp {
                 || e instanceof SSLHandshakeException;
     }
 
-    private static Fetched execute(String url, String accept, CloseableHttpClient client) throws IOException {
+    /** The statuses that send a GET elsewhere with a {@code Location}: 301, 302, 303, 307 and 308. */
+    private static boolean isRedirect(int status) {
+        return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
+    }
+
+    private static Hop execute(String url, String accept, CloseableHttpClient client, long deadlineAt)
+            throws IOException {
+        long remaining = TimeUnit.NANOSECONDS.toMillis(deadlineAt - System.nanoTime());
+        if (remaining <= 0) {
+            throw new IOException("the fetch ran out of time following redirects");
+        }
         int timeout = timeoutMillis();
         HttpGet request = new HttpGet(url);
         request.setConfig(RequestConfig.custom()
@@ -246,7 +319,7 @@ public final class OutboundHttp {
         }
         // abort() shuts the connection whatever the request is doing — waiting for a pooled connection,
         // connecting, or blocked in a read of the body — which is what makes the deadline a deadline.
-        ScheduledFuture<?> deadline = DEADLINES.schedule(request::abort, deadlineMillis(), TimeUnit.MILLISECONDS);
+        ScheduledFuture<?> deadline = DEADLINES.schedule(request::abort, remaining, TimeUnit.MILLISECONDS);
         try (CloseableHttpResponse response = client.execute(request)) {
             int status = response.getStatusLine().getStatusCode();
             Header type = response.getFirstHeader("Content-Type");
@@ -255,9 +328,11 @@ public final class OutboundHttp {
                 // No verifier reads anything but a 200, so an error body is never worth reading — and
                 // closing it normally would read it anyway, to keep the connection.
                 request.abort();
-                return new Fetched(status, contentType, null);
+                Header location = isRedirect(status) ? response.getFirstHeader("Location") : null;
+                return new Hop(new Fetched(status, contentType, null),
+                        location == null || location.getValue().isBlank() ? null : location.getValue());
             }
-            return new Fetched(status, contentType, readBody(response.getEntity(), request));
+            return new Hop(new Fetched(status, contentType, readBody(response.getEntity(), request)), null);
         } finally {
             deadline.cancel(false);
         }

@@ -73,7 +73,8 @@ Not a claim of completeness — context, so a report can say something new. Each
 - `verify` endpoints authenticated by default, rate limited, and answering `200` with `"valid": false`
   rather than a bare `401`
 - SSRF vetting installed as the HTTP client's **DNS resolver**, so the addresses approved are the
-  addresses connected to; redirects disabled independently of Keycloak's setting
+  addresses connected to; the client follows no redirect itself, independently of Keycloak's setting,
+  and the up to three a subject's dereference follows are each vetted as a new request
 - responses carry no upstream status codes, resolved addresses or exception text — only a `traceId`
 - private key material refused rather than trimmed before publication
 - SAML: XSW-resistant navigation, SAML Core §5.4's signature profile (one reference, no

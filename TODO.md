@@ -842,13 +842,23 @@ is needed.
   `SelfSignedCidDidSubjectTest` (an `exp` in 9999 passes with no limit and fails at 3600 s) and
   `LWSCredentialVerifierTest`.
 
-- [ ] **R-29 · Follow (or explicitly refuse) redirects when dereferencing a subject.**
+- [x] **R-29 · Follow (or explicitly refuse) redirects when dereferencing a subject.**
   `Low` · interop/docs · `S` · *verified*
   Redirects are disabled outright (`OutboundHttp.java:137`, P0-6), so a WebID that answers `303 See Other`
   (the httpRange-14 pattern) or redirects http→https fails as "did not return a controlled identifier
   document". Since `GuardedDnsResolver` vets every connection, following up to three redirects with
   `SsrfGuard` re-checked per hop — keeping the original `sub` as the required `id` — is safe. **Do:**
   implement that, or list "redirects are not followed" as a divergence in `COMPLIANCE.md`.
+  **Done: followed.** `OutboundHttp.dereference` follows up to `MAX_REDIRECTS` (3) of 301/302/303/307/308,
+  resolving `Location` against the URL that sent it and dropping any fragment; each hop runs the
+  breaker, `SsrfGuard.verify` (so an https→http downgrade is refused unless allow-listed) and the
+  guarded resolver, and the chain shares one deadline and one per-caller slot. A fourth redirect is
+  returned as the `3xx` it is. Both verifiers dereference `sub` with it; `fetch` — discovery, JWKS,
+  `did:web` — still follows none (the did:web method gives no reason to, and discovery's issuer and
+  `jwks_uri` are exact URLs). Tests: `OutboundHttpClientTest` (302 and relative 303 followed; a loop
+  stops at the fourth; a hop to an address off the allow-list is refused) and `CidDocumentReadingTest`
+  (a subject behind a 303 verifies; a document whose `id` is the redirect target does not). The two
+  `CidDocumentReadingTest` ones fail against the previous code.
 
 - [ ] **R-30 · `LWSSubMapper` trusts the WebID attribute too far.** `Low` · security · `S` · *verified (first point)*
   `openid/LWSSubMapper.java:144-199`. A value pointing into this realm's own hosted namespace for a

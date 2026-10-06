@@ -95,6 +95,8 @@ does not decode counts as one; `typ`, when present, names a JWT — not
 `sub` and `iss` present; `iss` an https URL with no query or fragment, as OpenID Connect Core §2 defines
 an Issuer Identifier (`issuerWellFormed`); `azp` present (`clientPresent`). `sub` is dereferenced over the guarded HTTP
 stack and the document must have an `id` equal to `sub` (`subjectDereferenced`, `subjectIdMatches`):
+up to three redirects are followed — a WebID answering `303 See Other`, http going to https — each
+vetted as a new request, and the document must still describe the original `sub`;
 for a JSON document, the `id` of its **topmost map**, read from the JSON before any RDF processing (CID
 1.0: "A controlled identifier document MUST contain an `id` value in the topmost map"); for Turtle,
 N-Triples or RDF/XML, which have no topmost map, the graph must describe `sub`. A document that was
@@ -185,7 +187,7 @@ method is mandated; two are resolved and any other is refused by name (`subjectD
 - `did:web` — the method's Read operation: `did:web:<domain>[%3A<port>][:<path>…]` →
   `https://<domain>[:<port>]/<path…>/did.json`, or `/.well-known/did.json` with no path. The domain must
   be a DNS name, never an IP address, and this is checked before anything is fetched. The fetch uses
-  the same SSRF-guarded, redirect-refusing, bounded client as an HTTPS subject. The document must be
+  the same SSRF-guarded, bounded client as an HTTPS subject, following no redirect. The document must be
   served as a DID or JSON media type, and its `id` must be the DID (`subjectIdMatches`).
 
 A DID document is read with the JSON rules of its representation rather than by a JSON-LD processor

@@ -365,10 +365,11 @@ public class LWSCredentialVerifier {
     private Model dereference(String sub, VerificationResult result) {
         try {
             // OutboundHttp applies the SSRF policy, refuses a host that cannot currently be reached, and
-            // fetches through a client that follows no redirects and resolves only vetted addresses. It
-            // keeps the breaker's books itself: what happens here after the fetch — a 404, the wrong
-            // media type, a document that does not parse — says nothing about the host's health (R-02).
-            OutboundHttp.Fetched response = OutboundHttp.fetch(sub, RdfParsing.ACCEPT, session);
+            // fetches through a client that resolves only vetted addresses, following up to three
+            // redirects, each vetted the same way (R-29). It keeps the breaker's books itself: what
+            // happens here after the fetch — a 404, the wrong media type, a document that does not parse
+            // — says nothing about the host's health (R-02). The document must still be about sub.
+            OutboundHttp.Fetched response = OutboundHttp.dereference(sub, RdfParsing.ACCEPT, session);
             if (response.status() != 200) {
                 log.debugf("[%s] dereferencing sub <%s> returned HTTP %d", result.getTraceId(), sub,
                         response.status());

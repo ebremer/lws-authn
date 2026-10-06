@@ -24,10 +24,14 @@ behaviours are covered by tests — `mvn test` for the unit tests, `mvn verify` 
     the DNS resolver of the HTTP client the verifiers use, so the addresses it approves are exactly the
     addresses the connection manager connects to. There is no second lookup for a hostile name server
     to poison, which is what closes the DNS-rebinding window.
-  - That client also has **redirect following disabled**. Keycloak's shared client happens to disable
-    redirects by default too (`spi-connections-http-client-default-allow-redirects`, default `false`),
-    but that is a deployment setting one flag away from letting a `302` walk past the guard — so the
-    verifiers do not depend on it.
+  - That client has **its own redirect following disabled**. Keycloak's shared client happens to
+    disable redirects by default too (`spi-connections-http-client-default-allow-redirects`, default
+    `false`), but that is a deployment setting one flag away from letting a `302` walk past the guard —
+    so the verifiers do not depend on it. Dereferencing a **subject** follows up to three redirects
+    itself (a WebID answering `303 See Other`, or http going to https), and every hop is a new request
+    that the guard, the scheme rule and the breaker check as they check the first; the chain shares one
+    deadline, and the document must still have the original subject as its `id`. Discovery, the JWK
+    set and a `did:web` document are fetched with no redirects at all.
   - **https only.** Everything fetched carries or locates a key — the subject's document, the issuer's
     configuration, its JWK set — and over plain `http` anyone on the network path can swap it. So every
     fetch must be `https`, and the OpenID `iss` must be an https URL with no query or fragment (OpenID

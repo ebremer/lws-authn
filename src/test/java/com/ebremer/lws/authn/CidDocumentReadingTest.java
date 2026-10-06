@@ -72,6 +72,12 @@ class CidDocumentReadingTest {
         port = server.getAddress().getPort();
         server.createContext("/", exchange -> {
             String[] route = routes.get(exchange.getRequestURI().getPath());
+            if (route != null && "redirect".equals(route[0])) {
+                exchange.getResponseHeaders().add("Location", route[1]);
+                exchange.sendResponseHeaders(303, -1);
+                exchange.close();
+                return;
+            }
             byte[] body = (route == null ? "not found" : route[1]).getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", route == null ? "text/plain" : route[0]);
             exchange.sendResponseHeaders(route == null ? 404 : 200, body.length);
@@ -280,5 +286,49 @@ class CidDocumentReadingTest {
 
         SsiCidVerificationResult strong = selfSignedRsa(2048);
         assertTrue(strong.isValid(), () -> strong.getErrors() + " " + strong.getChecks());
+    }
+
+    // ------------------------------------------------------------------------- redirects (R-29)
+
+    /**
+     * Serves {@code document} at one URL behind a {@code 303 See Other} from another, and returns the
+     * first. {@code SUB} in the document becomes {@code idPath}'s URL: the redirecting one, or the target.
+     */
+    private String[] serveBehindRedirect(String contentType, String document, boolean idIsTheTarget) {
+        String target = "http://localhost:" + port + "/cid-" + paths.incrementAndGet();
+        String sub = "http://localhost:" + port + "/cid-" + paths.incrementAndGet();
+        routes.put(target.substring(target.indexOf("/cid-")),
+                new String[]{contentType, document.replace("SUB", idIsTheTarget ? target : sub)});
+        routes.put(sub.substring(sub.indexOf("/cid-")), new String[]{"redirect", target});
+        return new String[]{sub, target};
+    }
+
+    private SsiCidVerificationResult selfSignedBehindRedirect(boolean idIsTheTarget) throws Exception {
+        KeyPair pair = SelfIssuedJwts.ed25519();
+        String key = DidKey.multibaseValue(DidKey.encodeEd25519(pair.getPublic()));
+        String[] urls = serveBehindRedirect("application/ld+json", CONTEXTLESS_SELF_SIGNED.replace("KEY", key),
+                idIsTheTarget);
+        String sub = urls[0];
+        String kid = (idIsTheTarget ? urls[1] : sub) + "#k1";
+        String jwt = SelfIssuedJwts.sign(SelfIssuedJwts.claims(sub), "EdDSA", kid, pair.getPrivate(), "Ed25519");
+        return new SelfSignedCidVerifier(null).verify(jwt, SelfIssuedJwts.AUDIENCE);
+    }
+
+    /**
+     * R-29. A WebID that answers {@code 303 See Other} with its document — the httpRange-14 pattern —
+     * used to fail as "did not return a controlled identifier document".
+     */
+    @Test
+    void aSubjectThatRedirectsToItsDocumentVerifies() throws Exception {
+        SsiCidVerificationResult result = selfSignedBehindRedirect(false);
+        assertTrue(result.isValid(), () -> result.getErrors() + " " + result.getChecks());
+    }
+
+    /** R-29. The document found after a redirect must still be about the subject, not about where it was found. */
+    @Test
+    void aRedirectedDocumentMustStillBeAboutTheSubject() throws Exception {
+        SsiCidVerificationResult result = selfSignedBehindRedirect(true);
+        assertFalse(result.isValid());
+        assertEquals(Boolean.FALSE, result.getChecks().get("subjectIdMatches"));
     }
 }

@@ -333,9 +333,10 @@ that reaches itself as `http://127.0.0.1:8080` works once that address is on the
 
 The guard is installed as the **DNS resolver** of the HTTP client the verifiers use, not as a separate
 check in front of it, so the addresses it approves are exactly the addresses connected to — there is no
-second lookup for a hostile name server to poison. That client also refuses to follow redirects.
-Neither property depends on `spi-connections-http-client-default-allow-redirects`, so changing that
-server-wide setting cannot open a hole here.
+second lookup for a hostile name server to poison. That client does not follow redirects on its own;
+dereferencing a subject follows up to three, each vetted as a new request. Neither property depends on
+`spi-connections-http-client-default-allow-redirects`, so changing that server-wide setting cannot open
+a hole here.
 
 ---
 

@@ -172,6 +172,13 @@ realm under the default `bearer` access mode, before any signature is checked.
 
 ### Added
 
+- **A subject's document may be behind a redirect** (R-29). Redirects were refused outright, so a WebID
+  that answers `303 See Other` with its document — the httpRange-14 pattern — or one that redirects
+  http to https failed as "did not return a controlled identifier document". Dereferencing a subject,
+  in both JWT suites, now follows up to three `301`/`302`/`303`/`307`/`308` redirects. Each hop is a new
+  request vetted as the first is — the SSRF guard, the https rule, the origin's breaker — the chain
+  shares the one fetch deadline, and the document must still have the original subject as its `id`.
+  OpenID discovery, the JWK set and `did:web` documents still follow no redirect.
 - **A maximum credential lifetime** (R-28), `max-credential-lifetime-seconds`, off by default. Neither
   JWT suite bounds how long a credential may be valid, so a self-issued one with `exp` in 9999 verified
   until then; with the setting, `exp − iat` over it fails `lifetimeWithinLimit` in both JWT suites.

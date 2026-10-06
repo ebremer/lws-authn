@@ -80,6 +80,19 @@ class OutboundHttpClientTest {
             exchange.getResponseHeaders().add("Location", "http://localhost:" + port + "/elsewhere");
             respond(exchange, 302, "");
         });
+        server.createContext("/see-other", exchange -> {
+            exchange.getResponseHeaders().add("Location", "/cid#fragment-dropped");
+            respond(exchange, 303, "");
+        });
+        server.createContext("/loop", exchange -> {
+            exchange.getResponseHeaders().add("Location", "/loop");
+            respond(exchange, 302, "");
+        });
+        server.createContext("/to-unlisted", exchange -> {
+            // https, so it is the address 127.0.0.1 that is refused, not the scheme
+            exchange.getResponseHeaders().add("Location", "https://127.0.0.1:" + port + "/cid");
+            respond(exchange, 307, "");
+        });
         // One byte every 200 ms, without end: every read returns well inside the read timeout.
         server.createContext("/trickle", exchange -> {
             exchange.sendResponseHeaders(200, 0);
@@ -185,6 +198,34 @@ class OutboundHttpClientTest {
         assertEquals(302, response.status(),
                 "a redirect must surface as a 302, never be followed to a target the guard has not seen");
         assertNull(response.body());
+    }
+
+    /**
+     * R-29. Dereferencing a subject follows a redirect — a WebID answering {@code 303 See Other}, the
+     * httpRange-14 pattern, or http going to https — where {@link OutboundHttp#fetch} does not.
+     */
+    @Test
+    void dereferencingASubjectFollowsRedirects() throws Exception {
+        OutboundHttp.Fetched moved = OutboundHttp.dereference(url("/redirect"), null, null);
+        assertEquals(200, moved.status());
+        assertEquals("the redirect target", moved.body());
+        OutboundHttp.Fetched seeOther = OutboundHttp.dereference(url("/see-other"), null, null);
+        assertEquals(200, seeOther.status());
+        assertEquals("the controlled identifier document", seeOther.body());
+    }
+
+    /** R-29. Three redirects and no more: the fourth answer is returned as it is. */
+    @Test
+    void dereferencingStopsAfterThreeRedirects() throws Exception {
+        assertEquals(302, OutboundHttp.dereference(url("/loop"), null, null).status());
+    }
+
+    /** R-29. Every hop is vetted as the first request is: a redirect cannot reach what a URL could not. */
+    @Test
+    void eachRedirectIsVettedLikeTheFirstRequest() {
+        SsrfGuard.BlockedException refused = assertThrows(SsrfGuard.BlockedException.class,
+                () -> OutboundHttp.dereference(url("/to-unlisted"), null, null));
+        assertFalse(refused instanceof SsrfGuard.InsecureSchemeException);
     }
 
     /**
