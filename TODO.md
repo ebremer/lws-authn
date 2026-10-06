@@ -502,8 +502,8 @@ is needed.
   for the same minor and tells operators to apply patch releases rather than "must match".
   26.8.0 stays with W-5.
 
-- [ ] **R-15 · The live deployment still runs pre-P0 code** (carried forward from **P0-10**).
-  `High` · operations · `M` · *not re-verified from here*
+- [ ] **R-15 · The live deployment does not run these fixes, and its verify endpoints are public** (carried forward from **P0-10**).
+  `High` · operations · `M` · *re-checked from outside, 6 October 2026 — see the end of this item*
   Unchanged from P0-10: `https://ebremer.com/auth` predates the P0–P3 work. The upgrade is breaking
   (authenticated verify endpoints, `Authorization` meaning the caller, `azp`/`iat`/`kid` required) and
   will be more so after this review's P1 items. **Do:** as P0-10 says — stage it with
@@ -519,6 +519,14 @@ is needed.
   verify known-good credentials, switch back to `bearer`, and delete any `lws-demo` realm (R-13). §16's
   "Upgrade Keycloak itself" also no longer says every Keycloak upgrade needs a provider rebuild (R-14).
   Still to do, on the live server: all of the above, and running `LwsAuthIT` with Docker first (R-43).
+  **Re-checked from outside on 6 October 2026, read-only:** the live server is *not* pre-P0 any more.
+  `POST …/realms/Halcyon/lws/verify` with `credential=x` answers `200` `{"valid": false, …, "traceId"}`
+  (P3-1's shape) and `…/lws-ssi-did-key/verify` is `404` (removed with S-16), so it runs a build from
+  late September. But an anonymous POST with no credential gets `400 invalid_request`, not `401`: it
+  runs with `LWS_AUTHN_VERIFY_ACCESS=public`. Every anonymous caller on the internet can therefore reach
+  R-01 to R-04 there today. That makes this item more urgent, and changes the runbook's step 7: the
+  server is already in `public` mode, so the deploy keeps it there and step 8 is the first time its
+  callers will need an access token and the `lws-verifier` role.
 
 ---
 
