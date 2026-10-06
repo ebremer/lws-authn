@@ -13,7 +13,9 @@ package com.ebremer.lws.authn.net;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.ConnectException;
 import java.net.URI;
+import java.net.UnknownHostException;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
@@ -23,12 +25,17 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.function.LongSupplier;
+
+import javax.net.ssl.SSLHandshakeException;
 
 import org.apache.http.Header;
 import org.apache.http.HttpEntity;
 import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpGet;
+import org.apache.http.conn.ConnectTimeoutException;
+import org.apache.http.conn.ConnectionPoolTimeoutException;
 import org.apache.http.entity.ContentType;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.jboss.logging.Logger;
@@ -103,14 +110,14 @@ public final class OutboundHttp {
     private static final int POOL_SIZE = 16;
     private static final int MAX_PER_ROUTE = 4;
 
-    /** Consecutive failures against one host that trip its breaker. */
+    /** Failures against one origin, none further apart than {@link #FAILURE_WINDOW_MS}, that trip its breaker. */
     private static final int FAILURE_THRESHOLD = 5;
     /** How long failures accumulate, and how long the breaker then stays open (milliseconds). */
     private static final long FAILURE_WINDOW_MS = 10_000L;
-    /** Upper bound on the number of hosts tracked by the breaker. */
+    /** Upper bound on the number of origins tracked by the breaker. */
     private static final int MAX_TRACKED_HOSTS = 1024;
 
-    /** Thrown when a host is refused without a fetch because its breaker is open. */
+    /** Thrown when an origin is refused without a fetch because its breaker is open. */
     public static final class HostUnavailableException extends RuntimeException {
         public HostUnavailableException(String message) {
             super(message);
@@ -170,23 +177,58 @@ public final class OutboundHttp {
      * @param session the request's session: whose caller the fetch counts against, and — in
      *                {@code session} mode — whose HTTP client fetches. May be {@code null} (tests).
      * @throws SsrfGuard.BlockedException  if the URL must not be fetched
-     * @throws HostUnavailableException    if the host has failed repeatedly in the last few seconds
+     * @throws HostUnavailableException    if the origin could not be reached repeatedly in the last few seconds
      * @throws CallerBusyException         if the caller already has its share of fetches in flight
      * @throws ResponseTooLargeException   if the body is over the size cap
      * @throws IOException                 if the fetch fails or overruns its deadline
      */
     public static Fetched fetch(String url, String accept, KeycloakSession session) throws IOException {
-        // The breaker comes first: its whole purpose is to stop paying for a host that keeps failing,
-        // and resolving the name before consulting it would pay part of that cost anyway.
-        requireClosedCircuit(hostOf(url));
+        // The breaker comes first: its whole purpose is to stop paying for an origin that cannot be
+        // reached, and resolving the name before consulting it would pay part of that cost anyway.
+        String origin = originOf(url);
+        requireClosedCircuit(origin);
         SsrfGuard.verify(url);
         String caller = VerifyAccess.callerKey(session);
         acquire(caller);
         try {
-            return execute(url, accept, client(session));
+            Fetched fetched = execute(url, accept, client(session));
+            markSuccess(origin); // it answered; whatever the answer, the origin is reachable
+            return fetched;
+        } catch (IOException e) {
+            if (isOriginFailure(e)) {
+                markFailure(origin);
+            }
+            throw e;
         } finally {
             release(caller);
         }
+    }
+
+    /**
+     * Whether a failed fetch says the <em>origin</em> cannot be reached, as opposed to something about
+     * the one URL that was asked for (R-02).
+     *
+     * <p>Only the first kind may count towards the breaker, because the URL is the caller's choice. A
+     * breaker that counted 404s, slow or oversized bodies, or a document that would not parse let any
+     * caller trip it against any origin — five credentials whose {@code sub} named a missing path on
+     * this server's own host stopped every hosted-WebID verification — and then kept it tripped. What
+     * remains is what no path can produce: the name does not resolve (to an address this deployment may
+     * reach), the connection is refused or never completes, or the TLS handshake fails. A slow or hostile
+     * server is not the breaker's to handle; the deadline, the size cap and the per-caller bound already
+     * bound what it can cost (R-01).</p>
+     *
+     * <p>Not counted although they look like connection failures: waiting too long for a connection
+     * from the pool ({@link ConnectionPoolTimeoutException}, a subclass of the connect timeout), which
+     * is about this server's load, not the origin; and an abort at the deadline.</p>
+     */
+    static boolean isOriginFailure(IOException e) {
+        if (e instanceof ConnectionPoolTimeoutException) {
+            return false;
+        }
+        return e instanceof ConnectTimeoutException
+                || e instanceof ConnectException
+                || e instanceof UnknownHostException
+                || e instanceof SSLHandshakeException;
     }
 
     private static Fetched execute(String url, String accept, CloseableHttpClient client) throws IOException {
@@ -346,7 +388,7 @@ public final class OutboundHttp {
         return mode != null && "session".equalsIgnoreCase(mode.trim());
     }
 
-    // -------------------------------------------------------------------------- per-host breaker
+    // ------------------------------------------------------------------------ per-origin breaker
 
     private static final Map<String, Circuit> CIRCUITS = new LinkedHashMap<>(64, 0.75f, true) {
         @Override
@@ -355,74 +397,113 @@ public final class OutboundHttp {
         }
     };
 
+    /** Test seam: the breaker's clock. */
+    private static volatile LongSupplier clock = System::currentTimeMillis;
+
     private static final class Circuit {
         private int failures;
+        /** Closed: when the failures so far are forgotten. Open: when it closes again. */
         private long windowEndsAt;
+        private boolean open;
     }
 
     /**
-     * Records that a fetch of {@code url} failed. Enough failures in a short window trip the host's
-     * breaker, so an unauthenticated caller cannot use a dead or hostile target to make this server
-     * spend five seconds per request on its behalf.
+     * Records that {@code url}'s origin could not be reached. Enough of these close together open its
+     * breaker for {@link #FAILURE_WINDOW_MS}, so a dead origin does not cost every caller a connect
+     * timeout. Once open, the window is fixed: a failure reported by a fetch that was already in flight
+     * does not extend it, and nothing else can, since a refused fetch is never attempted.
      */
-    public static void recordFailure(String url) {
-        String host = hostOf(url);
-        if (host == null) {
+    static void recordFailure(String url) {
+        markFailure(originOf(url));
+    }
+
+    /** Forgets any recorded failures for {@code url}'s origin, as an answer from it does. */
+    static void recordSuccess(String url) {
+        markSuccess(originOf(url));
+    }
+
+    private static void markFailure(String origin) {
+        if (origin == null) {
             return;
         }
-        long now = System.currentTimeMillis();
+        long now = clock.getAsLong();
         synchronized (CIRCUITS) {
-            Circuit circuit = CIRCUITS.computeIfAbsent(host, h -> new Circuit());
-            if (now > circuit.windowEndsAt) {
+            Circuit circuit = CIRCUITS.computeIfAbsent(origin, o -> new Circuit());
+            if (circuit.open) {
+                if (now <= circuit.windowEndsAt) {
+                    return;
+                }
+                circuit.open = false;
+                circuit.failures = 0;
+            } else if (now > circuit.windowEndsAt) {
                 circuit.failures = 0;
             }
             circuit.failures++;
             circuit.windowEndsAt = now + FAILURE_WINDOW_MS;
+            circuit.open = circuit.failures >= FAILURE_THRESHOLD;
         }
     }
 
-    /** Clears any recorded failures for the host of {@code url}, after a fetch succeeds. */
-    public static void recordSuccess(String url) {
-        String host = hostOf(url);
-        if (host == null) {
+    private static void markSuccess(String origin) {
+        if (origin == null) {
             return;
         }
         synchronized (CIRCUITS) {
-            CIRCUITS.remove(host);
+            CIRCUITS.remove(origin);
         }
     }
 
-    private static void requireClosedCircuit(String host) {
-        if (host == null) {
+    private static void requireClosedCircuit(String origin) {
+        if (origin == null) {
             return;
         }
-        long now = System.currentTimeMillis();
+        long now = clock.getAsLong();
         synchronized (CIRCUITS) {
-            Circuit circuit = CIRCUITS.get(host);
+            Circuit circuit = CIRCUITS.get(origin);
             if (circuit == null) {
                 return;
             }
             if (now > circuit.windowEndsAt) {
-                CIRCUITS.remove(host);
+                CIRCUITS.remove(origin);
                 return;
             }
-            if (circuit.failures >= FAILURE_THRESHOLD) {
-                throw new HostUnavailableException("host '" + host + "' recently failed repeatedly; not retrying yet");
+            if (circuit.open) {
+                throw new HostUnavailableException("'" + origin + "' could not be reached repeatedly; not retrying yet");
             }
         }
     }
 
-    /** Test seam: forget every recorded failure. */
+    /** Test seam: forget every recorded failure, and go back to the real clock. */
     public static void resetCircuits() {
         synchronized (CIRCUITS) {
             CIRCUITS.clear();
         }
+        clock = System::currentTimeMillis;
     }
 
-    private static String hostOf(String url) {
+    /** Test seam: run the breaker on {@code millis} instead of the wall clock. */
+    static void useClock(LongSupplier millis) {
+        clock = millis;
+    }
+
+    /**
+     * The breaker's key: scheme, host and port, with the default port made explicit. Keyed on the host
+     * alone, an unreachable {@code http://host:8080} would also have refused {@code https://host}.
+     */
+    static String originOf(String url) {
+        if (url == null) {
+            return null;
+        }
         try {
-            String host = URI.create(url).getHost();
-            return host == null ? null : host.toLowerCase(Locale.ROOT);
+            URI uri = URI.create(url);
+            String scheme = uri.getScheme();
+            String host = uri.getHost();
+            if (scheme == null || host == null) {
+                return null;
+            }
+            scheme = scheme.toLowerCase(Locale.ROOT);
+            int port = uri.getPort() >= 0 ? uri.getPort() : "https".equals(scheme) ? 443 : "http".equals(scheme) ? 80 : -1;
+            return scheme + "://" + host.toLowerCase(Locale.ROOT) + ":" + port;
         } catch (Exception e) {
             return null;
         }

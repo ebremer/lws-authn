@@ -62,6 +62,14 @@ realm under the default `bearer` access mode, before any signature is checked.
   non-`200` body is never read; and one caller may have at most `http-max-concurrent-per-caller`
   (default 4) fetches in flight, refused at once rather than queued. In `session` HTTP mode redirects
   are now also refused per request.
+- **No caller can trip the circuit breaker against a healthy origin** (R-02). The breaker counted any
+  non-`200`, a wrong media type or a document that did not parse — and the verifier counted the
+  breaker's own refusal as one more failure, pushing the window out each time. Five credentials whose
+  `sub` named a missing path on this server's own host therefore stopped every hosted-WebID
+  verification for as long as anyone kept asking. The breaker now keeps its own books inside
+  `OutboundHttp.fetch`, counts only failures no path can produce (unresolvable, connection refused or
+  timed out, TLS handshake failed — not a pool wait, which is this server's load), keys on scheme, host
+  and port rather than host alone, and once open closes on schedule.
 
 ### Added
 

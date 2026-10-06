@@ -318,15 +318,16 @@ public class SelfSignedCidVerifier {
     /** Dereferences an HTTP(S) subject and returns the verification methods its CID document offers. */
     private List<VerificationMethod> dereference(String sub, SsiCidVerificationResult result) {
         try {
-            // OutboundHttp applies the SSRF policy, refuses a host that has been failing, and fetches
-            // through a client that follows no redirects and resolves only vetted addresses.
+            // OutboundHttp applies the SSRF policy, refuses a host that cannot currently be reached, and
+            // fetches through a client that follows no redirects and resolves only vetted addresses. It
+            // keeps the breaker's books itself: what happens here after the fetch — a 404, the wrong
+            // media type, a document that does not parse — says nothing about the host's health (R-02).
             OutboundHttp.Fetched response = OutboundHttp.fetch(sub,
                     SsiCidConstants.TURTLE + ", " + SsiCidConstants.JSON_LD + ";q=0.9, "
                             + SsiCidConstants.N_TRIPLES + ";q=0.8, " + SsiCidConstants.RDF_XML + ";q=0.7", session);
             if (response.status() != 200) {
                 log.debugf("[%s] dereferencing sub <%s> returned HTTP %d", result.getTraceId(), sub,
                         response.status());
-                OutboundHttp.recordFailure(sub);
                 result.check("subjectDereferenced", false);
                 result.error("Dereferencing 'sub' <" + sub + "> did not return a controlled identifier document");
                 return null;
@@ -345,7 +346,6 @@ public class SelfSignedCidVerifier {
                         result.getTraceId(), sub);
                 methods = collectFromJsonLd(body, sub);
             }
-            OutboundHttp.recordSuccess(sub);
             result.check("subjectDereferenced", true);
             result.check("subjectIdMatches", true);
             return methods;
@@ -355,7 +355,6 @@ public class SelfSignedCidVerifier {
             // is the difference between "your document is not RDF" and "something went wrong".
             log.debugf("[%s] sub <%s> was served as '%s', which is not an RDF syntax this verifier reads",
                     result.getTraceId(), sub, wrongSyntax.getContentType());
-            OutboundHttp.recordFailure(sub);
             result.check("subjectDereferenced", false);
             result.error("The document at 'sub' <" + sub + "> was served as '" + wrongSyntax.getContentType()
                     + "', which is not an RDF syntax this verifier reads");
@@ -363,7 +362,6 @@ public class SelfSignedCidVerifier {
         } catch (Exception e) {
             // The cause can name the address the host resolved to, so it is logged, not returned.
             log.debugf(e, "[%s] could not dereference or parse sub <%s>", result.getTraceId(), sub);
-            OutboundHttp.recordFailure(sub);
             result.check("subjectDereferenced", false);
             result.error("Failed to dereference 'sub' <" + sub + "> as a controlled identifier document");
             return null;
@@ -426,14 +424,12 @@ public class SelfSignedCidVerifier {
             if (response.status() != 200) {
                 log.debugf("[%s] resolving <%s> via %s returned HTTP %d", result.getTraceId(), did, url,
                         response.status());
-                OutboundHttp.recordFailure(url);
                 result.check("subjectDereferenced", false);
                 result.error("Resolving 'sub' <" + did + "> did not return a DID document");
                 return null;
             }
             String contentType = response.contentType();
             if (!Dids.isDidDocumentMediaType(contentType)) {
-                OutboundHttp.recordFailure(url);
                 result.check("subjectDereferenced", false);
                 result.error("The DID document for 'sub' <" + did + "> was served as '"
                         + contentType.split(";")[0].trim() + "', which is not a DID document media type");
@@ -441,17 +437,14 @@ public class SelfSignedCidVerifier {
             }
             JsonNode document = JsonSerialization.mapper.readTree(response.body());
             if (document == null || !document.isObject()) {
-                OutboundHttp.recordFailure(url);
                 result.check("subjectDereferenced", false);
                 result.error("Resolving 'sub' <" + did + "> did not return a DID document");
                 return null;
             }
-            OutboundHttp.recordSuccess(url);
             return document;
         } catch (Exception e) {
             // As for an HTTPS subject: the cause can describe this server's network, so it is logged.
             log.debugf(e, "[%s] could not resolve <%s> via %s", result.getTraceId(), did, url);
-            OutboundHttp.recordFailure(url);
             result.check("subjectDereferenced", false);
             result.error("Failed to resolve 'sub' <" + did + "> to a DID document");
             return null;

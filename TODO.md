@@ -190,7 +190,7 @@ is needed.
   `OutboundHttpClientTest` adds a trickling body, an endless body (and asserts the server stops being
   read), a stalled server, a declared gigabyte, and the per-caller bound; R-02 is the breaker half.
 
-- [ ] **R-02 · Any caller can hold the per-host circuit breaker open, and it re-arms itself.**
+- [x] **R-02 · Any caller can hold the per-host circuit breaker open, and it re-arms itself.**
   `High` · security/DoS · `S` · *verified + demonstrated*
   `OutboundHttp.java:194-239`. `recordFailure` runs on failures that say nothing about the host's
   health — any non-200 (a 404 for a path the attacker chose), a wrong `Content-Type`, a parse error, a
@@ -205,6 +205,19 @@ is needed.
   **Do:** count only transport failures (connect error, timeout, 5xx); never count a refusal by the
   breaker itself; don't extend the window while open (half-open after it lapses); key on
   scheme+host+port; use a per-URL negative cache for 404s; record JWKS failures against the JWKS host.
+  **Done, with one change of plan:** the breaker now counts only failures that say the *origin* cannot
+  be reached — `UnknownHostException`, `ConnectException` (refused), `ConnectTimeoutException` and
+  `SSLHandshakeException` — and not timeouts during the read or 5xx, which this item had proposed
+  counting. Both depend on the path, which the caller chooses: a slow endpoint or one that answers 500
+  can be found on many healthy origins, so counting them would have left the attack open. A slow or
+  hostile server is bounded by R-01 instead. A pool wait (`ConnectionPoolTimeoutException`, a subclass
+  of the connect timeout) and a deadline abort are excluded. Bookkeeping moved into `OutboundHttp.fetch`
+  — the verifiers no longer call `recordFailure`/`recordSuccess`, which are now package-private test
+  seams — so a breaker refusal is never recorded, and any answer from the origin clears it. Once open
+  the window is fixed (a late failure from a fetch already in flight does not extend it), and the key is
+  `scheme://host:port`. JWKS failures therefore count against the JWKS origin. `OutboundHttpCircuitTest`
+  runs on a test clock (refusals and late failures do not extend; per-origin keys; the classification),
+  and `OutboundHttpClientTest` shows ten 404s leave the origin open and a refused port trips it.
 
 - [ ] **R-03 · Quadratic CPU in DID/CID key handling: one request can burn minutes.**
   `High` · security/DoS · `M` · *demonstrated*

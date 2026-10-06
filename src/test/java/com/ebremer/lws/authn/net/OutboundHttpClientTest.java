@@ -13,7 +13,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.net.ConnectException;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -24,6 +27,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
@@ -146,6 +150,11 @@ class OutboundHttpClientTest {
         OutboundHttp.resetCircuits();
     }
 
+    @AfterEach
+    void forgetFailures() {
+        OutboundHttp.resetCircuits();
+    }
+
     private static void respond(HttpExchange exchange, int status, String body) throws IOException {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
         exchange.sendResponseHeaders(status, bytes.length == 0 ? -1 : bytes.length);
@@ -261,6 +270,36 @@ class OutboundHttpClientTest {
         } finally {
             callers.shutdownNow();
         }
+    }
+
+    /**
+     * R-02. The path is the caller's choice, so nothing a path returns may count against the origin:
+     * five credentials whose {@code sub} named a missing path on this server's own host used to stop
+     * every hosted-WebID verification.
+     */
+    @Test
+    void aMissingPathNeverTripsTheBreaker() throws Exception {
+        for (int i = 0; i < 10; i++) {
+            assertEquals(404, OutboundHttp.fetch(url("/missing"), null, null).status());
+        }
+        assertEquals(200, OutboundHttp.fetch(url("/cid"), null, null).status());
+    }
+
+    /** R-02. An origin that refuses connections is what the breaker is for. */
+    @Test
+    void anUnreachableOriginTripsTheBreaker() throws Exception {
+        int closedPort;
+        try (ServerSocket socket = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
+            closedPort = socket.getLocalPort();
+        }
+        String unreachable = "http://localhost:" + closedPort + "/cid";
+        for (int i = 0; i < 5; i++) {
+            // Apache's HttpHostConnectException, a ConnectException
+            assertThrows(ConnectException.class, () -> OutboundHttp.fetch(unreachable, null, null));
+        }
+        assertThrows(OutboundHttp.HostUnavailableException.class, () -> OutboundHttp.fetch(unreachable, null, null));
+        assertEquals(200, OutboundHttp.fetch(url("/cid"), null, null).status(),
+                "another port on the same host is another origin");
     }
 
     private void assertAbortedAtTheDeadline(String path) {

@@ -27,8 +27,13 @@ behaviours are covered by tests — `mvn test` for the unit tests, `mvn verify` 
   - **Important:** if this Keycloak hosts its own controlled identifier documents on a loopback or
     internal address — so the OpenID verifier dereferences *itself* — you **must** allow-list that
     host, or OpenID `/verify` is blocked.
-  - A host that fails repeatedly is short-circuited for a few seconds, so a dead or hostile target
-    cannot be used to make this server spend five seconds per request on the caller's behalf.
+  - An origin (scheme, host and port) that **cannot be reached** five times in quick succession — the
+    name does not resolve, the connection is refused or times out, the TLS handshake fails — is refused
+    without a fetch for ten seconds, so a dead target does not cost every caller a connect timeout.
+    Nothing that depends on the *path* counts, since the path is the caller's choice: a `404`, a slow
+    or oversized body or a document that does not parse says nothing about the origin, and counting
+    them let any caller shut a healthy origin out. Once open, the breaker closes on schedule however
+    often it is asked.
 - **Bounded fetches.** A hostile server can try to hold a verifier's fetch open — trickling a byte at a
   time, or streaming without end. Each fetch has a hard **deadline** on the whole exchange
   (`http-deadline-millis`, 10 s), enforced by aborting the request, which shuts the connection whatever

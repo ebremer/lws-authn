@@ -260,15 +260,16 @@ public class LWSCredentialVerifier {
      */
     private Model dereference(String sub, VerificationResult result) {
         try {
-            // OutboundHttp applies the SSRF policy, refuses a host that has been failing, and fetches
-            // through a client that follows no redirects and resolves only vetted addresses.
+            // OutboundHttp applies the SSRF policy, refuses a host that cannot currently be reached, and
+            // fetches through a client that follows no redirects and resolves only vetted addresses. It
+            // keeps the breaker's books itself: what happens here after the fetch — a 404, the wrong
+            // media type, a document that does not parse — says nothing about the host's health (R-02).
             OutboundHttp.Fetched response = OutboundHttp.fetch(sub,
                     LWSConstants.TURTLE + ", " + LWSConstants.JSON_LD + ";q=0.9, "
                             + LWSConstants.N_TRIPLES + ";q=0.8, " + LWSConstants.RDF_XML + ";q=0.7", session);
             if (response.status() != 200) {
                 log.debugf("[%s] dereferencing sub <%s> returned HTTP %d", result.getTraceId(), sub,
                         response.status());
-                OutboundHttp.recordFailure(sub);
                 result.check("subjectDereferenced", false);
                 result.error("Dereferencing 'sub' <" + sub + "> did not return a controlled identifier document");
                 return null;
@@ -285,7 +286,6 @@ public class LWSCredentialVerifier {
                         result.getTraceId(), sub);
                 model = modelFromCompactJsonLd(body, sub);
             }
-            OutboundHttp.recordSuccess(sub);
             result.check("subjectDereferenced", true);
 
             // CID 1.0: "A controlled identifier document MUST contain an `id` value in the topmost
@@ -306,7 +306,6 @@ public class LWSCredentialVerifier {
             // is the difference between "your document is not RDF" and "something went wrong".
             log.debugf("[%s] sub <%s> was served as '%s', which is not an RDF syntax this verifier reads",
                     result.getTraceId(), sub, wrongSyntax.getContentType());
-            OutboundHttp.recordFailure(sub);
             result.check("subjectDereferenced", false);
             result.error("The document at 'sub' <" + sub + "> was served as '" + wrongSyntax.getContentType()
                     + "', which is not an RDF syntax this verifier reads");
@@ -314,7 +313,6 @@ public class LWSCredentialVerifier {
         } catch (Exception e) {
             // The cause can name the address the host resolved to, so it is logged, not returned.
             log.debugf(e, "[%s] could not dereference or parse sub <%s>", result.getTraceId(), sub);
-            OutboundHttp.recordFailure(sub);
             result.check("subjectDereferenced", false);
             result.error("Failed to dereference 'sub' <" + sub + "> as a controlled identifier document");
             return null;
@@ -421,15 +419,13 @@ public class LWSCredentialVerifier {
 
     /** Performs OpenID Connect Discovery on iss and returns the public key matching the token's kid. */
     private PublicKey resolveSigningKey(String iss, JWSHeader header, VerificationResult result) {
-        String discoveryUrl = null;
         try {
             String base = iss.endsWith("/") ? iss.substring(0, iss.length() - 1) : iss;
-            discoveryUrl = base + "/.well-known/openid-configuration";
+            String discoveryUrl = base + "/.well-known/openid-configuration";
             OutboundHttp.Fetched discovery = OutboundHttp.fetch(discoveryUrl, "application/json", session);
             if (discovery.status() != 200) {
                 log.debugf("[%s] OpenID discovery for <%s> returned HTTP %d", result.getTraceId(), iss,
                         discovery.status());
-                OutboundHttp.recordFailure(discoveryUrl);
                 result.check("jwksResolved", false);
                 result.error("OpenID Connect Discovery for <" + iss + "> did not return a configuration document");
                 return null;
@@ -454,13 +450,11 @@ public class LWSCredentialVerifier {
             OutboundHttp.Fetched jwks = OutboundHttp.fetch(jwksUri, "application/jwk-set+json, application/json", session);
             if (jwks.status() != 200) {
                 log.debugf("[%s] the JWKS for <%s> returned HTTP %d", result.getTraceId(), iss, jwks.status());
-                OutboundHttp.recordFailure(discoveryUrl);
                 result.check("jwksResolved", false);
                 result.error("The JWK set published by <" + iss + "> could not be retrieved");
                 return null;
             }
             JSONWebKeySet keySet = JsonSerialization.readValue(jwks.body(), JSONWebKeySet.class);
-            OutboundHttp.recordSuccess(discoveryUrl);
             String kid = header.getKeyId();
             String alg = header.getRawAlgorithm();
             if (keySet.getKeys() != null) {
@@ -481,9 +475,6 @@ public class LWSCredentialVerifier {
             return null;
         } catch (Exception e) {
             log.debugf(e, "[%s] OpenID Connect discovery failed for <%s>", result.getTraceId(), iss);
-            if (discoveryUrl != null) {
-                OutboundHttp.recordFailure(discoveryUrl);
-            }
             result.check("jwksResolved", false);
             result.error("OpenID Connect Discovery failed for <" + iss + ">");
             return null;
