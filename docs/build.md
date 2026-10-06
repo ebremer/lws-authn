@@ -79,8 +79,8 @@ build picks one of two strategies deliberately, because the wrong one is a runti
 
 | Situation | Treatment | Examples |
 |---|---|---|
-| An interface or facade whose Keycloak copy satisfies Jena | `provided` — use the server's, bundle nothing | `slf4j-api`, `jcl-over-slf4j`, `jakarta.json`, `jspecify` |
-| A library carrying behaviour Jena depends on | bundle the version Jena declares and **relocate** it | `commons-codec` 1.22.0, `titanium-json-ld` 1.7.0, `commons-collections4` 4.5.0, `caffeine` 3.2.4 |
+| An interface or facade whose Keycloak copy satisfies Jena | `provided` — use the server's, bundle nothing | `slf4j-api`, `jcl-over-slf4j`, `jakarta.json`, `jspecify`, `error_prone_annotations` |
+| A library carrying behaviour Jena depends on | bundle the version Jena declares and **relocate** it | `commons-codec` 1.22.0, `titanium-json-ld` 1.7.0, `commons-collections4` 4.5.0, `caffeine` 3.2.4, `gson` 2.14.0, `commons-io` 2.22.0, `commons-lang3` 3.20.0 |
 
 Bundling an unrelocated second copy of a library the server already has puts two implementations of one
 package on the classpath; marking one `provided` when the server's copy is older silently downgrades
@@ -90,8 +90,12 @@ POMs declare (commons-codec 1.11, commons-collections4 4.4, Titanium 1.3.3, Caff
 plugin's comment in `pom.xml` tabulates all three columns.
 
 `mvn package` enforces this: `maven-enforcer-plugin` fails the build on duplicate classes among the
-bundled artifacts, and the shade plugin's `artifactSet` excludes hold regardless of what Maven's scope
-mediation decides. Keycloak's own SAML, crypto and HTTP libraries are `provided` — they are part of the
+bundled artifacts, and on a bundled library that Maven resolved to an older version than something in
+the tree asks for (`requireUpperBoundDeps`); the shade plugin's `artifactSet` excludes hold regardless
+of what Maven's scope mediation decides. `mvn verify` then reads the JAR (`ShadedJarContentsIT`, no
+Docker needed) and fails on any class bundled under its own package name unless that package is on a
+short list the server does not have — Jena itself, Thrift, RoaringBitmap, Dexx, commons-compress and
+commons-csv. Keycloak's own SAML, crypto and HTTP libraries are `provided` — they are part of the
 server runtime.
 
 Getting this wrong does not fail a unit test: it fails when Jena loads inside Keycloak. `mvn verify`

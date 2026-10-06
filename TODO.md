@@ -1093,7 +1093,7 @@ is needed.
   and commons-codec 1.22.1 updates are made by hand under R-49. **Left for you:** close PRs #3, #4 and
   #8 on GitHub — Dependabot will not reopen what its configuration now ignores.
 
-- [ ] **R-42 · The shaded JAR bundles four libraries Keycloak also ships, unrelocated.**
+- [x] **R-42 · The shaded JAR bundles four libraries Keycloak also ships, unrelocated.**
   `Medium` · packaging · `S` · *verified (JAR contents)*
   | Package | In the JAR | Keycloak 26.7.4 ships |
   |---|---|---|
@@ -1107,6 +1107,20 @@ is needed.
   **Do:** pin and relocate (or make `provided` where the server's copy satisfies Jena); add
   `requireUpperBoundDeps`; add a CI step that fails on unrelocated `com/google/gson` or
   `org/apache/commons/{io,lang3}` entries in the JAR.
+  **Done.** Against the 26.8.0 server (its `lib/lib/main`, listed from the release zip) the table now
+  reads gson 2.14.0, commons-io 2.22.0, commons-lang3 3.20.0, error_prone_annotations 2.49.0. Gson,
+  commons-io and commons-lang3 are pinned at Jena's versions in `<dependencyManagement>` and relocated
+  under `com.ebremer.lws.authn.shaded`; the commons-io pin is what moves the bundled copy from 2.20.0
+  (commons-compress's, at depth 2) to Jena's 2.22.0. Error Prone's annotations — Gson's, unread at run
+  time — are `provided` at the server's 2.49.0 and excluded from the JAR. `requireUpperBoundDeps` is on
+  and passes; with the commons-io pin taken out it fails, naming the two paths. Instead of a CI shell
+  step, `ShadedJarContentsIT` (Failsafe, no Docker) reads the JAR: every class must be this provider's
+  or in a package the server lacks (Jena, Thrift, RoaringBitmap, Dexx, commons-compress — build-time only
+  in Keycloak — and commons-csv), and one class of each relocated library must be there; with the Gson
+  relocation removed it fails on both counts. The JAR was also loaded outside Keycloak with only what the
+  server provides (keycloak-core, Jackson, Parsson, slf4j, protobuf): Turtle and JSON-LD parse, Turtle,
+  JSON-LD and RDF/JSON write, and SPARQL JSON results round-trip. `LwsAuthIT` is the real proof and has
+  not run here.
 
 - [x] **R-43 · The integration test skips silently without Docker; nothing proves it ran**
   (absorbs **S-15**). `Low` · ci/test · `S` · *verified*

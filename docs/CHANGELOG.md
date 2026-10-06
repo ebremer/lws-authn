@@ -501,6 +501,12 @@ each may reject a document that used to verify. Check your issuers' documents be
   upload-artifact v7, CodeQL v4, dependency-review v5; all on Node 24), the runner is pinned to
   `ubuntu-24.04`, every job has a timeout, a newer push to a pull request cancels the older run, and
   pushes build `master` only, so a branch with a pull request is no longer built twice.
+- **Gson, commons-io and commons-lang3 are relocated** (R-42). They were bundled under their own
+  package names — a second copy of packages the server already has, and for commons-io an older one
+  (2.20.0, where Jena declares and Keycloak 26.8.0 ships 2.22.0). Now pinned at Jena's versions and
+  relocated, like commons-codec and the rest; Error Prone's annotations are no longer bundled. The build
+  fails on a bundled library resolved below a version the tree asks for (`requireUpperBoundDeps`), and
+  a new `ShadedJarContentsIT` fails on any class bundled unrelocated in a package Keycloak also has.
 - **Dependabot leaves deliberate pins alone** (R-41): the APIs Keycloak supplies, and minor or major
   updates of the libraries bundled at Jena's version, are ignored, as are JUnit majors.
 
