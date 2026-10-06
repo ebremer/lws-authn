@@ -38,7 +38,8 @@ public final class JwsSignatures {
         }
         Signature signature;
         switch (alg) {
-            case "EdDSA" -> signature = Signature.getInstance("Ed25519");
+            // The key decides the curve, Ed25519 or Ed448, as Keycloak's EdDSA verifier lets it (R-38).
+            case "EdDSA" -> signature = Signature.getInstance("EdDSA");
             case "ES256" -> signature = Signature.getInstance("SHA256withECDSAinP1363Format");
             case "ES384" -> signature = Signature.getInstance("SHA384withECDSAinP1363Format");
             case "ES512" -> signature = Signature.getInstance("SHA512withECDSAinP1363Format");

@@ -1026,11 +1026,21 @@ is needed.
   labels. Tests in `DidsTest` (`aDidWebPathCannotClimbOrSplit`, `aDidWebHostMustBeFullyQualified`), both
   failing against the previous code.
 
-- [ ] **R-38 · `PublicJwk` does not know AKP's private member.** `Info` · security · `S`
+- [x] **R-38 · `PublicJwk` does not know AKP's private member.** `Info` · security · `S`
   `PublicJwk.PRIVATE_MEMBERS` lacks `priv` (the `AKP` key type, which Keycloak 26.7.4's `JWKParser` now
   parses), so such a key would be trimmed rather than refused, and its `pub` dropped. Add `priv`, and
   refuse unknown key types explicitly. (Also: `JwsSignatures`, used outside Keycloak, treats EdDSA as
   Ed25519 only while Keycloak also verifies Ed448; a `did:key` is decoded twice per verification.)
+  **Done.** `PublicJwk.PRIVATE_MEMBERS` gains `priv`; `PUBLISHABLE_TYPES` = `RSA`, `EC`, `OKP`
+  (case-sensitive, RFC 7517 §4.1) and anything else — `oct`, `AKP`, unknown — is refused, with
+  `describeRejection` naming the type. AKP's `pub` is not added to the public members, because the
+  verifier cannot use an AKP key. `JwsSignatures` verifies `EdDSA` with the JDK's `EdDSA`, so the key
+  picks the curve. Following that through: `algMatchesKey` already admitted Ed448 for EdDSA, and the JDK
+  accepts the identity-key forgery on Ed448 too (demonstrated in `JwsChecksTest`), so
+  `JwsChecks.ed25519Problem` became `edwardsKeyProblem` with a new `jose/Ed448Points` (RFC 8032 §5.2.3
+  decoding, ×4 cofactor test), applied wherever the Ed25519 check was. Left as is: a `did:key` is decoded
+  once to build its document and again when that document is read like any other — cheap, and it keeps
+  one reading path.
 
 - [x] **R-39 · SAML always requires an `<AudienceRestriction>`** (challenges divergence 2 from the other
   side). `Info` · docs · `S`

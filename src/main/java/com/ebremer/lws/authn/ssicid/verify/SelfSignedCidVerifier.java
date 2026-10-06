@@ -744,11 +744,11 @@ public class SelfSignedCidVerifier {
                     methodId, privateMembers);
             return Optional.empty();
         }
-        // An Ed25519 key must be one only its holder can sign for: canonical, on the curve, not of small
-        // order. The JDK accepts the identity point, against which any message verifies (R-27).
-        String weakEd25519 = JwsChecks.ed25519Problem(jwk);
-        if (weakEd25519 != null) {
-            log.debugf("skipping verification method <%s>: %s", methodId, weakEd25519);
+        // An Ed25519 or Ed448 key must be one only its holder can sign for: canonical, on the curve, not of
+        // small order. The JDK accepts the identity point, against which any message verifies (R-27, R-38).
+        String weakEdwards = JwsChecks.edwardsKeyProblem(jwk);
+        if (weakEdwards != null) {
+            log.debugf("skipping verification method <%s>: %s", methodId, weakEdwards);
             return Optional.empty();
         }
         return Optional.of(new VerificationMethod(methodId, jwk, SsiCidConstants.TYPE_JSON_WEB_KEY, null,

@@ -347,6 +347,16 @@ realm under the default `bearer` access mode, before any signature is checked.
   not read ended the search, and without a `kid` only the first key of the right type was tried. When
   discovery lists `id_token_signing_alg_values_supported`, the `alg` must be in it
   (`algorithmAdvertised`). The self-signed suite honours `key_ops` as well as `use` and `alg`.
+- **Ed448 keys get the checks Ed25519 keys got** (R-38). Keycloak verifies EdDSA on Ed448 as well as
+  Ed25519, and the JDK accepts the same forgery on Ed448 that R-27 found on Ed25519 — with the identity
+  point as the key, an all-zero signature verifies any message. An `OKP` JWK on `Ed448` must now be a
+  canonical encoding of a point on the curve that is not of small order. No `did:key` here is Ed448, so
+  the key was always one its document's controller chose. Outside Keycloak, `EdDSA` is now verified on
+  whichever curve the key is, as Keycloak does.
+- **The served self-signed CID document publishes only RSA, EC and OKP keys** (R-38). A registered
+  `AKP` (ML-DSA) key pair, whose private member is `priv`, used to be trimmed to its other members and
+  published; it is now refused as private key material, and any key type the verifier cannot check a
+  signature with is refused by name, with a warning.
 - **An `iat` in the future, or after `exp`, is refused** in both JWT suites (new check
   `issuedAtConsistent`; the clock skew allowance applies). A credential "issued" ten years from now used
   to pass.

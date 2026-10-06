@@ -236,12 +236,93 @@ class JwsChecksTest {
         byte[] identity = new byte[32];
         identity[0] = 1;
         String x = Base64.getUrlEncoder().withoutPadding().encodeToString(identity);
-        assertTrue(JwsChecks.ed25519Problem(json.readTree("{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"x\":\"" + x + "\"}"))
+        assertTrue(JwsChecks.edwardsKeyProblem(json.readTree("{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"x\":\"" + x + "\"}"))
                 .contains("small order"));
         byte[] spki = KeyPairGenerator.getInstance("Ed25519").generateKeyPair().getPublic().getEncoded();
         String real = Base64.getUrlEncoder().withoutPadding().encodeToString(
                 java.util.Arrays.copyOfRange(spki, spki.length - 32, spki.length));
-        assertEquals(null, JwsChecks.ed25519Problem(json.readTree("{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"x\":\"" + real + "\"}")));
-        assertEquals(null, JwsChecks.ed25519Problem(json.readTree("{\"kty\":\"EC\"}")), "not an Ed25519 key");
+        assertEquals(null, JwsChecks.edwardsKeyProblem(json.readTree("{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"x\":\"" + real + "\"}")));
+        assertEquals(null, JwsChecks.edwardsKeyProblem(json.readTree("{\"kty\":\"EC\"}")), "not an Ed25519 key");
+    }
+
+    // ---------------------------------------------------------------------------------- R-38
+
+    private static String b64u(byte[] bytes) {
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+    }
+
+    /** {@code value} as Ed448's 57-byte little-endian encoding, with the sign bit {@code xOdd}. */
+    private static byte[] ed448(java.math.BigInteger value, boolean xOdd) {
+        byte[] out = new byte[57];
+        byte[] big = value.toByteArray();
+        for (int i = 0; i < big.length && i < 57; i++) {
+            out[i] = big[big.length - 1 - i];
+        }
+        if (xOdd) {
+            out[56] |= (byte) 0x80;
+        }
+        return out;
+    }
+
+    private static String ed448Problem(byte[] x) throws Exception {
+        return JwsChecks.edwardsKeyProblem(new com.fasterxml.jackson.databind.ObjectMapper()
+                .readTree("{\"kty\":\"OKP\",\"crv\":\"Ed448\",\"x\":\"" + b64u(x) + "\"}"));
+    }
+
+    /**
+     * R-38. Keycloak verifies Ed448 too, and the JDK accepts the same forgery on it that R-27 found on
+     * Ed25519: with the identity point as the key, {@code (R = identity, S = 0)} verifies any message. So
+     * every point of small order — the identity, {@code (0, −1)} and {@code (±1, 0)} — is refused, and so
+     * are non-canonical encodings and points off the curve.
+     */
+    @Test
+    void anEd448JwkMustBeACanonicalPointOfLargeOrder() throws Exception {
+        java.math.BigInteger p = java.math.BigInteger.TWO.pow(448).subtract(java.math.BigInteger.TWO.pow(224))
+                .subtract(java.math.BigInteger.ONE);
+
+        // The forgery, against the JDK's own verifier.
+        java.security.PublicKey identity = java.security.KeyFactory.getInstance("EdDSA").generatePublic(
+                new java.security.spec.EdECPublicKeySpec(java.security.spec.NamedParameterSpec.ED448,
+                        new java.security.spec.EdECPoint(false, java.math.BigInteger.ONE)));
+        java.security.Signature jdk = java.security.Signature.getInstance("Ed448");
+        jdk.initVerify(identity);
+        jdk.update("anything at all".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        byte[] forged = new byte[114];
+        forged[0] = 1;
+        assertTrue(jdk.verify(forged), "the JDK accepts it, which is why the key is checked first");
+
+        assertTrue(ed448Problem(ed448(java.math.BigInteger.ONE, false)).contains("small order"), "identity");
+        assertTrue(ed448Problem(ed448(p.subtract(java.math.BigInteger.ONE), false)).contains("small order"), "(0, -1)");
+        assertTrue(ed448Problem(ed448(java.math.BigInteger.ZERO, false)).contains("small order"), "(-1, 0)");
+        assertTrue(ed448Problem(ed448(java.math.BigInteger.ZERO, true)).contains("small order"), "(1, 0)");
+        assertTrue(ed448Problem(ed448(p.add(java.math.BigInteger.ONE), false)).contains("not canonically encoded"));
+        assertTrue(ed448Problem(ed448(java.math.BigInteger.ONE, true)).contains("not canonically encoded"),
+                "x = 0 with the sign bit set");
+        assertTrue(ed448Problem(new byte[32]).contains("57 bytes"));
+        boolean offTheCurve = false;
+        for (int y = 2; y < 40 && !offTheCurve; y++) {
+            String problem = ed448Problem(ed448(java.math.BigInteger.valueOf(y), false));
+            offTheCurve = problem != null && problem.contains("not a point on the curve");
+        }
+        assertTrue(offTheCurve, "about half of all y have no x");
+
+        for (int i = 0; i < 20; i++) {
+            byte[] spki = KeyPairGenerator.getInstance("Ed448").generateKeyPair().getPublic().getEncoded();
+            assertEquals(null, ed448Problem(java.util.Arrays.copyOfRange(spki, spki.length - 57, spki.length)));
+        }
+    }
+
+    /** R-38. The JDK path verifies EdDSA on whichever curve the key is, as Keycloak's does. */
+    @Test
+    void edDsaVerifiesOnTheKeysCurve() throws Exception {
+        for (String curve : new String[]{"Ed25519", "Ed448"}) {
+            java.security.KeyPair pair = KeyPairGenerator.getInstance(curve).generateKeyPair();
+            String input = b64u("{\"alg\":\"EdDSA\"}".getBytes()) + "." + b64u("{}".getBytes());
+            java.security.Signature signer = java.security.Signature.getInstance(curve);
+            signer.initSign(pair.getPrivate());
+            signer.update(input.getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+            org.keycloak.jose.jws.JWSInput jws = new org.keycloak.jose.jws.JWSInput(input + "." + b64u(signer.sign()));
+            assertTrue(JwsSignatures.verify("EdDSA", pair.getPublic(), jws), curve);
+        }
     }
 }

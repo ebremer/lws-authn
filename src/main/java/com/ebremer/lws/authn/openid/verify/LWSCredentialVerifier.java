@@ -675,7 +675,7 @@ public class LWSCredentialVerifier {
      *       including {@code verify}, and {@code alg} absent or the token's. A {@code use: enc} key used
      *       to verify signatures;</li>
      *   <li>of a type and curve that {@code alg} is ({@link JwsChecks#algMatchesKey}), and, for Ed25519, a
-     *       key only its holder can sign for ({@link JwsChecks#ed25519Problem}).</li>
+     *       key only its holder can sign for ({@link JwsChecks#edwardsKeyProblem}).</li>
      * </ul>
      *
      * <p>A key that cannot be read — {@code oct}, a curve this server does not support, garbage — is
@@ -697,7 +697,7 @@ public class LWSCredentialVerifier {
             String use = node.path("use").asText(null);
             String keyAlg = node.path("alg").asText(null);
             if ((use != null && !"sig".equals(use)) || (keyAlg != null && !keyAlg.equals(alg))
-                    || !JwsChecks.keyOpsAllowVerify(node) || JwsChecks.ed25519Problem(node) != null) {
+                    || !JwsChecks.keyOpsAllowVerify(node) || JwsChecks.edwardsKeyProblem(node) != null) {
                 continue;
             }
             PublicKey key;

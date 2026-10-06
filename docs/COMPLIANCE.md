@@ -306,7 +306,8 @@ does.
 representation. **Verification method types:** `JsonWebKey` and `Multikey`, the two CID 1.0 defines.
 
 **Signature algorithms:** whatever Keycloak's `SignatureProvider` offers for the JWT suites (RS*, PS*,
-ES256/384/512, EdDSA), constrained by the published key — RSA of 2048 bits or more, each `ES*` pinned to
+ES256/384/512, EdDSA), constrained by the published key — RSA of 2048 bits or more, an Ed25519 or Ed448
+key a canonical point that is not of small order, each `ES*` pinned to
 its curve, and its
 signature exactly the 64, 96 or 132 octets RFC 7518 §3.4 requires, which Keycloak's ECDSA verifier does
 not check itself. `alg: none` is refused everywhere.

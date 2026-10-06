@@ -239,21 +239,27 @@ public final class JwsChecks {
     }
 
     /**
-     * Why an {@code OKP} JWK on {@code Ed25519} is not a key to verify with, or {@code null} if it is, or is
-     * not an Ed25519 JWK at all: its {@code x} must be a canonical encoding of a point on the curve that
-     * is not of small order — with the identity point as the key, any message verifies (R-27; see
-     * {@link DidKey#ed25519KeyProblem}).
+     * Why an {@code OKP} JWK on {@code Ed25519} or {@code Ed448} is not a key to verify with, or
+     * {@code null} if it is, or is not an Edwards-curve signing key at all: its {@code x} must be a
+     * canonical encoding of a point on the curve that is not of small order — with the identity point
+     * as the key, forged signatures verify (R-27; see {@link DidKey#ed25519KeyProblem}). Keycloak
+     * verifies Ed448 as well as Ed25519, so both are checked (R-38).
      */
-    public static String ed25519Problem(JsonNode jwk) {
-        if (jwk == null || !"OKP".equals(jwk.path("kty").asText(null))
-                || !"Ed25519".equals(jwk.path("crv").asText(null))) {
+    public static String edwardsKeyProblem(JsonNode jwk) {
+        if (jwk == null || !"OKP".equals(jwk.path("kty").asText(null))) {
             return null;
         }
-        try {
-            return DidKey.ed25519KeyProblem(Base64.getUrlDecoder().decode(jwk.path("x").asText("")));
-        } catch (IllegalArgumentException unreadable) {
-            return "the Ed25519 key's 'x' is not base64url";
+        String crv = jwk.path("crv").asText(null);
+        if (!"Ed25519".equals(crv) && !"Ed448".equals(crv)) {
+            return null;
         }
+        byte[] x;
+        try {
+            x = Base64.getUrlDecoder().decode(jwk.path("x").asText(""));
+        } catch (IllegalArgumentException unreadable) {
+            return "the " + crv + " key's 'x' is not base64url";
+        }
+        return "Ed25519".equals(crv) ? DidKey.ed25519KeyProblem(x) : Ed448Points.problem(x);
     }
 
     /**
