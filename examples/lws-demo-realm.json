@@ -1,9 +1,10 @@
 {
   "realm": "lws-demo",
   "enabled": true,
-  "displayName": "LWS demo",
+  "displayName": "LWS demo (development only: a known password, not for a real server)",
   "sslRequired": "external",
   "registrationAllowed": false,
+  "bruteForceProtected": true,
   "loginWithEmailAllowed": true,
   "roles": {
     "realm": [
@@ -30,14 +31,12 @@
     {
       "clientId": "lws-app",
       "name": "LWS demo app",
-      "description": "Public client for trying out LWS authentication. Direct Access Grants is enabled only to make the walkthrough easy to script; turn it off for anything real.",
+      "description": "Public client for trying out LWS authentication, for development only. It allows only the password grant, to make the walkthroughs easy to script, and no browser flow and no redirect URIs: a public client with a wildcard redirect is an authorization-code theft vector.",
       "enabled": true,
       "protocol": "openid-connect",
       "publicClient": true,
-      "standardFlowEnabled": true,
+      "standardFlowEnabled": false,
       "directAccessGrantsEnabled": true,
-      "redirectUris": ["*"],
-      "webOrigins": ["*"],
       "fullScopeAllowed": true,
       "protocolMappers": [
         {

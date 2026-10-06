@@ -642,18 +642,27 @@ credential passes the provider's `/verify` endpoint (the same algorithm an LWS s
 ### Fast path — the bundled demo script
 
 The repo ships a script that idempotently provisions a realm (`lws-demo`), a client (`lws-app`), the
-**LWS WebID Subject** mapper, and a user (`alice`), then obtains an ID Token, dereferences the WebID,
-and runs it through `/verify`:
+**LWS WebID Subject** mapper, and a user (`alice`) holding the `lws-verifier` role, then obtains an ID
+Token, dereferences the WebID, and runs it through `/verify`:
 
 ```bash
 cd /tmp/lws-authn      # your clone from step 6
 KC_URL=https://id.example.com \
 ADMIN_USER=admin ADMIN_PASS=CHANGE_ME_ADMIN \
+PASSWORD="$(openssl rand -base64 18)" \
 bash scripts/lws-demo.sh
 ```
 
 A successful run ends with **`valid: true`** and prints the WebID — that is a working LWS identity
 issued by your server.
+
+`PASSWORD` is required against anything but `localhost`: without it the user's password would be
+`alice`, on an internet-facing server, for a user who may call `/verify`. The script's `lws-app` client
+allows only the password grant, with no redirect URIs. **When you are done, delete the realm** —
+*Realm settings → Action → Delete*, or
+`kcadm.sh delete realms/lws-demo` — so neither the test user nor the demo client outlives the test. A
+realm created by an earlier version of the script has a client with `redirectUris: ["*"]`, an
+authorization-code theft vector; delete that one in any case.
 
 ### Manual path
 
@@ -737,6 +746,8 @@ If `subjectDereferenced` is `false`, the server couldn't fetch its own WebID —
   either can impersonate an identity. Check it with
   `kcadm.sh get realms/<realm> --fields unmanagedAttributePolicy`.
 - **Firewall** — only `22/80/443` exposed; Keycloak's `8080` stays on loopback.
+- **Demo realm gone** — the `lws-demo` realm from [step 13](#13-verify-the-openid-connect-suite-end-to-end)
+  is deleted, along with its test user and its demo client.
 - **Direct Access Grants off** for real clients (it's on in the demo only to make it scriptable).
 - **Audience** — if your LWS/resource server checks `aud`, add a Keycloak **Audience** mapper or use
   Resource Indicators (RFC 8707) / Token Exchange (RFC 8693, token type

@@ -459,7 +459,7 @@ is needed.
   variables already cover configuration from the environment, and the exact `KC_SPI_` spelling for the
   `--`-separated keys was not checked against Keycloak here.
 
-- [ ] **R-13 · The production install's "fast path" leaves a known-password user and a wildcard-redirect client.**
+- [x] **R-13 · The production install's "fast path" leaves a known-password user and a wildcard-redirect client.**
   `Medium` · security/docs · `S` · *verified*
   `docs/INSTALL.md:605-617` runs `scripts/lws-demo.sh` against the production server without setting
   `PASSWORD`, which creates realm `lws-demo`, user `alice`/`alice` and public client `lws-app` with
@@ -468,6 +468,16 @@ is needed.
   bearer-protected `/verify` (R-11) — and the wildcard redirect is an authorization-code theft vector.
   **Do:** require `PASSWORD` in the fast path; add "delete the `lws-demo` realm" to §14; label the demo
   realm JSON as demo-only and give it brute-force protection.
+  **Done.** `lws-demo.sh` and `ssi-cid-demo.sh` default `PASSWORD` to `alice` only when `KC_URL` is
+  `localhost` or `127.0.0.1`, and otherwise stop before any request with an example
+  (`PASSWORD=$(openssl rand -base64 18)`); checked by running both against a remote and a local URL.
+  The demo client — created by `lws-demo.sh` and in `examples/lws-demo-realm.json` — now has
+  `standardFlowEnabled: false` and no redirect URIs or web origins: nothing used the browser flow, and
+  the password grant is all the scripts and `LwsAuthIT` need. The demo realm has `bruteForceProtected`
+  and a display name that says development only (JSON has no comments). INSTALL §13 passes a random
+  `PASSWORD`, says to delete the realm afterwards and why — including a realm an earlier script left
+  with `redirectUris: ["*"]` — and §14 lists "Demo realm gone". Not run against Keycloak here: the
+  realm import with `bruteForceProtected` and without redirect URIs (R-43).
 
 - [ ] **R-14 · Upgrade Keycloak: 26.7.4 is missing 14 security fixes.**
   `Medium` · dependency · `S` · *verified*

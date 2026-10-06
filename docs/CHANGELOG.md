@@ -148,6 +148,15 @@ realm under the default `bearer` access mode, before any signature is checked.
   `keycloak.conf` entries or `kc.sh start` options (or the `LWS_AUTHN_*` environment variables, which
   were always fine), and each provider logs the settings actually in force at startup, a secret only
   as `secret=(set)`. **If you set any provider option on `kc.sh build`, move it, and check the log.**
+- **The demo no longer leaves a known password and a wildcard redirect on a real server** (R-13).
+  INSTALL's "fast path" ran `lws-demo.sh` against the production server, which created `alice` with the
+  password `alice` and a public client with `redirectUris: ["*"]` — and nothing said to remove them.
+  `lws-demo.sh` and `ssi-cid-demo.sh` now refuse to run against anything but `localhost` without
+  `PASSWORD`; the demo client — in the script and in `examples/lws-demo-realm.json` — allows only the
+  password grant, with no browser flow and no redirect URIs or web origins; the demo realm has
+  brute-force protection and says in its name that it is for development; and INSTALL generates a
+  password, says to delete the realm afterwards, and lists that in the production checklist. **If you
+  ran the fast path on a real server, delete the `lws-demo` realm.**
 
 ### Added
 

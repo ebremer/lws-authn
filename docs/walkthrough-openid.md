@@ -55,7 +55,9 @@ bash scripts/lws-demo.sh
 
 It provisions a realm (`lws-demo`), a client (`lws-app`), the **LWS WebID Subject** mapper and a user
 (`alice`), then obtains an ID Token, dereferences the resulting WebID, and runs the credential through
-`/verify`. Override anything via env vars, e.g. `KC_URL=https://kc.example ADMIN_PASS=… bash scripts/lws-demo.sh`.
+`/verify`. Override anything via env vars, e.g. `KC_URL=https://kc.example ADMIN_PASS=… PASSWORD=… bash
+scripts/lws-demo.sh` — against anything but `localhost`, `PASSWORD` is required, since the default
+(`alice`) would be a public password on that server.
 
 A successful run ends with `valid: true` and prints the WebID — that's your LWS identity.
 

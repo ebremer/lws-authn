@@ -19,6 +19,10 @@
 #   bash scripts/lws-demo.sh
 #   KC_URL=https://kc.example ADMIN_PASS=secret USERNAME=bob PASSWORD=s3cret bash scripts/lws-demo.sh
 #
+# PASSWORD is required unless KC_URL is this machine. The client it creates allows only the password
+# grant, which is what makes it scriptable; it is a demo client, not one to build an app on. On a real
+# server, delete the realm when you are done (docs/INSTALL.md §13).
+#
 # To use an externally-hosted WebID instead of a Keycloak-hosted one, set WEBID_ATTRIBUTE to the
 # user-attribute name that holds it (and set that attribute on the user yourself) — see the
 # walkthrough's "Bring your own WebID" section.
@@ -29,7 +33,7 @@ KC_URL="${KC_URL:-http://localhost:8080}"
 REALM="${REALM:-lws-demo}"
 CLIENT_ID="${CLIENT_ID:-lws-app}"
 USERNAME="${USERNAME:-alice}"
-PASSWORD="${PASSWORD:-alice}"
+PASSWORD="${PASSWORD:-}"   # required unless KC_URL is this machine; see below
 ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASS="${ADMIN_PASS:-admin}"
 WEBID_ATTRIBUTE="${WEBID_ATTRIBUTE:-}"   # empty => Keycloak hosts the WebID at {iss}/lws/cid/{userId}
@@ -53,6 +57,17 @@ verify_post() {
 
 note() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 die()  { printf '\033[1;31m%s\033[0m\n' "$*" >&2; exit 1; }
+
+# The user's password defaults to "alice" only on a server on this machine. Anywhere else that is a
+# known password on a real server: anyone could log in as the user and — since it holds the verifier
+# role — call /verify. So elsewhere it must be given.
+if [ -z "$PASSWORD" ]; then
+  case "$KC_URL" in
+    http://localhost|http://localhost:*|http://127.0.0.1|http://127.0.0.1:*) PASSWORD=alice ;;
+    *) die "Set PASSWORD for '$USERNAME' — on $KC_URL a default password would be public. For example:
+    PASSWORD=\$(openssl rand -base64 18) KC_URL=$KC_URL bash $0" ;;
+  esac
+fi
 api()  { curl -sS -H "Authorization: Bearer $ADMIN_TOKEN" "$@"; }
 
 # A bearer caller of a verify endpoint must hold the verifier realm role (docs/configuration.md,
@@ -116,9 +131,8 @@ if [ -z "$CLIENT_UUID" ]; then
   "enabled": true,
   "protocol": "openid-connect",
   "publicClient": true,
-  "standardFlowEnabled": true,
+  "standardFlowEnabled": false,
   "directAccessGrantsEnabled": true,
-  "redirectUris": ["*"],
   "protocolMappers": [ $MAPPER ]
 }
 JSON
