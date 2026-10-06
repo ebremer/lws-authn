@@ -30,13 +30,10 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.math.BigInteger;
 import java.security.KeyPair;
-import java.security.KeyPairGenerator;
 import java.security.PrivateKey;
-import java.security.Signature;
 import java.security.interfaces.ECPublicKey;
 import java.security.interfaces.RSAPublicKey;
 import java.security.cert.X509Certificate;
-import java.security.spec.ECGenParameterSpec;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -76,6 +73,7 @@ import org.bouncycastle.operator.ContentSigner;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 
 import com.ebremer.lws.authn.did.DidKey;
+import com.ebremer.lws.authn.testsupport.SelfIssuedJwts;
 
 /**
  * <h2>This suite needs host port 8080, and cannot run in parallel</h2>
@@ -226,17 +224,12 @@ class LwsAuthIT {
      * minted EC key, at a URL the container can reach.
      */
     private void startFixtureServer() throws Exception {
-        KeyPairGenerator generator = KeyPairGenerator.getInstance("EC");
-        generator.initialize(new ECGenParameterSpec("secp256r1"));
-        agentKeyPair = generator.generateKeyPair();
+        agentKeyPair = SelfIssuedJwts.ec("secp256r1");
 
         fixtureServer = HttpServer.create(new InetSocketAddress("0.0.0.0", 0), 0);
         fixturePort = fixtureServer.getAddress().getPort();
         agentWebId = "http://host.testcontainers.internal:" + fixturePort + "/cid";
 
-        ECPublicKey publicKey = (ECPublicKey) agentKeyPair.getPublic();
-        String x = b64(publicKey.getW().getAffineX());
-        String y = b64(publicKey.getW().getAffineY());
         // Deliberately not the compact spelling this provider emits: an aliased term and an @graph
         // wrapper, both of which the old key-walking reader would have silently found nothing in.
         String document = "{\"@context\":[\"https://www.w3.org/ns/cid/v1\","
@@ -244,8 +237,7 @@ class LwsAuthIT {
                 + "\"@graph\":[{\"id\":\"" + agentWebId + "\","
                 + "\"auth\":[{\"id\":\"" + agentWebId + "#k1\",\"type\":\"JsonWebKey\","
                 + "\"controller\":\"" + agentWebId + "\","
-                + "\"publicKeyJwk\":{\"kid\":\"k1\",\"kty\":\"EC\",\"crv\":\"P-256\","
-                + "\"x\":\"" + x + "\",\"y\":\"" + y + "\"}}]}]}";
+                + "\"publicKeyJwk\":" + jwkJson(agentKeyPair.getPublic(), Map.of()) + "}]}]}";
 
         routes.put("/cid", new Route(200, "application/ld+json", document));
 
@@ -276,15 +268,16 @@ class LwsAuthIT {
         return "http://host.testcontainers.internal:" + fixturePort + path;
     }
 
-    private static String b64(java.math.BigInteger coordinate) {
-        byte[] raw = coordinate.toByteArray();
-        byte[] fixed = new byte[32];
-        if (raw.length >= 32) {
-            System.arraycopy(raw, raw.length - 32, fixed, 0, 32);
-        } else {
-            System.arraycopy(raw, 0, fixed, 32 - raw.length, raw.length);
-        }
-        return Base64.getUrlEncoder().withoutPadding().encodeToString(fixed);
+    /**
+     * {@code key} as a public JWK with {@code kid} {@code k1}, plus {@code extraMembers}, serialised: the
+     * {@code publicKeyJwk} of a fixture document.
+     */
+    private static String jwkJson(java.security.PublicKey key, Map<String, Object> extraMembers) throws Exception {
+        Map<String, Object> jwk = new java.util.LinkedHashMap<>();
+        jwk.put("kid", "k1");
+        jwk.putAll(SelfIssuedJwts.publicJwk(key));
+        jwk.putAll(extraMembers);
+        return JSON.writeValueAsString(jwk);
     }
 
     // ----------------------------------------------------------------- the smoke flow as assertions
@@ -341,15 +334,7 @@ class LwsAuthIT {
      */
     @Test
     void jsonLdControlledIdentifierDocumentVerifies() throws Exception {
-        long now = System.currentTimeMillis() / 1000;
-        String signingInput = b64("{\"alg\":\"ES256\",\"kid\":\"k1\",\"typ\":\"JWT\"}") + "."
-                + b64("{\"sub\":\"" + agentWebId + "\",\"iss\":\"" + agentWebId + "\","
-                        + "\"client_id\":\"" + agentWebId + "\",\"aud\":[\"https://as.example\"],"
-                        + "\"iat\":" + now + ",\"exp\":" + (now + 300) + "}");
-        Signature signer = Signature.getInstance("SHA256withECDSAinP1363Format");
-        signer.initSign(agentKeyPair.getPrivate());
-        signer.update(signingInput.getBytes(StandardCharsets.UTF_8));
-        String jwt = signingInput + "." + Base64.getUrlEncoder().withoutPadding().encodeToString(signer.sign());
+        String jwt = mintSsiCidJwt(agentWebId, "ES256");
 
         JsonNode r = JSON.readTree(postForm(base + "/realms/" + REALM + "/lws-ssi-cid/verify",
                 Map.of("credential", jwt, "audience", "https://as.example"), accessToken()).body());
@@ -448,9 +433,7 @@ class LwsAuthIT {
     @Test
     void aSamlCredentialIsTrustedThroughTheRealmsIdentityProvider() throws Exception {
         String admin = adminToken();
-        KeyPairGenerator g = KeyPairGenerator.getInstance("RSA");
-        g.initialize(2048);
-        KeyPair idp = g.generateKeyPair();
+        KeyPair idp = SelfIssuedJwts.rsa(2048);
         String alias = "lws-it-saml-" + System.nanoTime();
         String entityId = "https://" + alias + ".example/idp";
         String instances = base + "/admin/realms/" + REALM + "/identity-provider/instances";
@@ -480,6 +463,45 @@ class LwsAuthIT {
         } finally {
             sendJson("DELETE", instances + "/" + alias, "", admin);
         }
+    }
+
+    /**
+     * R-44, R-22. A signed SAML credential with the certificate in the request, through the server's own
+     * XML-DSig provider and JVM policy: signed on the assertion, and signed on the {@code <samlp:Response>}
+     * that carries an unsigned assertion — the branch no test used to reach. Each must verify; the same
+     * document with its subject changed after signing, or signed by a key other than the certificate's,
+     * must not.
+     */
+    @Test
+    void aSignedSamlResponseVerifiesAgainstTheCertificateInTheRequest() throws Exception {
+        KeyPair idp = SelfIssuedJwts.rsa(2048);
+        String certificate = pem(selfSigned(idp));
+        String issuer = "https://idp.example/saml";
+        String alice = "https://id.example/alice";
+        for (boolean signTheResponse : new boolean[]{false, true}) {
+            String what = signTheResponse ? "signed Response" : "signed Assertion";
+            String credential = samlResponse(issuer, alice, idp.getPrivate(), signTheResponse);
+
+            HttpResponse<String> r = verifySaml(credential, certificate);
+            assertEquals(200, r.statusCode(), what + ": " + r.body());
+            JsonNode result = JSON.readTree(r.body());
+            assertTrue(result.get("valid").asBoolean(), () -> what + ": expected valid, got: " + result);
+            assertEquals("request", result.get("trustSource").asText(), what + ": " + result);
+            assertEquals(alice, result.get("subject").asText(), what + ": " + result);
+
+            String substituted = credential.replace(alice, "https://id.example/mallory");
+            assertFalse(substituted.equals(credential), "the fixture must name the subject where it can be replaced");
+            assertRejected(JSON.readTree(verifySaml(substituted, certificate).body()), "signatureValid");
+
+            String otherKey = samlResponse(issuer, alice, SelfIssuedJwts.rsa(2048).getPrivate(), signTheResponse);
+            assertRejected(JSON.readTree(verifySaml(otherKey, certificate).body()), "signatureValid");
+        }
+    }
+
+    /** POSTs a SAML credential with {@code certificate} as the trust, for {@link #SAML_AUDIENCE}. */
+    private HttpResponse<String> verifySaml(String credential, String certificate) throws Exception {
+        return postForm(base + "/realms/" + REALM + "/lws-saml/verify", Map.of("credential", credential,
+                "certificate", certificate, "audience", SAML_AUDIENCE, "recipient", SAML_AUDIENCE), accessToken());
     }
 
     /**
@@ -665,8 +687,11 @@ class LwsAuthIT {
     @Test
     void openIdHs256AgainstAnRsaKeyIsRejected() throws Exception {
         OpenIdFixture op = new OpenIdFixture("hs256-confusion");
-        String signingInput = b64("{\"alg\":\"HS256\",\"kid\":\"op-key\",\"typ\":\"JWT\"}")
-                + "." + b64(op.claims());
+        Map<String, Object> header = new java.util.LinkedHashMap<>();
+        header.put("alg", "HS256");
+        header.put("kid", "op-key");
+        header.put("typ", "JWT");
+        String signingInput = SelfIssuedJwts.signingInput(header, op.claims());
         Mac mac = Mac.getInstance("HmacSHA256");
         // The forger's guess at the secret: the provider's public modulus, which anyone can fetch.
         mac.init(new SecretKeySpec(magnitude(((RSAPublicKey) op.keyPair.getPublic()).getModulus()),
@@ -715,14 +740,14 @@ class LwsAuthIT {
     @Test
     void ssiCidMethodWithAForeignControllerIsRejected() throws Exception {
         String subject = serveSsiCidDocument("/ssi/foreign-controller",
-                "https://someone-else.example", "");
+                "https://someone-else.example", Map.of());
         assertRejected(verifySsiCid(mintSsiCidJwt(subject, "ES256")), "verificationMethodFound");
     }
 
     /** Self-signed CID: a key its own holder published for encryption, not for signing. */
     @Test
     void ssiCidMethodPublishedForEncryptionIsRejected() throws Exception {
-        String subject = serveSsiCidDocument("/ssi/use-enc", null, ",\"use\":\"enc\"");
+        String subject = serveSsiCidDocument("/ssi/use-enc", null, Map.of("use", "enc"));
         assertRejected(verifySsiCid(mintSsiCidJwt(subject, "ES256")),
                 "verificationMethodUsableForSigning");
     }
@@ -730,7 +755,7 @@ class LwsAuthIT {
     /** Self-signed CID: a token whose {@code alg} is not the one the published JWK is pinned to. */
     @Test
     void ssiCidAlgorithmInconsistentWithThePublishedKeyIsRejected() throws Exception {
-        String subject = serveSsiCidDocument("/ssi/alg-mismatch", null, ",\"alg\":\"ES384\"");
+        String subject = serveSsiCidDocument("/ssi/alg-mismatch", null, Map.of("alg", "ES384"));
         assertRejected(verifySsiCid(mintSsiCidJwt(subject, "ES256")),
                 "verificationMethodUsableForSigning");
     }
@@ -738,13 +763,11 @@ class LwsAuthIT {
     /** did:key: the identifier carries the key, so a token signed by any other key cannot verify. */
     @Test
     void didKeyTokenSignedByAnotherKeyIsRejected() throws Exception {
-        KeyPairGenerator g = KeyPairGenerator.getInstance("EC");
-        g.initialize(new ECGenParameterSpec("secp256r1"));
-        String did = DidKey.encodeP256((ECPublicKey) g.generateKeyPair().getPublic());
-        KeyPair impostor = g.generateKeyPair();
+        String did = DidKey.encodeP256((ECPublicKey) SelfIssuedJwts.ec("secp256r1").getPublic());
+        KeyPair impostor = SelfIssuedJwts.ec("secp256r1");
 
         String jwt = signJwt(did, "ES256", did + "#" + DidKey.multibaseValue(did), impostor.getPrivate(),
-                "SHA256withECDSAinP1363Format");
+                SelfIssuedJwts.jcaFor("ES256"));
         assertRejected(verifySsiCid(jwt), "signatureValid");
     }
 
@@ -765,9 +788,7 @@ class LwsAuthIT {
         private final KeyPair keyPair;
 
         OpenIdFixture(String name) throws Exception {
-            KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
-            generator.initialize(2048);
-            keyPair = generator.generateKeyPair();
+            keyPair = SelfIssuedJwts.rsa(2048);
 
             subject = fixtureUrl("/op/" + name + "/subject");
             issuer = fixtureUrl("/op/" + name);
@@ -795,29 +816,31 @@ class LwsAuthIT {
         }
 
         /** This provider's RSA public key as a JWK, under whatever {@code kid} the caller wants. */
-        String jwk(String kid) {
-            RSAPublicKey key = (RSAPublicKey) keyPair.getPublic();
-            return "{\"kty\":\"RSA\",\"use\":\"sig\",\"alg\":\"RS256\",\"kid\":\"" + kid + "\","
-                    + "\"n\":\"" + b64u(magnitude(key.getModulus())) + "\","
-                    + "\"e\":\"" + b64u(magnitude(key.getPublicExponent())) + "\"}";
+        String jwk(String kid) throws Exception {
+            Map<String, Object> jwk = new java.util.LinkedHashMap<>(SelfIssuedJwts.publicJwk(keyPair.getPublic()));
+            jwk.put("use", "sig");
+            jwk.put("alg", "RS256");
+            jwk.put("kid", kid);
+            return JSON.writeValueAsString(jwk);
         }
 
         /** The claim set of a well-formed ID Token from this provider. */
-        String claims() {
+        Map<String, Object> claims() {
             long now = System.currentTimeMillis() / 1000;
-            return "{\"sub\":\"" + subject + "\",\"iss\":\"" + issuer + "\",\"azp\":\"" + CLIENT_ID + "\","
-                    + "\"aud\":[\"" + CLIENT_ID + "\"],\"iat\":" + now + ",\"exp\":" + (now + 300) + "}";
+            Map<String, Object> claims = new java.util.LinkedHashMap<>();
+            claims.put("sub", subject);
+            claims.put("iss", issuer);
+            claims.put("azp", CLIENT_ID);
+            claims.put("aud", List.of(CLIENT_ID));
+            claims.put("iat", now);
+            claims.put("exp", now + 300);
+            return claims;
         }
 
         /** A correctly signed ID Token from this provider. */
         String idToken() throws Exception {
-            String signingInput = b64("{\"alg\":\"RS256\",\"kid\":\"op-key\",\"typ\":\"JWT\"}")
-                    + "." + b64(claims());
-            Signature signer = Signature.getInstance("SHA256withRSA");
-            signer.initSign(keyPair.getPrivate());
-            signer.update(signingInput.getBytes(StandardCharsets.UTF_8));
-            return signingInput + "."
-                    + Base64.getUrlEncoder().withoutPadding().encodeToString(signer.sign());
+            return SelfIssuedJwts.sign(claims(), "RS256", "op-key", keyPair.getPrivate(),
+                    SelfIssuedJwts.jcaFor("RS256"));
         }
 
         JsonNode verify() throws Exception {
@@ -835,34 +858,35 @@ class LwsAuthIT {
      * Serves a self-signed-CID document for {@link #agentKeyPair} with one thing altered, and returns
      * the subject it describes.
      *
-     * @param controller     the method's {@code controller}, or {@code null} for the subject itself
-     * @param extraJwkMembers additional JWK members, each with its leading comma
+     * @param controller      the method's {@code controller}, or {@code null} for the subject itself
+     * @param extraJwkMembers additional JWK members
      */
-    private String serveSsiCidDocument(String path, String controller, String extraJwkMembers) {
+    private String serveSsiCidDocument(String path, String controller, Map<String, Object> extraJwkMembers)
+            throws Exception {
+        return serveSsiCidDocument(path, controller, agentKeyPair.getPublic(), extraJwkMembers);
+    }
+
+    /** As {@link #serveSsiCidDocument(String, String, Map)}, publishing {@code key}, whatever its type. */
+    private String serveSsiCidDocument(String path, String controller, java.security.PublicKey key,
+                                       Map<String, Object> extraJwkMembers) throws Exception {
         String subject = fixtureUrl(path);
-        ECPublicKey key = (ECPublicKey) agentKeyPair.getPublic();
         String document = "{\"@context\":[\"https://www.w3.org/ns/cid/v1\"],"
                 + "\"id\":\"" + subject + "\","
                 + "\"authentication\":[{\"id\":\"" + subject + "#k1\",\"type\":\"JsonWebKey\","
                 + "\"controller\":\"" + (controller == null ? subject : controller) + "\","
-                + "\"publicKeyJwk\":{\"kid\":\"k1\",\"kty\":\"EC\",\"crv\":\"P-256\","
-                + "\"x\":\"" + b64(key.getW().getAffineX()) + "\","
-                + "\"y\":\"" + b64(key.getW().getAffineY()) + "\"" + extraJwkMembers + "}}]}";
+                + "\"publicKeyJwk\":" + jwkJson(key, extraJwkMembers) + "}]}";
         serve(path, "application/ld+json", document);
         return subject;
     }
 
-    /** A correctly signed self-issued JWT for {@code subject}, declaring {@code alg} in its header. */
+    /** A self-issued JWT for {@code subject}, declaring {@code alg}, signed ES256 with {@link #agentKeyPair}. */
     private String mintSsiCidJwt(String subject, String alg) throws Exception {
-        long now = System.currentTimeMillis() / 1000;
-        String signingInput = b64("{\"alg\":\"" + alg + "\",\"kid\":\"k1\",\"typ\":\"JWT\"}") + "."
-                + b64("{\"sub\":\"" + subject + "\",\"iss\":\"" + subject + "\","
-                        + "\"client_id\":\"" + subject + "\",\"aud\":[\"https://as.example\"],"
-                        + "\"iat\":" + now + ",\"exp\":" + (now + 300) + "}");
-        Signature signer = Signature.getInstance("SHA256withECDSAinP1363Format");
-        signer.initSign(agentKeyPair.getPrivate());
-        signer.update(signingInput.getBytes(StandardCharsets.UTF_8));
-        return signingInput + "." + Base64.getUrlEncoder().withoutPadding().encodeToString(signer.sign());
+        return mintSsiCidJwt(subject, alg, agentKeyPair.getPrivate(), SelfIssuedJwts.jcaFor("ES256"));
+    }
+
+    /** A self-issued JWT for {@code subject} with {@code kid} {@code k1}, declaring {@code alg}, signed with {@code jca}. */
+    private static String mintSsiCidJwt(String subject, String alg, PrivateKey key, String jca) throws Exception {
+        return SelfIssuedJwts.sign(SelfIssuedJwts.claims(subject), alg, "k1", key, jca);
     }
 
     // ------------------------------------------------ did:key under the self-signed CID suite
@@ -876,16 +900,14 @@ class LwsAuthIT {
      */
     @Test
     void didKeyCredentialsVerifyUnderTheSelfSignedCidSuite() throws Exception {
-        KeyPairGenerator ec = KeyPairGenerator.getInstance("EC");
-        ec.initialize(new ECGenParameterSpec("secp256r1"));
-        KeyPair p256 = ec.generateKeyPair();
+        KeyPair p256 = SelfIssuedJwts.ec("secp256r1");
         String p256Did = DidKey.encodeP256((ECPublicKey) p256.getPublic());
-        KeyPair ed = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+        KeyPair ed = SelfIssuedJwts.ed25519();
         String edDid = DidKey.encodeEd25519(ed.getPublic());
 
         for (String jwt : List.of(
                 signJwt(p256Did, "ES256", p256Did + "#" + DidKey.multibaseValue(p256Did), p256.getPrivate(),
-                        "SHA256withECDSAinP1363Format"),
+                        SelfIssuedJwts.jcaFor("ES256")),
                 signJwt(edDid, "EdDSA", edDid + "#" + DidKey.multibaseValue(edDid), ed.getPrivate(), "Ed25519"))) {
             JsonNode r = verifySsiCid(jwt);
             assertTrue(r.get("valid").asBoolean(), () -> "expected valid, got: " + r);
@@ -896,12 +918,53 @@ class LwsAuthIT {
     }
 
     /**
+     * R-44. ES384 and ES512 through Keycloak's own ECDSA signature providers, which the unit tests never
+     * reach — they verify with the JDK: a did:key on P-384 and on P-521 verifies, and a credential signed
+     * by another key on the same curve does not.
+     */
+    @Test
+    void p384AndP521CredentialsVerifyThroughKeycloaksProviders() throws Exception {
+        for (String alg : List.of("ES384", "ES512")) {
+            String curve = alg.equals("ES384") ? "secp384r1" : "secp521r1";
+            KeyPair pair = SelfIssuedJwts.ec(curve);
+            String did = alg.equals("ES384") ? DidKey.encodeP384((ECPublicKey) pair.getPublic())
+                    : DidKey.encodeP521((ECPublicKey) pair.getPublic());
+            String kid = did + "#" + DidKey.multibaseValue(did);
+
+            JsonNode r = verifySsiCid(signJwt(did, alg, kid, pair.getPrivate(), SelfIssuedJwts.jcaFor(alg)));
+            assertTrue(r.get("valid").asBoolean(), () -> alg + ": expected valid, got: " + r);
+
+            KeyPair impostor = SelfIssuedJwts.ec(curve);
+            assertRejected(verifySsiCid(signJwt(did, alg, kid, impostor.getPrivate(), SelfIssuedJwts.jcaFor(alg))),
+                    "signatureValid");
+        }
+    }
+
+    /**
+     * R-44. RS* and PS* through Keycloak's own RSA signature providers: one 2048-bit RSA {@code JsonWebKey}
+     * in a served controlled identifier document, with no {@code alg} of its own, signs a credential under
+     * each algorithm and each verifies. A {@code PS256} credential carrying a PKCS#1 v1.5 signature — the
+     * right key, the wrong scheme — does not.
+     */
+    @Test
+    void rsaCredentialsVerifyThroughKeycloaksProviders() throws Exception {
+        KeyPair rsa = SelfIssuedJwts.rsa(2048);
+        String subject = serveSsiCidDocument("/ssi/rsa", null, rsa.getPublic(), Map.of());
+        for (String alg : List.of("RS256", "RS384", "RS512", "PS256", "PS384", "PS512")) {
+            JsonNode r = verifySsiCid(mintSsiCidJwt(subject, alg, rsa.getPrivate(), SelfIssuedJwts.jcaFor(alg)));
+            assertTrue(r.get("valid").asBoolean(), () -> alg + ": expected valid, got: " + r);
+        }
+        assertRejected(verifySsiCid(mintSsiCidJwt(subject, "PS256", rsa.getPrivate(), SelfIssuedJwts.jcaFor("RS256"))),
+                "signatureValid");
+    }
+
+    /**
      * R-34. {@code single_use=true} records the credential in Keycloak's single-use object store, and the
      * second request that asks the same is refused; one that does not ask still gets {@code valid: true}.
      */
     @Test
     void aCredentialHeldToSingleUseVerifiesOnce() throws Exception {
-        KeyPair ed = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+        KeyPair ed = SelfIssuedJwts.ed25519();
         String did = DidKey.encodeEd25519(ed.getPublic());
         String jwt = signJwt(did, "EdDSA", did + "#" + DidKey.multibaseValue(did), ed.getPrivate(), "Ed25519",
                 java.util.UUID.randomUUID().toString());
@@ -953,7 +1016,7 @@ class LwsAuthIT {
                 () -> "expected '" + failedCheck + "' to be the failing check: " + result);
     }
 
-    /** A big integer as its unsigned big-endian bytes, which is what a JWK and an HMAC key both want. */
+    /** A big integer as its unsigned big-endian bytes, which is what the HMAC forger's key wants. */
     private static byte[] magnitude(BigInteger value) {
         byte[] bytes = value.toByteArray();
         if (bytes.length > 1 && bytes[0] == 0) {
@@ -962,10 +1025,6 @@ class LwsAuthIT {
             return trimmed;
         }
         return bytes;
-    }
-
-    private static String b64u(byte[] bytes) {
-        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }
 
     // ----------------------------------------------------------------------------------- helpers
@@ -1022,9 +1081,11 @@ class LwsAuthIT {
      * parameter checks and actually reject the credential, which is what the caller wants to observe.
      */
     private static String selfSignedPem() throws Exception {
-        KeyPairGenerator g = KeyPairGenerator.getInstance("RSA");
-        g.initialize(2048);
-        X509Certificate certificate = selfSigned(g.generateKeyPair());
+        return pem(selfSigned(SelfIssuedJwts.rsa(2048)));
+    }
+
+    /** {@code certificate}, PEM-encoded. */
+    private static String pem(X509Certificate certificate) throws Exception {
         // Encoded here rather than with Keycloak's PemUtils: that needs CryptoIntegration to have been
         // initialised, which happens inside the server, not in this JVM.
         return "-----BEGIN CERTIFICATE-----\n"
@@ -1049,6 +1110,17 @@ class LwsAuthIT {
      * signed with an enveloped RSA-SHA256 signature, exclusive canonicalization, and SHA-256 digest.
      */
     private static String signedSamlResponse(String issuer, String nameId, PrivateKey key) throws Exception {
+        return samlResponse(issuer, nameId, key, false);
+    }
+
+    /**
+     * As {@link #signedSamlResponse}, with the signature on the assertion or, when {@code signTheResponse},
+     * on the {@code <samlp:Response>} instead — after its {@code <Issuer>}, were there one, and before
+     * {@code <Status>}, where SAML Core's schema puts it — leaving the assertion inside unsigned and
+     * covered by the Response's signature (Core §5.3).
+     */
+    private static String samlResponse(String issuer, String nameId, PrivateKey key, boolean signTheResponse)
+            throws Exception {
         java.time.Instant now = java.time.Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
         String saml = "urn:oasis:names:tc:SAML:2.0:assertion";
         String xml = "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"" + saml
@@ -1071,16 +1143,21 @@ class LwsAuthIT {
         org.w3c.dom.Document doc = dbf.newDocumentBuilder()
                 .parse(new java.io.ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
         org.w3c.dom.Element assertion = (org.w3c.dom.Element) doc.getElementsByTagNameNS(saml, "Assertion").item(0);
-        assertion.setIdAttribute("ID", true);
+        org.w3c.dom.Element response = doc.getDocumentElement();
+        org.w3c.dom.Element signed = signTheResponse ? response : assertion;
+        signed.setIdAttribute("ID", true);
         XMLSignatureFactory fac = XMLSignatureFactory.getInstance("DOM");
-        Reference reference = fac.newReference("#a1", fac.newDigestMethod(DigestMethod.SHA256, null),
+        Reference reference = fac.newReference("#" + signed.getAttribute("ID"), fac.newDigestMethod(DigestMethod.SHA256, null),
                 List.of(fac.newTransform(Transform.ENVELOPED, (TransformParameterSpec) null),
                         fac.newTransform(CanonicalizationMethod.EXCLUSIVE, (C14NMethodParameterSpec) null)),
                 null, null);
         SignedInfo signedInfo = fac.newSignedInfo(
                 fac.newCanonicalizationMethod(CanonicalizationMethod.EXCLUSIVE, (C14NMethodParameterSpec) null),
                 fac.newSignatureMethod(SignatureMethod.RSA_SHA256, null), List.of(reference));
-        fac.newXMLSignature(signedInfo, null).sign(new DOMSignContext(key, assertion));
+        fac.newXMLSignature(signedInfo, null).sign(signTheResponse
+                ? new DOMSignContext(key, response, doc.getElementsByTagNameNS(
+                        "urn:oasis:names:tc:SAML:2.0:protocol", "Status").item(0))
+                : new DOMSignContext(key, assertion));
         java.io.StringWriter out = new java.io.StringWriter();
         javax.xml.transform.TransformerFactory.newInstance().newTransformer().transform(
                 new javax.xml.transform.dom.DOMSource(doc), new javax.xml.transform.stream.StreamResult(out));
@@ -1088,11 +1165,9 @@ class LwsAuthIT {
     }
 
     private static String mintDidKeyP256() throws Exception {
-        KeyPairGenerator g = KeyPairGenerator.getInstance("EC");
-        g.initialize(new ECGenParameterSpec("secp256r1"));
-        KeyPair kp = g.generateKeyPair();
+        KeyPair kp = SelfIssuedJwts.ec("secp256r1");
         return signJwt(DidKey.encodeP256((ECPublicKey) kp.getPublic()), "ES256",
-                kp.getPrivate(), "SHA256withECDSAinP1363Format");
+                kp.getPrivate(), SelfIssuedJwts.jcaFor("ES256"));
     }
 
     private static String signJwt(String did, String alg, PrivateKey key, String jdkAlg) throws Exception {
@@ -1104,22 +1179,14 @@ class LwsAuthIT {
         return signJwt(did, alg, kid, key, jdkAlg, null);
     }
 
+    /** A self-issued JWT for {@code did}, through {@link SelfIssuedJwts}; {@code kid} and {@code jti} may be null. */
     private static String signJwt(String did, String alg, String kid, PrivateKey key, String jdkAlg, String jti)
             throws Exception {
-        long now = System.currentTimeMillis() / 1000;
-        String signingInput = b64("{\"alg\":\"" + alg + "\",\"typ\":\"JWT\""
-                        + (kid == null ? "" : ",\"kid\":\"" + kid + "\"") + "}") + "."
-                + b64("{\"sub\":\"" + did + "\",\"iss\":\"" + did + "\",\"client_id\":\"" + did
-                        + "\",\"aud\":[\"https://as.example\"],\"iat\":" + now + ",\"exp\":" + (now + 300)
-                        + (jti == null ? "" : ",\"jti\":\"" + jti + "\"") + "}");
-        Signature s = Signature.getInstance(jdkAlg);
-        s.initSign(key);
-        s.update(signingInput.getBytes(StandardCharsets.UTF_8));
-        return signingInput + "." + Base64.getUrlEncoder().withoutPadding().encodeToString(s.sign());
-    }
-
-    private static String b64(String s) {
-        return Base64.getUrlEncoder().withoutPadding().encodeToString(s.getBytes(StandardCharsets.UTF_8));
+        Map<String, Object> claims = SelfIssuedJwts.claims(did);
+        if (jti != null) {
+            claims.put("jti", jti);
+        }
+        return SelfIssuedJwts.sign(claims, alg, kid, key, jdkAlg);
     }
 
     private static HttpResponse<String> get(String url, String accept) throws Exception {
