@@ -679,7 +679,7 @@ is needed.
   `IssueInstant ≤ now + skew`, equal Issuers. Moving this into the provider also removes the dependency on
   Keycloak internals for the XSW defence (today the real protection is `SAML2Signature.configureIdAttribute`).
 
-- [ ] **R-23 · Self-signed CID: CID 1.0 verification-method rules are only partly applied.**
+- [x] **R-23 · Self-signed CID: CID 1.0 verification-method rules are only partly applied.**
   `Low` · spec-conformance · `S` · *demonstrated*
   CID 1.0 §2.2: a verification method "MUST include `id`, `type`, `controller`" and "MUST NOT contain
   multiple verification material properties". Accepted today: a method with no `id`, selectable by its
@@ -691,6 +691,12 @@ is needed.
   order.
   **Do:** refuse id-less methods and methods with more than one key-material property or `type`/
   `controller` value; match the method id (absolute, then fragment) before the JWK `kid`; fix the comment.
+  **Done.** Both readers skip a method with no `id` (in RDF, a blank node), with more than one `type`
+  or `controller`, or with both `publicKeyJwk` and `publicKeyMultibase`; a JSON `type` or `controller`
+  that is an array of one is that one value, as JSON-LD reads it (an array `controller` used to be
+  refused outright). `selectByKid` tries the full id, then the fragment, then the JWK `kid`. The comment
+  in `SelfSignedControlledIdentifierDocument.methodId` now gives that order. Four tests in
+  `VerificationMethodRulesTest`, on both paths, fail against the previous code.
 
 - [x] **R-24 · JWS validation per RFC 7515 §5.2 / RFC 7518 §3.4: two strictness gaps.**
   `Low` · spec-conformance · `S` · *demonstrated*

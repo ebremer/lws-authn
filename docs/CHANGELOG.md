@@ -267,8 +267,17 @@ each may reject a document that used to verify. Check your issuers' documents be
   `verificationMethod`, even one only `assertionMethod` or `keyAgreement` referred to. Referencing a
   method from `authentication` by URL — the way did:key documents do it — now works as CID 1.0 §3.3
   says it should, on both the JSON-LD and the compact-JSON path.
-- **A method's `id` must be in the subject's own document** (CID 1.0 §3.3 takes the document from the
-  identifier). Methods written with no `id` are still tolerated and selectable by their JWK's `kid`.
+- **A method must have an `id`, in the subject's own document** (CID 1.0 §2.2 requires one; §3.3 takes
+  the document from it). Methods written with no `id` were tolerated, and selectable by their JWK's
+  `kid`, until R-23; they are now skipped, in JSON and as RDF blank nodes.
+- **A method has one `type`, one `controller` and one kind of key** (R-23). CID 1.0 §2.2: `type`
+  references "exactly one verification method type", and a method "MUST NOT contain multiple
+  verification material properties". A second type or controller — which RDF reads as the subject being
+  one of several — or a `publicKeyJwk` beside a `publicKeyMultibase`, makes the method unusable. A
+  `type` or `controller` written as a JSON array of one is read as that one value.
+- **A `kid` matches a method's `id` before its JWK's `kid`** (R-23): the full id, then its fragment,
+  then the JWK's own `kid`. When one method's JWK `kid` was another method's fragment, the first method
+  used to be selected where CID 1.0 §3.4 names the second, and the credential failed.
 - **`revoked` and `expires` are honoured** (`verificationMethodActive`), and a value that is not an
   `xsd:dateTimeStamp` makes the method unusable rather than silently current. In RDF, so does a value
   that is not a literal, or **two values for one property** — two expiry dates, two revocations, two

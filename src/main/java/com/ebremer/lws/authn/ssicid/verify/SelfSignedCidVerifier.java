@@ -64,6 +64,7 @@ import org.apache.jena.rdf.model.Property;
 import org.apache.jena.rdf.model.RDFNode;
 import org.apache.jena.rdf.model.Resource;
 import org.apache.jena.rdf.model.StmtIterator;
+import org.apache.jena.vocabulary.RDF;
 import org.keycloak.crypto.KeyType;
 import org.keycloak.crypto.KeyUse;
 import org.keycloak.crypto.KeyWrapper;
@@ -522,7 +523,7 @@ public class SelfSignedCidVerifier {
      * document.
      *
      * @param id           the method's own identifier, absolute ({@code <subject>#<fragment>} by
-     *                     convention), or {@code null} for a method written without one
+     *                     convention). The readers refuse a method without one (CID 1.0 §2.2)
      * @param publicKeyJwk its public key as a JWK: the {@code publicKeyJwk} of a {@code JsonWebKey}, or
      *                     the JWK a {@code Multikey}'s {@code publicKeyMultibase} decodes to
      * @param type         {@code JsonWebKey} or {@code Multikey}
@@ -577,13 +578,13 @@ public class SelfSignedCidVerifier {
      *       relationship" — so a key listed under {@code verificationMethod} alone, perhaps meant for
      *       key agreement or assertions, is not one the subject authenticates with. A reference is
      *       resolved within this document (CID 1.0 §3.4); it is not followed to another one.</li>
-     *   <li>Each method must be controlled by the subject — a document may embed methods controlled by
-     *       someone else, and those are not keys this subject may authenticate with — and its
-     *       identifier must be in the subject's document (CID 1.0 §3.3).</li>
-     *   <li>{@code JsonWebKey} with a {@code publicKeyJwk}, or {@code Multikey} with a
-     *       {@code publicKeyMultibase} — the two types CID 1.0 defines. A method publishing private key
-     *       material, or a key this provider cannot decode, is not a conforming verification method
-     *       and is skipped.</li>
+     *   <li>Each method must have an identifier, in the subject's document (CID 1.0 §2.2, §3.3), and be
+     *       controlled by the subject — a document may embed methods controlled by someone else, and
+     *       those are not keys this subject may authenticate with.</li>
+     *   <li>One {@code type}: {@code JsonWebKey} with a {@code publicKeyJwk}, or {@code Multikey} with a
+     *       {@code publicKeyMultibase} — the two types CID 1.0 defines — and not both key properties. A
+     *       method publishing private key material, or a key this provider cannot decode, is not a
+     *       conforming verification method and is skipped.</li>
      * </ul>
      *
      * @throws SubjectIdMismatchException if the document's {@code id} is not {@code sub}
@@ -622,7 +623,7 @@ public class SelfSignedCidVerifier {
                 continue; // unresolvable here, or a reference to a method in another document
             }
             toVerificationMethod(method, sub, id).ifPresent(vm -> {
-                if (vm.id() == null || seen.add(vm.id())) {
+                if (seen.add(vm.id())) {
                     out.add(vm);
                 }
             });
@@ -632,10 +633,24 @@ public class SelfSignedCidVerifier {
 
     /** Reads one verification method map; empty if it is not one the subject may authenticate with. */
     private static Optional<VerificationMethod> toVerificationMethod(JsonNode method, String sub, String base) {
-        Set<String> types = texts(method, "type", "@type");
         String methodId = RdfParsing.resolveReference(firstText(method, "id", "@id"), base);
-        String controller = RdfParsing.resolveReference(firstText(method, "controller"), base);
-        if (!sub.equals(controller) || !inSubjectsDocument(methodId, sub)) {
+        // CID 1.0 §2.2: a verification method "MUST include id, type, controller", each one value, and
+        // "MUST NOT contain multiple verification material properties". A method without an id was
+        // selectable by its JWK's kid, which §3.3 — retrieval by the method's identifier — never is; one
+        // with two types, or two keys, leaves it to the reader which applies (R-23). A type or controller
+        // written as an array of one is the same single value to a JSON-LD processor, and is read as one.
+        if (methodId == null) {
+            log.debugf("skipping a verification method of <%s> that has no id", sub);
+            return Optional.empty();
+        }
+        String type = soleText(method, "type", "@type");
+        String controller = RdfParsing.resolveReference(soleText(method, "controller"), base);
+        if (type == null || !sub.equals(controller) || !inSubjectsDocument(methodId, sub)) {
+            return Optional.empty();
+        }
+        if (method.has("publicKeyJwk") && method.has("publicKeyMultibase")) {
+            log.debugf("skipping verification method <%s>: it has more than one verification material property",
+                    methodId);
             return Optional.empty();
         }
         Instant revoked;
@@ -648,12 +663,11 @@ public class SelfSignedCidVerifier {
             log.debugf("skipping verification method <%s>: 'revoked'/'expires' is not one xsd:dateTimeStamp", methodId);
             return Optional.empty();
         }
-        // A type may be one string or several — JSON-LD allows either, and the processor path reads both.
-        if (types.contains(SsiCidConstants.TYPE_JSON_WEB_KEY)) {
+        if (SsiCidConstants.TYPE_JSON_WEB_KEY.equals(type)) {
             JsonNode jwk = method.get("publicKeyJwk");
             return fromJwk(methodId, jwk, revoked, expires);
         }
-        if (types.contains(SsiCidConstants.TYPE_MULTIKEY)) {
+        if (SsiCidConstants.TYPE_MULTIKEY.equals(type)) {
             return fromMultibase(methodId, firstText(method, "publicKeyMultibase"), revoked, expires);
         }
         return Optional.empty();
@@ -719,6 +733,7 @@ public class SelfSignedCidVerifier {
         pss.setIri("controller", SsiCidConstants.SEC_CONTROLLER);
         Property publicKeyJwk = model.createProperty(SsiCidConstants.SEC_PUBLIC_KEY_JWK);
         Property publicKeyMultibase = model.createProperty(SsiCidConstants.SEC_PUBLIC_KEY_MULTIBASE);
+        Property controllerProperty = model.createProperty(SsiCidConstants.SEC_CONTROLLER);
         Property revokedProperty = model.createProperty(SsiCidConstants.SEC_REVOKED);
         Property expirationProperty = model.createProperty(SsiCidConstants.SEC_EXPIRATION);
 
@@ -731,10 +746,18 @@ public class SelfSignedCidVerifier {
                 Resource node = row.getResource("m");
                 String key = node.toString();
                 if (accepted.contains(key)) {
-                    continue; // typed both JsonWebKey and Multikey, and already read as one of them
+                    continue; // already read: named by authentication more than once
                 }
+                // A blank node is a method with no id (CID 1.0 §2.2), and is refused like one (R-23).
                 String methodId = node.isURIResource() ? node.getURI() : null;
                 if (!inSubjectsDocument(methodId, sub)) {
+                    continue;
+                }
+                // One type, one controller, one kind of key material (CID 1.0 §2.2, R-23). The query found
+                // a JsonWebKey or Multikey type and the subject among the controllers; neither may share.
+                if (count(node, RDF.type) != 1 || count(node, controllerProperty) != 1
+                        || (node.hasProperty(publicKeyJwk) && node.hasProperty(publicKeyMultibase))) {
+                    log.debugf("skipping verification method <%s>: more than one type, controller or key", methodId);
                     continue;
                 }
                 Optional<VerificationMethod> method;
@@ -762,6 +785,21 @@ public class SelfSignedCidVerifier {
             }
         }
         return out;
+    }
+
+    /** How many values {@code node} has for {@code property}. */
+    private static int count(Resource node, Property property) {
+        StmtIterator values = node.listProperties(property);
+        try {
+            int n = 0;
+            while (values.hasNext()) {
+                values.next();
+                n++;
+            }
+            return n;
+        } finally {
+            values.close();
+        }
     }
 
     /**
@@ -797,10 +835,15 @@ public class SelfSignedCidVerifier {
      *       retrieves by, and the usual {@code kid} for a DID ({@code did:key:z…#z…}). Every candidate
      *       is already a method of the subject's own document, so an exact match can never reach into
      *       another document;</li>
-     *   <li>by the JWK's own {@code kid};</li>
      *   <li>by the fragment of the method's {@code id}, which is where CID 1.0 conventionally puts it
-     *       ({@code <subject>#<kid>}), a leading {@code #} on the {@code kid} allowed.</li>
+     *       ({@code <subject>#<kid>}), a leading {@code #} on the {@code kid} allowed — the method a
+     *       relative reference {@code #<kid>} resolves to under CID 1.0 §3.4;</li>
+     *   <li>by the JWK's own {@code kid}, for a method whose id does not carry it.</li>
      * </ol>
+     *
+     * <p>The JWK's {@code kid} used to come second. When one method's JWK {@code kid} was another
+     * method's fragment, the {@code kid} picked the first method where §3.4 names the second, and the
+     * credential failed (R-23).</p>
      *
      * <p>There is no fallback to "the only key": the credential says which key signed it, and
      * honouring that is the point of the check.</p>
@@ -819,11 +862,6 @@ public class SelfSignedCidVerifier {
                 return method;
             }
         }
-        for (VerificationMethod method : methods) {
-            if (kid.equals(method.publicKeyJwk().path("kid").asText(null))) {
-                return method;
-            }
-        }
         String wanted = kid.startsWith("#") ? kid.substring(1) : kid;
         for (VerificationMethod method : methods) {
             String id = method.id();
@@ -833,6 +871,11 @@ public class SelfSignedCidVerifier {
             }
             String fragment = id.substring(hash + 1);
             if (wanted.equals(fragment) || wanted.equals(KeyIdFragment.decode(fragment))) {
+                return method;
+            }
+        }
+        for (VerificationMethod method : methods) {
+            if (kid.equals(method.publicKeyJwk().path("kid").asText(null))) {
                 return method;
             }
         }
@@ -848,21 +891,20 @@ public class SelfSignedCidVerifier {
     // ---- small helpers ----
 
     /**
-     * True iff a method identifier, when there is one, is a fragment of the subject's own document.
+     * True iff a method identifier is a fragment of the subject's own document.
      *
      * <p>CID 1.0 §3.3 takes the document a method lives in from the method's identifier — the URL
      * without its fragment — and requires that document's {@code id}, and the method's
      * {@code controller}, to be that URL. Here the document is always the subject's, so a method whose
      * identifier names a different document is one that §3.3 would have gone and fetched from there,
-     * not accepted from here. (A method written with no {@code id} at all is tolerated, as it always has
-     * been, and can then only be selected by its JWK's {@code kid}.)</p>
+     * not accepted from here. A method with no identifier is not one §3.3 can retrieve at all (R-23).</p>
      *
      * <p>Document is compared with document, not with the subject as written: a subject identifier
      * may itself carry a fragment — a Solid-style WebID such as {@code https://alice.example/card#me}
      * — and its keys ({@code …/card#key-1}) are still in its document.</p>
      */
     private static boolean inSubjectsDocument(String methodId, String sub) {
-        return methodId == null || documentOf(methodId).equals(documentOf(sub));
+        return methodId != null && documentOf(methodId).equals(documentOf(sub));
     }
 
     /** An identifier without its fragment: the document it names. */
@@ -904,22 +946,22 @@ public class SelfSignedCidVerifier {
         return byId;
     }
 
-    /** The strings the first of {@code names} present on {@code node} holds: one string, or an array of them. */
-    private static Set<String> texts(JsonNode node, String... names) {
+    /**
+     * The one string the first of {@code names} present on {@code node} holds — a string, or an array of
+     * exactly one — or {@code null} if it holds none, several, or something else.
+     */
+    private static String soleText(JsonNode node, String... names) {
         for (String name : names) {
             JsonNode value = node.get(name);
             if (value == null) {
                 continue;
             }
-            Set<String> out = new java.util.LinkedHashSet<>();
-            for (JsonNode element : value.isArray() ? value : List.of(value)) {
-                if (element.isTextual()) {
-                    out.add(element.asText());
-                }
+            if (value.isArray() && value.size() == 1) {
+                value = value.get(0);
             }
-            return out;
+            return value.isTextual() ? value.asText() : null;
         }
-        return Set.of();
+        return null;
     }
 
     /** The first of {@code names} present on {@code node} as a string, or {@code null}. */

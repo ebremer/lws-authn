@@ -141,17 +141,21 @@ the suite cites for this step. The method must be:
   "Verification methods that are not associated with a particular verification relationship cannot be
   used for that verification relationship" (§2.3). A reference to a method in another document is not
   followed;
-- **of the subject's document** — its `id`, when it has one, is a fragment of the subject — and
-  **controlled by the subject** (`controller` equals `sub`);
-- a **`JsonWebKey`** with a `publicKeyJwk` carrying no private members (§2.2.3), or a **`Multikey`**
-  with a `publicKeyMultibase` that is a canonically encoded public key of a supported type — a
-  secret-key header is refused by name (§2.2.2);
+- **identified, in the subject's document** — it has an `id` (§2.2: a method "MUST include `id`,
+  `type`, `controller`"), and that `id` is a fragment of the subject's document — and **controlled by
+  the subject** (`controller` equals `sub`);
+- **of one type**: a **`JsonWebKey`** with a `publicKeyJwk` carrying no private members (§2.2.3), or a
+  **`Multikey`** with a `publicKeyMultibase` that is a canonically encoded public key of a supported
+  type — a secret-key header is refused by name (§2.2.2). A method with a second `type` or
+  `controller`, or with both key properties ("MUST NOT contain multiple verification material
+  properties"), is not usable;
 - **neither revoked nor expired** (`verificationMethodActive`, §2.2); a `revoked` or `expires` that is
   not exactly one `xsd:dateTimeStamp` — unparseable, two values, a number, a node reference — makes the
   method unusable rather than current.
 
 The `kid` may be the method's full identifier (the verification method identifier §3.3 retrieves by,
-and the usual form for a DID), its fragment with or without `#`, or its JWK's `kid`. The key must be
+and the usual form for a DID), its fragment with or without `#`, or its JWK's `kid` — tried in that
+order, so the method a fragment names under §3.4 is the one selected. The key must be
 published for signing and consistent with the token's algorithm (`verificationMethodUsableForSigning`,
 `algorithmMatchesKey` — `ES*` pinned to its curve). Signature (`signatureValid`), explicit `exp`
 (`notExpired`), required `iat` (`issuedAtPresent`) that is not in the future nor after `exp`

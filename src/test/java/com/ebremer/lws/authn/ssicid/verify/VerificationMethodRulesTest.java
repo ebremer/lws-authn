@@ -417,4 +417,94 @@ class VerificationMethodRulesTest {
         assertEquals(1, json(first).size());
         assertTrue(json(second).isEmpty(), "the first map with the id is the method; a later one is not consulted");
     }
+
+    // ------------------------------------------------------------------ CID 1.0 §2.2 shape (R-23)
+
+    private static String jsonWebKey(String id, String jwkKid) {
+        String jwk = P256_JWK.replace("{", "{\"kid\":\"" + jwkKid + "\",");
+        return "{" + (id == null ? "" : "\"id\":\"" + id + "\",") + "\"type\":\"JsonWebKey\",\"controller\":\""
+                + SUB + "\",\"publicKeyJwk\":" + jwk + "}";
+    }
+
+    private static String document(String... methods) {
+        return "{\"id\":\"" + SUB + "\",\"authentication\":[" + String.join(",", methods) + "]}";
+    }
+
+    /**
+     * R-23. CID 1.0 §2.2: a verification method "MUST include id, type, controller". One without an id
+     * was accepted and selectable by its JWK's kid, though §3.3 retrieves a method by its identifier.
+     */
+    @Test
+    void aMethodWithoutAnIdIsNotUsable() throws Exception {
+        assertTrue(json(document(jsonWebKey(null, "k1"))).isEmpty());
+        assertEquals(1, json(document(jsonWebKey(SUB + "#k1", "k1"))).size(), "the same method with an id");
+
+        Model model = ModelFactory.createDefaultModel();
+        Resource blank = model.createResource();
+        blank.addProperty(RDF.type, model.createResource(SsiCidConstants.MULTIKEY_TYPE));
+        blank.addProperty(model.createProperty(SsiCidConstants.SEC_CONTROLLER), model.createResource(SUB));
+        blank.addProperty(model.createProperty(SsiCidConstants.SEC_PUBLIC_KEY_MULTIBASE), ED25519_MULTIKEY);
+        model.createResource(SUB).addProperty(model.createProperty(SsiCidConstants.SEC_AUTHENTICATION), blank);
+        assertTrue(SelfSignedCidVerifier.collectFromRdf(model, SUB).isEmpty());
+    }
+
+    /**
+     * R-23. CID 1.0 §2.2: type "MUST be a string that references exactly one verification method type",
+     * controller a string. A second type or controller leaves the reader to choose which applies. An
+     * array of one is the same single value to a JSON-LD processor.
+     */
+    @Test
+    void aMethodWithTwoTypesOrTwoControllersIsNotUsable() throws Exception {
+        String twoTypes = multikey(SUB + "#k1", SUB, "").replace("\"type\":\"Multikey\"",
+                "\"type\":[\"Multikey\",\"https://example.org/Other\"]");
+        assertTrue(json(document(twoTypes)).isEmpty());
+
+        String oneOfEach = multikey(SUB + "#k1", SUB, "").replace("\"type\":\"Multikey\"", "\"type\":[\"Multikey\"]")
+                .replace("\"controller\":\"" + SUB + "\"", "\"controller\":[\"" + SUB + "\"]");
+        assertEquals(1, json(document(oneOfEach)).size());
+
+        for (String second : new String[]{"type", "controller"}) {
+            Model model = ModelFactory.createDefaultModel();
+            Resource multikey = method(model, SUB + "#k1", SsiCidConstants.MULTIKEY_TYPE);
+            multikey.addProperty(model.createProperty(SsiCidConstants.SEC_PUBLIC_KEY_MULTIBASE), ED25519_MULTIKEY);
+            model.createResource(SUB).addProperty(model.createProperty(SsiCidConstants.SEC_AUTHENTICATION), multikey);
+            assertEquals(1, SelfSignedCidVerifier.collectFromRdf(model, SUB).size(), "control");
+            if (second.equals("type")) {
+                multikey.addProperty(RDF.type, model.createResource(SsiCidConstants.JSON_WEB_KEY_TYPE));
+            } else {
+                multikey.addProperty(model.createProperty(SsiCidConstants.SEC_CONTROLLER),
+                        model.createResource("https://someone-else.example/"));
+            }
+            assertTrue(SelfSignedCidVerifier.collectFromRdf(model, SUB).isEmpty(), second);
+        }
+    }
+
+    /** R-23. CID 1.0 §2.2: a method "MUST NOT contain multiple verification material properties". */
+    @Test
+    void aMethodWithTwoKindsOfKeyMaterialIsNotUsable() throws Exception {
+        String both = multikey(SUB + "#k1", SUB, ",\"publicKeyJwk\":" + P256_JWK);
+        assertTrue(json(document(both)).isEmpty());
+
+        Model model = ModelFactory.createDefaultModel();
+        Resource multikey = method(model, SUB + "#k1", SsiCidConstants.MULTIKEY_TYPE);
+        multikey.addProperty(model.createProperty(SsiCidConstants.SEC_PUBLIC_KEY_MULTIBASE), ED25519_MULTIKEY);
+        multikey.addProperty(model.createProperty(SsiCidConstants.SEC_PUBLIC_KEY_JWK), model.createLiteral(P256_JWK));
+        model.createResource(SUB).addProperty(model.createProperty(SsiCidConstants.SEC_AUTHENTICATION), multikey);
+        assertTrue(SelfSignedCidVerifier.collectFromRdf(model, SUB).isEmpty());
+    }
+
+    /**
+     * R-23. A kid is matched against the method ids — whole, then fragment, the method {@code #kid}
+     * resolves to under CID 1.0 §3.4 — before any JWK's own kid. One method's JWK kid "b" used to win over
+     * the method whose id is {@code #b}.
+     */
+    @Test
+    void theMethodIdIsMatchedBeforeTheJwksOwnKid() throws Exception {
+        List<VerificationMethod> methods = json(document(jsonWebKey(SUB + "#a", "b"), jsonWebKey(SUB + "#b", "c")));
+        assertEquals(2, methods.size());
+        assertSame(methods.get(1), SelfSignedCidVerifier.selectByKid(methods, "b"));
+        assertSame(methods.get(1), SelfSignedCidVerifier.selectByKid(methods, "#b"));
+        assertSame(methods.get(1), SelfSignedCidVerifier.selectByKid(methods, "c"), "the JWK's kid still selects");
+        assertSame(methods.get(0), SelfSignedCidVerifier.selectByKid(methods, "a"));
+    }
 }

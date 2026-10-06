@@ -80,7 +80,9 @@ public final class SelfSignedControlledIdentifierDocument {
      * it can be percent-encoded into one ({@link KeyIdFragment}); when it cannot — absent, blank,
      * absurdly long, or not well-formed text — the position stands in, which is positional and so
      * shifts if keys are added or removed, but is a conforming identifier where there was none.
-     * A verifier selects by the JWK's own {@code kid} first in any case.</p>
+     * A verifier matches a credential's {@code kid} against this identifier — whole, then its fragment —
+     * and only then against the JWK's own {@code kid}, so a positional id still leaves the key
+     * selectable by the {@code kid} it was registered with.</p>
      */
     private String methodId(JsonNode jwk, int index) {
         return KeyIdFragment.methodId(id, jwk.path("kid").asText(null))
