@@ -8,6 +8,7 @@
  */
 package com.ebremer.lws.authn;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -18,7 +19,11 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.jar.JarFile;
 
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
  * What may be bundled unrelocated in the provider JAR (R-42).
@@ -77,6 +82,31 @@ class ShadedJarContentsIT {
                 assertTrue(jar.getEntry(name) != null, "missing from the JAR: " + name);
             }
         }
+    }
+
+    /**
+     * The SBOM describes the JAR, not the build (R-45): none of the server's libraries, nothing from the
+     * test tree. It used to list 208 components, about 180 of them Keycloak's, so a scanner would have
+     * attributed Keycloak's advisories to this JAR. CycloneDX does not run offline, so neither does this.
+     */
+    @Test
+    void theSbomListsOnlyWhatIsBundled() throws IOException {
+        Path bom = providerJar().resolveSibling("bom.json");
+        Assumptions.assumeTrue(Files.exists(bom), "no target/bom.json: the CycloneDX plugin does not run offline");
+        Set<String> notBundled = Set.of("org.keycloak", "io.quarkus", "org.slf4j", "org.glassfish",
+                "com.google.protobuf", "org.jspecify", "com.google.errorprone", "org.junit.jupiter",
+                "org.testcontainers", "com.github.dasniko", "org.bouncycastle", "org.apache.httpcomponents",
+                "org.jboss.logging", "jakarta.ws.rs");
+        Set<String> listed = new TreeSet<>();
+        for (JsonNode component : new ObjectMapper().readTree(bom.toFile()).path("components")) {
+            String group = component.path("group").asText();
+            listed.add(group + ":" + component.path("name").asText());
+            assertTrue(!notBundled.contains(group), "the SBOM lists " + group + ":" + component.path("name").asText()
+                    + ", which the JAR does not contain");
+            assertEquals("required", component.path("scope").asText(), "scope of " + group);
+        }
+        assertTrue(listed.contains("org.apache.jena:jena-arq") && listed.contains("com.google.code.gson:gson"),
+                "the SBOM does not list what is bundled: " + listed);
     }
 
     /** The JAR Failsafe names, or the newest one in {@code target/} when run from an IDE. */

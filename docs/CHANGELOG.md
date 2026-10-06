@@ -507,6 +507,10 @@ each may reject a document that used to verify. Check your issuers' documents be
   relocated, like commons-codec and the rest; Error Prone's annotations are no longer bundled. The build
   fails on a bundled library resolved below a version the tree asks for (`requireUpperBoundDeps`), and
   a new `ShadedJarContentsIT` fails on any class bundled unrelocated in a package Keycloak also has.
+- **The SBOM describes the JAR** (R-45). `target/bom.json` listed 208 components, about 180 of them
+  Keycloak's own libraries, so a scanner reading it would attribute Keycloak's advisories to this
+  provider. It now lists the 20 libraries the JAR bundles; protobuf-java, which the JAR never contained,
+  is `provided` like the server's other libraries.
 - **Dependabot leaves deliberate pins alone** (R-41): the APIs Keycloak supplies, and minor or major
   updates of the libraries bundled at Jena's version, are ignored, as are JUnit majors.
 

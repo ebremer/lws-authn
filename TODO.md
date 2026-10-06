@@ -1164,12 +1164,23 @@ is needed.
   - Plus a regression test for each P0/P1 item as it is fixed. `LwsAuthIT` re-implements JWT minting at
     18 sites instead of using `testsupport/SelfIssuedJwts`.
 
-- [ ] **R-45 · The SBOM does not describe the JAR.** `Medium` · build · `S` · *verified*
+- [x] **R-45 · The SBOM does not describe the JAR.** `Medium` · build · `S` · *verified*
   `target/bom.json` lists 208 components, all `required`; about 180 are Keycloak's `provided` tree
   (Quarkus, netty, grpc, guava, xmlsec …) plus protobuf-java, which the shade plugin excludes, and none of
   the relocations are reflected. CI archives it "so what actually shipped can be matched against an
   advisory", but scanners will attribute Keycloak's CVEs to `lws-authn`. **Do:**
   `<includeProvidedScope>false</includeProvidedScope>`, account for the shade excludes, `makeBom`.
+  **Done.** `makeBom` with `provided`, `test` and `system` scopes off. That alone left six components the
+  JAR does not contain — slf4j-api, jcl-over-slf4j, jakarta.json, jspecify, protobuf-java, Error Prone —
+  because the plugin still saw them as Jena's (or, for jspecify, Caffeine's through Keycloak's tree)
+  children; `jena-arq` now excludes them and the managed Caffeine excludes jspecify, and protobuf-java is
+  `provided` at the server's 4.35.0 like the others (the shade exclude stays as a second guard). The SBOM
+  went from 208 components to 20, which are exactly the bundled libraries: five Jena modules, four
+  Titanium, Gson, commons-io/-lang3/-codec/-collections4/-compress/-csv, Caffeine, Dexx, RoaringBitmap
+  and Thrift. Relocation cannot be expressed per component in CycloneDX and is documented instead
+  (`pom.xml`, `build.md`): relocated code is the same code. `ShadedJarContentsIT` fails if a server or
+  test library reappears in `bom.json`. One thing the review did not say: the plugin skips itself in
+  offline mode ("Goal makeBom requires online mode"), so `mvn -o` builds have no SBOM — CI builds online.
 
 - [ ] **R-46 · Licence files in the JAR.** `Low` · packaging · `S` · *verified*
   The Docker-built JAR carries **no licence**: `LICENSE` is outside the build context (`.dockerignore`),

@@ -72,7 +72,10 @@ mvn clean package
 
 This produces a single, self-contained provider JAR: **`target/lws-authn-<version>.jar`** — this tree is
 `0.3.0-SNAPSHOT`, unreleased work after 0.2.0 — plus a CycloneDX
-SBOM (`target/bom.json`, `target/bom.xml`) listing exactly what is inside it and under what licence.
+SBOM (`target/bom.json`, `target/bom.xml`) listing exactly what is inside it and under what licence:
+the 20 bundled libraries, not the Keycloak libraries the provider compiles against. Relocated libraries
+appear under their own coordinates — relocation renames the packages, not the code. The CycloneDX plugin
+does not run in an offline build (`mvn -o`), so build online when you need the SBOM.
 
 Apache Jena and its dependencies are shaded in. Where Jena and Keycloak want the same library, the
 build picks one of two strategies deliberately, because the wrong one is a runtime failure either way:

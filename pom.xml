@@ -25,6 +25,7 @@
         <slf4j.version>2.0.18</slf4j.version>
         <jakarta-json.version>2.0.1</jakarta-json.version>
         <error-prone-annotations.version>2.49.0</error-prone-annotations.version>
+        <protobuf.version>4.35.0</protobuf.version>
         <!-- Base package for relocated third-party code (see the shade plugin below). -->
         <shade.base>com.ebremer.lws.authn.shaded</shade.base>
         <!-- Versions Jena 6.2.0 declares for libraries that carry behaviour and that Keycloak also
@@ -66,6 +67,14 @@
                 <groupId>com.github.ben-manes.caffeine</groupId>
                 <artifactId>caffeine</artifactId>
                 <version>${caffeine.version}</version>
+                <!-- Its annotations are the server's (`provided` below); excluded here because Caffeine is
+                     also reached through Keycloak's tree, where jena-arq's exclusions do not apply. -->
+                <exclusions>
+                    <exclusion>
+                        <groupId>org.jspecify</groupId>
+                        <artifactId>jspecify</artifactId>
+                    </exclusion>
+                </exclusions>
             </dependency>
             <dependency>
                 <groupId>org.apache.commons</groupId>
@@ -185,6 +194,15 @@
             <version>${jspecify.version}</version>
             <scope>provided</scope>
         </dependency>
+        <!-- Jena's RDF-protobuf support, which LWS does not use. Keycloak ships it, and Jena resolves it
+             from the server; `provided` keeps it out of the JAR and out of the SBOM, which until R-45
+             listed it although the shade plugin left it out. -->
+        <dependency>
+            <groupId>com.google.protobuf</groupId>
+            <artifactId>protobuf-java</artifactId>
+            <version>${protobuf.version}</version>
+            <scope>provided</scope>
+        </dependency>
         <!-- Annotations Gson is compiled with (R-42). Nothing reads them at run time, and the server
              ships a copy, so there is nothing to bundle. -->
         <dependency>
@@ -219,6 +237,32 @@
             <groupId>org.apache.jena</groupId>
             <artifactId>jena-arq</artifactId>
             <version>${jena.version}</version>
+            <!-- What Jena would bring that the server supplies (the `provided` block above). Declaring
+                 them `provided` already keeps them out of the JAR; excluding them here also takes them
+                 out of the dependency graph the SBOM is built from, which otherwise still lists them
+                 as Jena's children (R-45). -->
+            <exclusions>
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.glassfish</groupId>
+                    <artifactId>jakarta.json</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.jspecify</groupId>
+                    <artifactId>jspecify</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.google.protobuf</groupId>
+                    <artifactId>protobuf-java</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.google.errorprone</groupId>
+                    <artifactId>error_prone_annotations</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <!-- Titanium is Jena's JSON-LD 1.1 engine. Declared directly because RdfParsing and
              LocalJsonLdContexts name its types (JsonLdOptions, DocumentLoader) to install a loader that
@@ -374,7 +418,14 @@
             <!-- A CycloneDX SBOM for the provider JAR (target/bom.json, target/bom.xml). This is what
                  answers "what is actually inside this shaded artifact, and under what licence" — a
                  question the JAR itself stopped answering honestly once ~20 libraries were merged into
-                 it. Attached to the build so it is produced with every package. -->
+                 it. Attached to the build so it is produced with every package.
+
+                 It lists what is bundled and nothing else (R-45): `provided` is the server's — about
+                 180 of Keycloak's own libraries, which a scanner would otherwise attribute to this
+                 JAR along with their advisories — and `test` and `system` never ship. What the shade
+                 plugin leaves out is `provided` too, so this scope rule is the whole of the filter.
+                 Relocated libraries are listed under their own coordinates: relocation renames the
+                 packages, not the code, so an advisory against gson 2.14.0 is one against this JAR. -->
             <plugin>
                 <groupId>org.cyclonedx</groupId>
                 <artifactId>cyclonedx-maven-plugin</artifactId>
@@ -384,8 +435,13 @@
                         <id>sbom</id>
                         <phase>package</phase>
                         <goals>
-                            <goal>makeAggregateBom</goal>
+                            <goal>makeBom</goal>
                         </goals>
+                        <configuration>
+                            <includeProvidedScope>false</includeProvidedScope>
+                            <includeTestScope>false</includeTestScope>
+                            <includeSystemScope>false</includeSystemScope>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>
@@ -435,8 +491,8 @@
                         </goals>
                         <configuration>
                             <createDependencyReducedPom>false</createDependencyReducedPom>
-                            <!-- protobuf-java is excluded only: Keycloak ships its own copy (so bundling
-                                 ours caused a split-package warning), and Jena resolves it from Keycloak
+                            <!-- protobuf-java is `provided` and excluded: Keycloak ships its own copy (so
+                                 bundling ours caused a split-package warning), and Jena resolves it from Keycloak
                                  at runtime via parent-classloader delegation. libthrift is NOT excluded —
                                  Keycloak has no copy, and Jena's RIOT writer registry fails to initialise
                                  (breaking even Turtle) if it is absent. Both formats are unused by LWS. -->
