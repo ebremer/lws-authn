@@ -49,7 +49,7 @@ jobs:
       # binds host port 8080 — see its class javadoc — which is free on a hosted runner.
       # requireDocker turns "no Docker, every IT skipped" from a green build into a red one (R-43).
       - name: Build and run integration tests
-        run: mvn -B -ntp verify -Dlws.authn.requireDocker=true
+        run: ./mvnw -B -ntp verify -Dlws.authn.requireDocker=true
 
       # Belt to requireDocker's braces: a green build must have run the integration tests, all of them.
       - name: Assert the integration tests ran
@@ -113,7 +113,7 @@ jobs:
       # Unit tests only: the integration test is covered by the JDK 21 job, and running two Keycloak
       # containers per push buys nothing.
       - name: Build
-        run: mvn -B -ntp package -DskipITs
+        run: ./mvnw -B -ntp package -DskipITs
 
       - name: Assert the class files are still Java 21
         run: |
@@ -154,7 +154,7 @@ jobs:
           queries: security-and-quality
 
       - name: Build for analysis
-        run: mvn -B -ntp compile -DskipTests
+        run: ./mvnw -B -ntp compile -DskipTests
 
       - name: Analyze
         uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2

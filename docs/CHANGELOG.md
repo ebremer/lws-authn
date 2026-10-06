@@ -527,6 +527,11 @@ each may reject a document that used to verify. Check your issuers' documents be
   interface, its `admin`/`admin` bootstrap admin and loopback allow-list were open to the network. The
   `Dockerfile`'s base images are pinned by digest, and Dependabot proposes digest updates; the
   `KEYCLOAK_VERSION` build argument is gone, since Dependabot cannot read a `FROM` line built from one.
+- **Build hygiene** (R-49). The build is reproducible (`project.build.outputTimestamp`). A Maven wrapper
+  pins Maven 3.9.16 by checksum, and CI uses it. `mvn verify` runs `dependency:analyze`. The manifest
+  declares `Multi-Release: true`, so RoaringBitmap's Java 11 class is used. The tests no longer log a
+  JUL "LogManager accessed before…" error. Plugins and test libraries are updated, commons-codec is
+  bundled at 1.22.1 and jboss-logging is compiled against 3.6.3, the versions Keycloak 26.8.0 ships.
 - **Dependabot leaves deliberate pins alone** (R-41): the APIs Keycloak supplies, and minor or major
   updates of the libraries bundled at Jena's version, are ignored, as are JUnit majors.
 

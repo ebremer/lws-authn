@@ -20,3 +20,8 @@
 # this is invisible from a Windows box; but `README.md` documents `bash scripts/lws-demo.sh` as the way
 # to try each suite, so anyone taking a Windows checkout into WSL, a container or a Linux host hits it.
 *.sh text eol=lf
+
+# The Maven wrapper (R-49): the POSIX script needs LF for the same reason as the scripts above, and the
+# Windows one CRLF, which cmd.exe expects.
+mvnw text eol=lf
+*.cmd text eol=crlf

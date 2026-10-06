@@ -14,6 +14,10 @@
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- Reproducible builds (R-49): every entry of every archive gets this timestamp instead of the
+             build's clock, so the same commit built twice gives the same JAR, byte for byte. Set it to
+             the release commit's time when releasing. -->
+        <project.build.outputTimestamp>2026-10-06T00:00:00Z</project.build.outputTimestamp>
         <!-- Keycloak 26.x runs on JDK 21; Apache Jena 6 requires JDK 21. Target 21 so the
              compiled provider loads inside the Keycloak runtime regardless of the build JDK. -->
         <maven.compiler.release>21</maven.compiler.release>
@@ -35,7 +39,7 @@
         <titanium.version>1.7.0</titanium.version>
         <caffeine.version>3.2.4</caffeine.version>
         <commons-collections4.version>4.5.0</commons-collections4.version>
-        <commons-codec.version>1.22.0</commons-codec.version>
+        <commons-codec.version>1.22.1</commons-codec.version>
         <gson.version>2.14.0</gson.version>
         <commons-io.version>2.22.0</commons-io.version>
         <commons-lang3.version>3.20.0</commons-lang3.version>
@@ -131,8 +135,10 @@
             <version>${keycloak.version}</version>
             <scope>provided</scope>
         </dependency>
-        <!-- Keycloak's SAML processing library (XML signature validation, parsing). Part of the
-             Keycloak server runtime, so provided. -->
+        <!-- Keycloak's SAML library. Nothing here calls it since R-22 applies the signature profile
+             itself, but SAMLIdentityProviderConfig (keycloak-services), which the SAML verifier reads
+             its trusted certificates from, cannot load without it, and keycloak-services does not
+             bring it. Part of the server runtime, so provided. -->
         <dependency>
             <groupId>org.keycloak</groupId>
             <artifactId>keycloak-saml-core</artifactId>
@@ -161,7 +167,7 @@
         <dependency>
             <groupId>org.jboss.logging</groupId>
             <artifactId>jboss-logging</artifactId>
-            <version>3.6.2.Final</version>
+            <version>3.6.3.Final</version>
             <scope>provided</scope>
         </dependency>
 
@@ -286,8 +292,8 @@
         <!-- Jena 6.2.0 declares commons-codec 1.22.0, and needs at least 1.19 (for MurmurHash3).
              Keycloak's provided dependencies declare much older ones — 1.11 through httpclient
              4.5.14, 1.18.0 through xmlsec — which Maven's nearest-wins would otherwise resolve.
-             Declared here, at depth 1, so the bundled (relocated) copy is the version Jena was built
-             against. -->
+             Declared here, at depth 1, so the bundled (relocated) copy is Jena's version or, as now,
+             a patch release of it (1.22.1, which the 26.8.0 server also ships; R-49). -->
         <dependency>
             <groupId>commons-codec</groupId>
             <artifactId>commons-codec</artifactId>
@@ -310,7 +316,7 @@
         <dependency>
             <groupId>com.github.dasniko</groupId>
             <artifactId>testcontainers-keycloak</artifactId>
-            <version>4.3.1</version>
+            <version>4.4.0</version>
             <scope>test</scope>
         </dependency>
         <!-- (Jackson is available to tests via keycloak-core's provided transitive dependency.) -->
@@ -318,7 +324,7 @@
         <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcpkix-jdk18on</artifactId>
-            <version>1.85</version>
+            <version>1.86</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -341,7 +347,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.13.0</version>
+                <version>3.16.0</version>
             </plugin>
 
             <!-- forceCreation matters here. The shade plugin replaces target/lws-authn-<version>.jar with
@@ -352,7 +358,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
-                <version>3.4.2</version>
+                <version>3.5.1</version>
                 <configuration>
                     <forceCreation>true</forceCreation>
                 </configuration>
@@ -383,7 +389,7 @@
                     <dependency>
                         <groupId>org.codehaus.mojo</groupId>
                         <artifactId>extra-enforcer-rules</artifactId>
-                        <version>1.12.0</version>
+                        <version>1.12.1</version>
                     </dependency>
                 </dependencies>
                 <executions>
@@ -455,14 +461,71 @@
                 </executions>
             </plugin>
 
+            <!-- Pinned with Failsafe, which it shares a release with (R-49). The JBoss LogManager is on the
+                 test classpath through Keycloak's tree, and claims java.util.logging when first touched;
+                 named here at JVM start, it does so without "The LogManager accessed before the
+                 java.util.logging.manager system property was set" on every run. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.6.0</version>
+                <configuration>
+                    <argLine>-Djava.util.logging.manager=org.jboss.logmanager.LogManager</argLine>
+                </configuration>
+            </plugin>
+
+            <!-- dependency:analyze at `verify` (R-49): a class used from a library nobody declared, or a
+                 declaration nothing uses, fails the build. Ignored, each for a reason: what Keycloak
+                 supplies through the SPI artifacts (its versions are the server's, so they are not
+                 repeated here), Jena's modules (they come with jena-arq, with its exclusions), and the
+                 test tree's aggregates; and, unused, the declarations that exist to fix a version or a
+                 scope — the `provided` facades, the pins Jena reaches, the JUnit aggregate. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>3.11.0</version>
+                <executions>
+                    <execution>
+                        <id>analyze</id>
+                        <goals>
+                            <goal>analyze-only</goal>
+                        </goals>
+                        <configuration>
+                            <failOnWarning>true</failOnWarning>
+                            <ignoredUsedUndeclaredDependencies>
+                                <ignoredUsedUndeclaredDependency>org.keycloak:*</ignoredUsedUndeclaredDependency>
+                                <ignoredUsedUndeclaredDependency>com.fasterxml.jackson.core:*</ignoredUsedUndeclaredDependency>
+                                <ignoredUsedUndeclaredDependency>org.apache.httpcomponents:httpcore</ignoredUsedUndeclaredDependency>
+                                <ignoredUsedUndeclaredDependency>org.apache.jena:*</ignoredUsedUndeclaredDependency>
+                                <ignoredUsedUndeclaredDependency>org.junit.jupiter:*</ignoredUsedUndeclaredDependency>
+                                <ignoredUsedUndeclaredDependency>org.testcontainers:*</ignoredUsedUndeclaredDependency>
+                                <ignoredUsedUndeclaredDependency>org.bouncycastle:*</ignoredUsedUndeclaredDependency>
+                            </ignoredUsedUndeclaredDependencies>
+                            <ignoredUnusedDeclaredDependencies>
+                                <ignoredUnusedDeclaredDependency>org.keycloak:keycloak-saml-core</ignoredUnusedDeclaredDependency>
+                                <ignoredUnusedDeclaredDependency>org.glassfish:jakarta.json</ignoredUnusedDeclaredDependency>
+                                <ignoredUnusedDeclaredDependency>org.jspecify:jspecify</ignoredUnusedDeclaredDependency>
+                                <ignoredUnusedDeclaredDependency>com.google.protobuf:protobuf-java</ignoredUnusedDeclaredDependency>
+                                <ignoredUnusedDeclaredDependency>com.google.errorprone:error_prone_annotations</ignoredUnusedDeclaredDependency>
+                                <ignoredUnusedDeclaredDependency>org.slf4j:*</ignoredUnusedDeclaredDependency>
+                                <ignoredUnusedDeclaredDependency>org.apache.commons:commons-compress</ignoredUnusedDeclaredDependency>
+                                <ignoredUnusedDeclaredDependency>commons-codec:commons-codec</ignoredUnusedDeclaredDependency>
+                                <ignoredUnusedDeclaredDependency>org.junit.jupiter:junit-jupiter</ignoredUnusedDeclaredDependency>
+                            </ignoredUnusedDeclaredDependencies>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
             <!-- Run *IT integration tests (Testcontainers) in the integration-test phase, after the
                  provider JAR is packaged. `mvn verify` builds the jar then runs the IT against a real
                  Keycloak container. -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
-                <version>3.5.2</version>
+                <version>3.6.0</version>
                 <configuration>
+                    <argLine>-Djava.util.logging.manager=org.jboss.logmanager.LogManager</argLine>
                     <systemPropertyVariables>
                         <!-- The shaded JAR LwsAuthIT deploys, so the test never hard-codes a version. -->
                         <lws.authn.providerJar>${project.build.directory}/${project.build.finalName}.jar</lws.authn.providerJar>
@@ -491,7 +554,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
-                <version>3.6.0</version>
+                <version>3.6.2</version>
                 <executions>
                     <execution>
                         <phase>package</phase>
@@ -526,7 +589,7 @@
                                  the server's copy.
 
                                                          Jena 6.2.0   Keycloak POMs   26.8.0 server
-                                   commons-codec         1.22.0       1.11, 1.18.0    1.22.1
+                                   commons-codec         1.22.0 (*)   1.11, 1.18.0    1.22.1
                                    titanium-json-ld      1.7.0        1.3.3           1.3.3
                                    commons-collections4  4.5.0        4.4             4.5.0
                                    caffeine              3.2.4        3.2.3           3.2.4
@@ -534,8 +597,9 @@
                                    commons-io            2.22.0       -  (*)          2.22.0
                                    commons-lang3         3.20.0       -               3.20.0
 
-                                 (*) Keycloak's POMs do not reach it, but commons-compress 1.28.0 does,
-                                 at 2.20.0 and nearer than Jena: see <dependencyManagement>.
+                                 (*) bundled at 1.22.1, a patch release ahead of Jena (R-49).
+                                 (*) commons-io: Keycloak's POMs do not reach it, but commons-compress
+                                 1.28.0 does, at 2.20.0 and nearer than Jena: see <dependencyManagement>.
                                  The last three were bundled unrelocated until R-42 — a second copy of
                                  each package the server already has, and for commons-io an older one.
                                  What else is bundled unrelocated (Jena itself, Thrift, RoaringBitmap,
@@ -585,8 +649,14 @@
                                 <!-- Merge META-INF/services so Jena's RIOT subsystems all register. -->
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
                                 <!-- One manifest for the shaded artifact rather than whichever of the
-                                     ~20 input manifests happened to be copied last. -->
-                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer"/>
+                                     ~20 input manifests happened to be copied last. Multi-Release, because
+                                     RoaringBitmap is one: without the attribute its META-INF/versions/11
+                                     class is never loaded, and the Java 8 fallback runs instead (R-49). -->
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <manifestEntries>
+                                        <Multi-Release>true</Multi-Release>
+                                    </manifestEntries>
+                                </transformer>
                                 <!-- Concatenate the LICENSE and NOTICE files of the bundled Apache
                                      libraries instead of keeping whichever one happened to be copied
                                      last. For a fat JAR of Apache-licensed code that is an Apache-2.0

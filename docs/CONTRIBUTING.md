@@ -8,7 +8,7 @@ credential genuine" can be relied on.
 
 ## Getting set up
 
-Requires **JDK 21+** and Maven; Docker for the integration test.
+Requires **JDK 21+**, and Maven 3.9+ or the `./mvnw` wrapper; Docker for the integration test.
 
 ```bash
 mvn clean verify      # 346 unit tests + 30 in LwsAuthIT (a real Keycloak 26.8.0 container)

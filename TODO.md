@@ -1231,13 +1231,27 @@ is needed.
   token or JWT, and a `400` on user creation stops `lws-demo.sh` with the server's message instead of
   "created user". Not run against a real Keycloak here (no Docker). Needs curl 7.76 or later.
 
-- [ ] **R-49 · Build hygiene.** `Low` · build · `S`
+- [x] **R-49 · Build hygiene.** `Low` · build · `S`
   No `project.build.outputTimestamp` (not reproducible); surefire unpinned while failsafe is 3.5.2; no
   Maven wrapper; no `dependency:analyze`; tests print a JUL "LogManager accessed before…" ERROR (set
   `java.util.logging.manager` in surefire); the manifest drops `Multi-Release: true`, so RoaringBitmap's
   `META-INF/versions/11` class is dead weight. Plugin updates: compiler 3.13.0 → 3.16.0, jar 3.4.2 →
   3.5.1, shade 3.6.0 → 3.6.2, failsafe 3.5.2 → 3.6.0, extra-enforcer-rules 1.12.0 → 1.12.1; libraries:
   testcontainers-keycloak 4.3.1 → 4.4.0, bcpkix 1.85 → 1.86 (test), commons-codec 1.22.0 → 1.22.1.
+  **Done**, all of it. `project.build.outputTimestamp` is set: two clean builds gave the same JAR, byte
+  for byte (`sha256 a93898c9…`, JDK 25 here; another JDK writes another `Build-Jdk-Spec`). Surefire is
+  pinned at 3.6.0, with Failsafe. A script-only Maven wrapper (3.3.4) pins Maven 3.9.16 with its
+  SHA-256 (taken from the downloaded zip, whose SHA-512 matches Central's and Apache's CDN); a changed
+  checksum makes `./mvnw` refuse it, and CI now builds with `./mvnw`. `dependency:analyze-only` runs at
+  `verify` with `failOnWarning`, ignoring — each with its reason in the POM — what Keycloak supplies
+  through the SPI artifacts, Jena's modules, the test aggregates, and the version-or-scope pins; it
+  found `keycloak-saml-core` unused since R-22, but SAMLIdentityProviderConfig cannot load without it
+  (four SAML tests failed when it was removed), so it stays, now saying why. The JBoss LogManager is named
+  in `argLine` for Surefire and Failsafe, and the "LogManager accessed before…" ERROR is gone. The
+  manifest says `Multi-Release: true`. Plugins: compiler 3.16.0, jar 3.5.1, shade 3.6.2, failsafe 3.6.0,
+  extra-enforcer-rules 1.12.1; libraries: testcontainers-keycloak 4.4.0 (built for Keycloak 26.8.0),
+  bcpkix 1.86, commons-codec 1.22.1 (the 26.8.0 server's version; a patch ahead of Jena's), and
+  jboss-logging 3.6.3 (`provided`, the server's). The IT's new testcontainers-keycloak has not run here.
 
 - [ ] **R-50 · Tag the 0.2.0 release** (carried forward from **S-13**). `Low` · release · `S`
   Still only `lws-authn-0.1.0` exists, locally and on `origin`; `e539362` (the 0.2.0 bump, the build

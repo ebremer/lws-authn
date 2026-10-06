@@ -65,12 +65,18 @@ For a real server, follow the [install guide](INSTALL.md).
 
 ## Build
 
-Requires JDK 21+ and Maven. (The build compiles to Java 21 bytecode so the provider loads in
-Keycloak's runtime; a newer build JDK such as 25 is fine.)
+Requires JDK 21+. Maven 3.9 or later works; `./mvnw` (`mvnw.cmd` on Windows) fetches the Maven 3.9.16
+this tree is built with, and checks its SHA-256, which is what CI uses. (The build compiles to Java 21
+bytecode so the provider loads in Keycloak's runtime; a newer build JDK such as 25 is fine.)
 
 ```bash
-mvn clean package
+./mvnw clean package
 ```
+
+The build is reproducible: every archive entry carries `project.build.outputTimestamp` rather than the
+build's clock, so the same commit built twice with the same JDK gives the same JAR, byte for byte.
+`mvn verify` also runs `dependency:analyze`, which fails on a class used from a library nobody
+declared, or on a declaration nothing uses; the POM lists what it ignores, and why.
 
 This produces a single, self-contained provider JAR: **`target/lws-authn-<version>.jar`** — this tree is
 `0.3.0-SNAPSHOT`, unreleased work after 0.2.0 — plus a CycloneDX
