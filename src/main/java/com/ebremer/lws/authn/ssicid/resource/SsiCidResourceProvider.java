@@ -91,6 +91,11 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
      */
     public static final CidEndpoint.DocumentRenderer DOCUMENTS = (user, issuer, webId, contentType) -> {
         SelfSignedControlledIdentifierDocument cid = new SelfSignedControlledIdentifierDocument(webId, publishableJwks(user));
+        for (String refused : cid.refusedMethodIds()) {
+            log.warnf("Refusing to publish the '%s' values on user %s that share the key id of %s: they are "
+                    + "different keys, and a credential naming that kid could mean either", SsiCidConstants.JWK_ATTRIBUTE,
+                    user.getId(), refused);
+        }
         return switch (contentType) {
             case SsiCidConstants.TURTLE -> cid.toRdf(RDFFormat.TURTLE);
             case SsiCidConstants.N_TRIPLES -> cid.toRdf(RDFFormat.NTRIPLES);

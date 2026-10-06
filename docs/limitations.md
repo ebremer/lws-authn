@@ -41,8 +41,10 @@ nav_order: 4
 - **Verification-method identifiers.** A JWK `kid` is arbitrary text, so the self-signed-CID document
   percent-encodes it into the `<subject>#<kid>` fragment rather than producing an IRI Jena refuses to
   serialize. Every method has an `id`, as CID 1.0 requires: when the `kid` cannot supply the fragment —
-  absent, blank, over-long, or not well-formed text — the position stands in as `#key-<n>`. The
-  verifier matches a credential's `kid` against a method's fragment both raw and decoded, so documents
+  absent, blank, over-long, or not well-formed text — the position stands in as `#key-<n>`, skipping any
+  id a `kid` already took. No two methods share an id: the same key registered twice is published once,
+  and different keys registered under one `kid` are not published at all, with a warning in the log —
+  a credential naming that `kid` could mean either. The verifier matches a credential's `kid` against a method's fragment both raw and decoded, so documents
   from other implementations still resolve.
 - **Audience / token exchange.** Every `/verify` endpoint accepts an `audience` parameter (and the
   OpenID one a `client_id`) so the credential can be bound to the party checking it — and a deployment

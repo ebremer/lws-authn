@@ -375,6 +375,11 @@ each may reject a document that used to verify. Check your issuers' documents be
   that is not a literal, or **two values for one property** — two expiry dates, two revocations, two
   `publicKeyJwk`s — where the reader used to take whichever the query returned first (R-03). In JSON, so
   does a value that is not one date: an array of two, a number, a node reference (R-06).
+- **The served self-signed CID document never gives two methods one id** (R-33). A key registered as
+  `kid: "key-2"` followed by one with no `kid` were both published as `#key-2` — in RDF one method with
+  two keys, of which a verifier reading the document back kept one, so credentials signed with the
+  other failed. A positional `#key-<n>` now skips any id a `kid` took; the same key registered twice is
+  published once; and different keys under one `kid` are not published, with a warning in the log.
 - **A `publicKeyJwk` carrying private members is not a usable verification method** (CID 1.0 §2.2.3).
   This provider already refused to *publish* one (P0-1); it now refuses to *verify* against one too.
 - **`ES256`/`ES384`/`ES512` are pinned to P-256/P-384/P-521** (RFC 7518 §3.4), for every JWT suite. A

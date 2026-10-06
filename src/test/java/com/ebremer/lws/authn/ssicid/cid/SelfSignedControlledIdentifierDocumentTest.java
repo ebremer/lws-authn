@@ -5,15 +5,24 @@
  */
 package com.ebremer.lws.authn.ssicid.cid;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import org.apache.jena.rdf.model.Model;
+import org.apache.jena.rdf.model.ModelFactory;
+import org.apache.jena.rdf.model.Property;
+import org.apache.jena.rdf.model.RDFNode;
+import org.apache.jena.riot.Lang;
 import org.apache.jena.riot.RDFFormat;
+import org.apache.jena.riot.RDFParser;
 import org.junit.jupiter.api.Test;
 import org.keycloak.util.JsonSerialization;
+
+import com.ebremer.lws.authn.ssicid.SsiCidConstants;
 
 /**
  * P0-1, at the last line of defence. The resource provider filters and logs, but the document builder
@@ -93,5 +102,64 @@ class SelfSignedControlledIdentifierDocumentTest {
         String turtle = document.toRdf(RDFFormat.TURTLE);
         assertTrue(turtle.contains("key-1"), turtle);
         assertFalse(turtle.contains("[ a"), "no blank-node verification method should remain: " + turtle);
+    }
+
+    // ---------------------------------------------------------------------------------- R-33
+
+    private static JsonNode ec(String kid, String x) throws Exception {
+        return json("{" + (kid == null ? "" : "\"kid\":\"" + kid + "\",")
+                + "\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"" + x + "\",\"y\":\"PUBY\"}");
+    }
+
+    /** Each verification method, read back from the Turtle as a verifier reads it, with its keys. */
+    private static java.util.Map<String, List<String>> methodsInTurtle(SelfSignedControlledIdentifierDocument document) {
+        Model model = ModelFactory.createDefaultModel();
+        RDFParser.fromString(document.toRdf(RDFFormat.TURTLE), Lang.TURTLE).parse(model);
+        Property authentication = model.createProperty(SsiCidConstants.SEC_AUTHENTICATION);
+        Property publicKeyJwk = model.createProperty(SsiCidConstants.SEC_PUBLIC_KEY_JWK);
+        java.util.Map<String, List<String>> methods = new java.util.TreeMap<>();
+        model.listObjectsOfProperty(model.createResource(ID), authentication).forEachRemaining(method ->
+                methods.put(method.asResource().getURI(), model.listObjectsOfProperty(method.asResource(), publicKeyJwk)
+                        .mapWith(RDFNode::toString).toList()));
+        return methods;
+    }
+
+    /**
+     * A key registered as {@code kid: "key-2"} followed by one with no {@code kid} were both {@code #key-2}:
+     * one node in RDF with two keys, and read back, one key — tokens signed with the other failed.
+     */
+    @Test
+    void aPositionalIdNeverTakesOneAKidAlreadyHas() throws Exception {
+        SelfSignedControlledIdentifierDocument document =
+                new SelfSignedControlledIdentifierDocument(ID, List.of(ec("key-2", "PUBA"), ec(null, "PUBB")));
+
+        java.util.Map<String, List<String>> methods = methodsInTurtle(document);
+        assertEquals(java.util.Set.of(ID + "#key-2", ID + "#key-3"), methods.keySet(), methods.toString());
+        methods.values().forEach(keys -> assertEquals(1, keys.size(), methods.toString()));
+        assertTrue(document.refusedMethodIds().isEmpty());
+    }
+
+    /** Two different keys under one {@code kid}: a credential naming it could mean either, so neither. */
+    @Test
+    void differentKeysSharingAKidAreNotPublished() throws Exception {
+        SelfSignedControlledIdentifierDocument document = new SelfSignedControlledIdentifierDocument(ID,
+                List.of(ec("k1", "PUBA"), ec("k2", "PUBB"), ec("k1", "PUBC")));
+
+        assertEquals(java.util.Set.of(ID + "#k2"), methodsInTurtle(document).keySet());
+        assertEquals(List.of(ID + "#k1"), document.refusedMethodIds());
+        assertFalse(document.toJsonLd().contains("PUBA"));
+        assertFalse(document.toJsonLd().contains("PUBC"));
+    }
+
+    /** The same key registered twice is one method. */
+    @Test
+    void theSameKeyRegisteredTwiceIsPublishedOnce() throws Exception {
+        SelfSignedControlledIdentifierDocument document =
+                new SelfSignedControlledIdentifierDocument(ID, List.of(ec("k1", "PUBA"), ec("k1", "PUBA")));
+
+        java.util.Map<String, List<String>> methods = methodsInTurtle(document);
+        assertEquals(java.util.Set.of(ID + "#k1"), methods.keySet());
+        assertEquals(1, methods.get(ID + "#k1").size());
+        assertTrue(document.refusedMethodIds().isEmpty());
     }
 }

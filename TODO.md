@@ -933,12 +933,18 @@ is needed.
   refused, `InResponseTo`/`Address` unchecked (no request state, no presenter), and encrypted
   assertions/identifiers, `<Advice>` assertions and DEFLATE unsupported.
 
-- [ ] **R-33 · The served self-signed CID can publish duplicate method ids.** `Low` · correctness · `S` · *demonstrated*
+- [x] **R-33 · The served self-signed CID can publish duplicate method ids.** `Low` · correctness · `S` · *demonstrated*
   `ssicid/cid/SelfSignedControlledIdentifierDocument.java:184-187`: the positional `#key-<n>` fallback can
   collide with a real `kid` (a JWK with `kid: "key-2"` followed by one without a `kid`), and two JWKs
   with the same `kid` collide outright; in RDF the two methods merge into one node with two
   `publicKeyJwk`, and after a Turtle round trip only one key is collected, so tokens signed with the
   other fail. **Do:** de-duplicate ids; refuse or log duplicate `kid`s.
+  **Done.** `SelfSignedControlledIdentifierDocument` assigns ids once (`assignIds`): `kid`-derived ids
+  first; identical JWKs under one id published once; different JWKs under one id all dropped and
+  reported by `refusedMethodIds()`, which `SsiCidResourceProvider.DOCUMENTS` logs; positional `#key-<n>`
+  skips taken ids. Dropping both rather than keeping the first keeps the result independent of the
+  attribute's value order. Tests in `SelfSignedControlledIdentifierDocumentTest` read the Turtle back;
+  `aPositionalIdNeverTakesOneAKidAlreadyHas` describes what the previous code produced.
 
 - [ ] **R-34 · Replay protection cannot be turned on, though COMPLIANCE says it can.**
   `Low` · docs/maintainability · `S` · *verified*
