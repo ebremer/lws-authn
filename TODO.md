@@ -5,8 +5,9 @@ evaluation against the **W3C Linked Web Storage specifications as they stood on 
 
 - **Code reviewed:** `master` at `edda85b` (version `0.3.0-SNAPSHOT`), every file under `src/`,
   `pom.xml`, CI, Docker, scripts, the demo realm and `docs/`.
-- **Specification baseline:** `w3c/lws-protocol` at `ef02548` (5 October 2026) — see
-  [Specification baseline](#specification-baseline-5-october-2026).
+- **Specification baseline:** `w3c/lws-protocol` at `9a08ff6` (19 October 2026), re-checked on 20
+  October 2026 — see [Specification baseline](#specification-baseline-19-october-2026). The review
+  itself was against `ef02548` (5 October 2026); nothing it relies on has changed since.
 - **Tree state:** `mvn clean package` green on JDK 25 (GraalVM CE 25.0.4) — **179 unit tests, 0
   failures**. `LwsAuthIT` was **not** run (no Docker in the review environment). GitHub CI is green on
   `master` at `edda85b`; **every pull-request run since 1 October fails** (R-40).
@@ -63,23 +64,44 @@ Dependabot updates are stuck (R-40).
 
 ---
 
-## Specification baseline (5 October 2026)
+## Specification baseline (19 October 2026)
 
-| Document | Latest published version on 5 October 2026 | Editor's draft |
+| Document | Latest published version on 19 October 2026 | Editor's draft |
 |---|---|---|
-| Linked Web Storage Protocol 1.0 (core) | W3C Working Draft **21 September 2026** | `ef02548`; authentication text unchanged since 21 September |
-| LWS 1.0 Authn Suite: Self-signed Identity (Controlled Identifiers) | W3C Working Draft **21 September 2026** | unchanged since 21 September |
-| LWS 1.0 Authn Suite: OpenID Connect | W3C Working Draft 3 August 2026 | unchanged |
-| LWS 1.0 Authn Suite: SAML 2.0 | W3C Working Draft 3 August 2026 | unchanged |
+| Linked Web Storage Protocol 1.0 (core) | W3C Working Draft **19 October 2026** | `9a08ff6`; authentication text unchanged since 21 September |
+| LWS 1.0 Authn Suite: Self-signed Identity (Controlled Identifiers) | W3C Working Draft **15 October 2026** | same text; editorial since 21 September |
+| LWS 1.0 Authn Suite: OpenID Connect | W3C Working Draft **15 October 2026** | same text; editorial since 3 August |
+| LWS 1.0 Authn Suite: SAML 2.0 | W3C Working Draft **15 October 2026** | same text; editorial since 3 August |
 | LWS 1.0 Authn Suite: Self-signed Identity using did:key | **Discontinued Draft, 29 September 2026** | discontinued 18 September in favour of the self-signed CID suite |
-| Linked Web Storage Vocabulary | W3C Group Note Draft 14 July 2026 | — |
+| Linked Web Storage Vocabulary | W3C Group Note Draft 14 July 2026 | `lws:OpenIdProvider` unchanged |
 | Controlled Identifiers (CID) 1.0 | W3C Recommendation, 15 May 2025 | — |
 | Decentralized Identifiers (DIDs) 1.1 | W3C Candidate Recommendation Snapshot, 5 March 2026 | context URL still answers `300` |
 
-Commits since the last review (`9b03b32`): only `ef02548` (#255, JSON Patch baseline for `PATCH` —
-storage-side). Open pull requests that could matter here later, none merged: #256 (RFC 9728 protected
-resource metadata for authorization-server discovery — storage/AS side), #96 (a Web-CID profile for
-agent identification). See *Watch*.
+**Re-check of 20 October 2026** (`ef02548..9a08ff6`, fourteen commits): no normative change to
+authentication, so no code change.
+
+- **The suites (Working Drafts of 15 October), wording only.** OpenID (#269): OpenID Connect's own
+  capitalisation, "OpenID Provider", "ID Token", "OpenID Connect Discovery", and "to be valid" for "to
+  validate". SAML (#270, #271): `saml:NameID`, `saml:Issuer` and `saml:Audience` are *elements* and
+  `Recipient` an *attribute*, not "assertions" and a "parameter", and the example is well-formed XML.
+  Self-signed CID (#273): the audience rule says "the JWT", not "the ID Token" — the rule was always
+  about this suite's JWT and the verifier always read it so — and "key ID" for "key id". The three
+  comments that quote these sentences (`SamlCredentialVerifier`, `SelfSignedCidVerifier`,
+  `SamlVerifierTest`) quote the new wording. The quotations in the matrix below and in the archive are
+  left as they were when written.
+- **Core (Working Draft of 19 October), storage and authorization-server side.** #256: a storage
+  server's 401 names RFC 9728 protected resource metadata (`resource_metadata`), whose
+  `authorization_servers` replaces the challenge's `as_uri`, and the token request's `resource` (and the
+  access token's `aud`) is the storage named by the 401's `Link`. A client still asks the OpenID Provider
+  for an authentication credential whose audience includes that authorization server, which is what a
+  caller passes as `audience` to `/verify`; nothing here changes. #253 (the LWS profile for container
+  RDF), #237 (moving resources between containers), #264, #265, #268, #274 and #275 (editorial,
+  vocabulary) concern storage, and #257 updates the implementation reports. #275 also corrects the authorization-server metadata example to
+  `urn:ietf:params:oauth:token-type:id_token`, closing **W-7**. Its new security considerations
+  (resource discovery, sender-constrained tokens) are informative and address clients and storage
+  servers.
+- Open upstream items that could matter here later, none merged: #96 (a Web-CID profile for agent
+  identification), #152 and #200 (OpenID suite). See *Watch*.
 
 ---
 
@@ -1364,8 +1386,11 @@ is needed.
   types, redirects, status codes — which bears directly on R-18, R-19 and R-29.
 - [ ] **W-3 · `w3c/lws-protocol#152`** (an alternative claim for the LWS subject in the OIDC suite) and
   **#200** (FedCM in the OIDC suite) — either would change the OpenID verifier.
-- [ ] **W-4 · `w3c/lws-protocol#256` — RFC 9728 protected-resource metadata for authorization-server
+- [x] **W-4 · `w3c/lws-protocol#256` — RFC 9728 protected-resource metadata for authorization-server
   discovery.** Storage/AS side; no change here, but `lws-server` and the walkthroughs would follow it.
+  **Merged** 14 October 2026 (`9420b5d`), in core's Working Draft of 19 October. Nothing to do here:
+  `lws-server` follows it since `2bee2c6`, and the walkthroughs stop at verifying a credential — none
+  of them goes through a storage server's 401, so none named `as_uri` or `realm`.
 - [x] **W-5 · Keycloak 26.8.0** (1 October 2026; adds OID4VCI/OID4VP). Separate from R-14's patch
   upgrade: check the provided/relocated libraries again, as S-17 did.
   **Done** on branch `keycloak-26.8.0` (off `p0-dos-and-token-substitution`). `keycloak.version`
@@ -1385,10 +1410,15 @@ is needed.
   server upgrade from 26.7 is a minor one. `LwsAuthIT` not run on 26.8.0 (no Docker; R-43).
 - [ ] **W-6 · Re-review cadence.** The authentication suites have been stable since 21 September; the
   next likely trigger is a new Working Draft of the OpenID or SAML suites (both still at 3 August).
-- [ ] **W-7 · Report an upstream inconsistency.**
+  **Triggered and done 20 October 2026:** all three suites were republished on 15 October with wording
+  changes only (see *Specification baseline*). The next trigger is a suite change that is not
+  editorial, or a merge of #96, #152 or #200 (W-2, W-3).
+- [x] **W-7 · Report an upstream inconsistency.**
   Core's authorization-server metadata example lists `urn:ietf:params:oauth:token-type:id-token`
   (hyphen); the OpenID suite, core's own token-request example and RFC 8693 use `…:id_token`. The code
   uses `id_token`, correctly. File an issue on `w3c/lws-protocol` so `lws-server` does not copy the typo.
+  **Fixed upstream** by w3c/lws-protocol#275 (`0e7ad18`, 15 October 2026), in core's Working Draft of
+  19 October; no issue needed.
 
 ---
 
