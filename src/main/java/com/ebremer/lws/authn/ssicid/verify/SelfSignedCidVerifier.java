@@ -236,7 +236,7 @@ public class SelfSignedCidVerifier {
             }
             result.setClient(clientId);
 
-            // "The verifier MUST use the `kid` (key id) value from the signed JWT header to identify a
+            // "The verifier MUST use the `kid` (key ID) value from the signed JWT header to identify a
             // verification method." Falling back to "the only key" when there is no kid would make the
             // selection the verifier's guess rather than the credential's assertion.
             String kid = header.getKeyId();
