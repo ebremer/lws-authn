@@ -729,7 +729,7 @@ class SamlVerifierTest {
     }
 
     /**
-     * P1-M1: "The SAML token MUST use the saml:Issuer assertion for the LWS issuer identifier", and
+     * P1-M1: "The SAML token MUST use the saml:Issuer element for the LWS issuer identifier", and
      * LWS core section 4.1 makes the issuer REQUIRED. It was recorded but never required.
      */
     @Test

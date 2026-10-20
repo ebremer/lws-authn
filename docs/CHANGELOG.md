@@ -17,7 +17,8 @@ Item ids like **P0-3** refer to [`TODO.md`](https://github.com/ebremer/lws-authn
 Brings the provider up to the LWS editor's drafts of **21 September 2026** (`w3c/lws-protocol` at
 `3ddc642`). Two changes to the drafts since 0.2.0's baseline touch this provider, and implementing the
 second properly exposed four places where the self-signed CID verifier did not follow Controlled
-Identifiers 1.0 §3.3, which that suite cites normatively for selecting a key.
+Identifiers 1.0 §3.3, which that suite cites normatively for selecting a key. Checked since against the
+drafts of **19 October 2026** (`9a08ff6`), which change nothing this provider implements.
 
 > ### If you are upgrading an existing deployment, read this section
 >
@@ -62,6 +63,19 @@ Identifiers 1.0 §3.3, which that suite cites normatively for selecting a key.
   Discontinued Draft snapshot was prepared for publication on 29 September. The conformance statement's
   table of published versions was stale, and it named a 21 August vocabulary draft that was never
   published (the latest is the Group Note Draft of 14 July 2026). It is corrected.
+- **Re-reviewed against the specifications as of 19 October 2026** (`w3c/lws-protocol` at `9a08ff6`):
+  no normative change to authentication since `3ddc642`, so no code change. The OpenID, SAML and
+  self-signed CID suites were published as Working Drafts on 15 October 2026 with wording changes only:
+  OpenID Connect's own capitalisation ("OpenID Provider", "ID Token"), SAML's own terms (`saml:NameID`,
+  `saml:Issuer` and `saml:Audience` are *elements*, `Recipient` an *attribute*; w3c/lws-protocol#270)
+  and well-formed XML in its example (#271), and "the JWT", not "the ID Token", in the self-signed CID
+  suite's audience rule (#273). Core, published as a Working Draft on 19 October 2026, adds RFC 9728
+  protected resource metadata, from which a client learns the authorization server and the storage an
+  access token is for (#256), the LWS profile for container RDF (#253) and moving resources between
+  containers (#237): storage and authorization-server business, **not applicable here**. Its
+  authorization-server metadata example now spells the ID Token's token type
+  `urn:ietf:params:oauth:token-type:id_token`, as the OpenID suite, RFC 8693 and this provider always
+  did (#275). The comments in the verifiers that quote the suites quote the new wording.
 
 ### Security
 

@@ -10,11 +10,14 @@ nav_order: 5
 each suite enforces, which are deferred to the relying party, and what is supported. It is written for
 someone integrating against this provider, who needs to know what a `"valid": true` actually asserts.
 
-**Last reviewed:** 6 October 2026, against the specifications as they stood on 5 October 2026
-(`w3c/lws-protocol` at `ef02548`) and the code in this tree. No authentication text changed after the
-review of 30 September 2026, which was against `9b03b32`: the one commit since (`ef02548`, w3c/lws-protocol#255)
-adds a JSON Patch baseline for `PATCH`, which is storage-side. Earlier reviews: 22 September (against
-`3ddc642`) and 3 September 2026. The 6 October review's findings are the R-items of `TODO.md`.
+**Last reviewed:** 20 October 2026, against the specifications as they stood on 19 October 2026
+(`w3c/lws-protocol` at `9a08ff6`) and the code in this tree. No authentication requirement changed after
+the review of 6 October 2026, which was against `ef02548`: the three suites were republished on 15 October
+with wording changes only, and core's changes — RFC 9728 protected resource metadata for finding the
+authorization server (w3c/lws-protocol#256), the LWS profile for container RDF (#253) and moving
+resources (#237) — are storage and authorization-server side. Earlier reviews: 6 October (against
+`ef02548`; its findings are the R-items of `TODO.md`), 30 September (`9b03b32`), 22 September (`3ddc642`)
+and 3 September 2026.
 
 Item ids like **P0-3** refer to [`TODO.md`](https://github.com/ebremer/lws-authn/blob/master/TODO.md), which carries the reasoning and the history.
 Where this document says a check exists, it names the field that appears in the `checks` object of the
@@ -27,14 +30,14 @@ verify response, so a claim here can be tested against a real response.
 These are **W3C Working Drafts**, not Recommendations. Conformance here means "matches the published
 normative requirements", not a Rec-level conformance certificate — the text can still change.
 
-| Document | Latest published version, 5 October 2026 | Editor's draft, as reviewed |
+| Document | Latest published version, 19 October 2026 | Editor's draft, as reviewed |
 |---|---|---|
-| Linked Web Storage Protocol 1.0 (core) | W3C Working Draft **21 September 2026** | same text — adds authorization server metadata `subject_identifier_types_supported`, which does not apply here (see *Known divergences*) |
-| LWS 1.0 Authn Suite: Self-signed Identity (Controlled Identifiers) | W3C Working Draft **21 September 2026** | same text — **"designed to work with subject identifiers that use HTTPS URIs as well as DID URIs"** |
-| LWS 1.0 Authn Suite: OpenID Connect | W3C Working Draft 3 August 2026 | unchanged |
-| LWS 1.0 Authn Suite: SAML 2.0 | W3C Working Draft 3 August 2026 | unchanged |
+| Linked Web Storage Protocol 1.0 (core) | W3C Working Draft **19 October 2026** | same text — its authentication section is unchanged since 21 September; authorization server metadata `subject_identifier_types_supported` and RFC 9728 protected resource metadata do not apply here (see *Known divergences*) |
+| LWS 1.0 Authn Suite: Self-signed Identity (Controlled Identifiers) | W3C Working Draft **15 October 2026** | same text — **"designed to work with subject identifiers that use HTTPS URIs as well as DID URIs"**; worded more carefully since 21 September, no requirement changed |
+| LWS 1.0 Authn Suite: OpenID Connect | W3C Working Draft **15 October 2026** | same text — OpenID Connect's capitalisation and wording since 3 August, no requirement changed |
+| LWS 1.0 Authn Suite: SAML 2.0 | W3C Working Draft **15 October 2026** | same text — SAML's own terms since 3 August (`saml:NameID`, `saml:Issuer` and `saml:Audience` are elements, `Recipient` an attribute) and a well-formed example, no requirement changed |
 | LWS 1.0 Authn Suite: Self-signed Identity using did:key | W3C Working Draft 3 August 2026; published as a **Discontinued Draft on 29 September 2026** | discontinued 18 September 2026 in favour of the self-signed CID suite, which verifies `did:key` subjects |
-| Linked Web Storage Vocabulary | W3C Group Note Draft, **14 July 2026** | 21 September 2026 (adds `lws:StorageResource`; nothing here uses it) |
+| Linked Web Storage Vocabulary | W3C Group Note Draft, **14 July 2026** | 19 October 2026 (adds `lws:StorageResource`, `lws:AccessRequest`, `lws:MoveResource` with `appliesTo` and `preservesIdentifier`, and `as:Move`; `lws:OpenIdProvider`, the one term used here, is unchanged) |
 | Controlled Identifiers (CID) 1.0 | **W3C Recommendation, 15 May 2025** | — |
 | Decentralized Identifiers (DIDs) 1.1 | W3C Candidate Recommendation Snapshot, 5 March 2026 | cited by the self-signed CID suite for DID documents |
 | The did:key Method | W3C CCG Draft Community Group Report, v0.9 | how a `did:key` expands to its DID document |
@@ -329,7 +332,7 @@ Each is a decision, not an oversight; each names where the reasoning lives.
 | 6 | **Fetch happens before the signature is known good** | Required by the specification's cold-trust algorithm and unavoidable. The exposure is addressed instead: authenticated endpoints, rate limiting, SSRF vetting at resolution time, bounded timeouts and response size, and a per-host circuit breaker (**P0-3**, **P0-5**). The same applies to a `did:web` subject. |
 | 7 | **Only `did:key` and `did:web` are resolved** | The self-signed CID suite mandates no DID method. These two need no ledger and no third-party resolver; any other is refused by name rather than resolved through a service this provider would have to trust (**S-2**). |
 | 8 | **DID documents are read as JSON, not processed as JSON-LD** | DID 1.1 is a Candidate Recommendation and its JSON-LD context is not published at a stable URL, so there is no definition to bundle, and contexts are never fetched (see *Supported formats*). The structure the verifier reads — `id`, `authentication`, `verificationMethod`, `type`, `controller`, key material — is fixed by DID 1.1 and CID 1.0 rather than by the context (**S-3**). |
-| 9 | **No `subject_identifier_types_supported`** | Core defines it as LWS *authorization server* metadata. `lws-authn` is not an authorization server and publishes no such metadata; it belongs to `lws-server`, which would list `https`, `did:key` and `did:web` for subjects this provider verifies (**S-5**). |
+| 9 | **No `subject_identifier_types_supported`, and no protected resource metadata** | Core defines the first as LWS *authorization server* metadata. `lws-authn` is not an authorization server and publishes no such metadata; it belongs to `lws-server`, which lists `https`, `did:key` and `did:web` for subjects this provider verifies (**S-5**). Likewise the RFC 9728 protected resource metadata that core requires since 19 October 2026 (w3c/lws-protocol#256) is published by a storage server, to name its authorization servers; `lws-authn` has no storage. |
 | 10 | **Fetched documents are cached** | Both JWT suites encourage verifiers "to cache controlled identifier documents to reduce unnecessary network requests and the associated metadata leakage". Documents are reused for up to `http-cache-seconds` (default 300), less if their `Cache-Control` says so, never under `no-store`/`no-cache`/`private`; so a key removed from a document may verify for up to that long. A `kid` missing from a cached JWK set is asked for again, at most every 30 s (**R-26**). |
 | 11 | **SAML is read more narrowly than the Web Browser SSO profile** | The suite names no profile; these follow SAML Profiles §4.1.4 where the LWS use of an assertion allows, and are stricter where it does not (**R-32**, **R-39**). **An `<AudienceRestriction>` is always required**, even when no audience is asked for: core makes one RECOMMENDED and the suite contemplates "an authentication credential with no audience restrictions", but Profiles §4.1.4.2 says a bearer assertion "MUST contain an `<AudienceRestriction>`", and without one it is a bearer credential good anywhere. **Exactly one `<SubjectConfirmation>`**, though the profile allows several with "at least one" bearer: its `Recipient` is reported as the LWS client, and with several there would be no single one. A `NotBefore` on `<SubjectConfirmationData>`, which the profile says the bearer one "MUST NOT contain", is **honoured, not refused**. **`InResponseTo` and `Address` are not checked**: the verifier saw no `<AuthnRequest>` and does not see the presenter — a caller that sent the request checks `InResponseTo` itself. **Not supported, and refused:** `<EncryptedAssertion>`, `<EncryptedID>`, an assertion nested in another's `<Advice>`, and the Redirect binding's DEFLATE encoding; base64 must be strict apart from whitespace. |
 

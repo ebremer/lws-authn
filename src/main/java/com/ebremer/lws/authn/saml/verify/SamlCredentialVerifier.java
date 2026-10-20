@@ -309,7 +309,7 @@ public class SamlCredentialVerifier {
                 return result.fail();
             }
 
-            // "The SAML token MUST use the `saml:Issuer` assertion for the LWS issuer identifier", and
+            // "The SAML token MUST use the `saml:Issuer` element for the LWS issuer identifier", and
             // LWS core §4.1 makes the issuer a REQUIRED claim. Recording it without requiring it would
             // let a credential through with no identified issuing party at all.
             Element issuer = firstChild(assertion, NS, "Issuer");
