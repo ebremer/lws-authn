@@ -26,7 +26,7 @@
         <!-- Keycloak 26.x runs on JDK 21; Apache Jena 6 requires JDK 21. Target 21 so the
              compiled provider loads inside the Keycloak runtime regardless of the build JDK. -->
         <maven.compiler.release>21</maven.compiler.release>
-        <keycloak.version>26.8.0</keycloak.version>
+        <keycloak.version>26.8.1</keycloak.version>
         <jena.version>6.2.0</jena.version>
         <!-- Versions of libraries Keycloak also ships, where its copy is good enough for Jena and the
              dependency can simply be `provided`. Re-check on a Keycloak upgrade. -->
