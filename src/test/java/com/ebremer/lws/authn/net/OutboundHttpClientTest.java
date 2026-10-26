@@ -247,7 +247,7 @@ class OutboundHttpClientTest {
     }
 
     /**
-     * R-29. Dereferencing a subject follows a redirect — a WebID answering {@code 303 See Other}, the
+     * R-29. Dereferencing a subject follows a redirect — a CID URL answering {@code 303 See Other}, the
      * httpRange-14 pattern, or http going to https — where {@link OutboundHttp#fetch} does not.
      */
     @Test
@@ -372,7 +372,7 @@ class OutboundHttpClientTest {
     /**
      * R-02. The path is the caller's choice, so nothing a path returns may count against the origin:
      * five credentials whose {@code sub} named a missing path on this server's own host used to stop
-     * every hosted-WebID verification.
+     * the verification of every CID URL it hosts.
      */
     @Test
     void aMissingPathNeverTripsTheBreaker() throws Exception {

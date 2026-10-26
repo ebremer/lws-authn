@@ -50,7 +50,7 @@ refuse, or that reaches beyond the verifier:
   dereference; an identity document that needed a credential would not be dereferenceable. The ids are
   random UUIDs and the endpoint is rate limited. See `CidEndpoint`.
 - **A misconfigured deployment.** Notably: an unmanaged attribute policy of `ENABLED` rather than
-  `ADMIN_EDIT`, which lets an end user write their own `lws_jwk` or WebID attribute and therefore mint
+  `ADMIN_EDIT`, which lets an end user write their own `lws_jwk` or CID URL attribute and therefore mint
   credentials for an identity they should not control. `INSTALL.md` step 9f covers this; a report that
   a deployment configured that way is exploitable is a documentation issue, and welcome as one.
 - Findings in Keycloak itself — please report those to

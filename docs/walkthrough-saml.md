@@ -19,7 +19,7 @@ validates the assertion's XML signature against a *pre-configured* IdP certifica
 | **A SAML SP / client app** | Initiates SAML login and receives the assertion. |
 | **An LWS server** | The verifier — validates the assertion's signature against the IdP certificate it holds out-of-band, and reads the subject from `<NameID>`. `lws-authn` holds it as a SAML identity provider in the realm, or takes it from the caller. |
 
-**The idea:** the subject (controlled identifier / WebID) is carried in `<Subject><NameID>`, the
+**The idea:** the subject (controlled identifier / CID URL) is carried in `<Subject><NameID>`, the
 issuer in `<Issuer>`. Because the spec leaves trust out-of-band, the verifier must already hold the
 IdP's signing certificate; LWS adds no discovery mechanism on top of SAML.
 
@@ -44,7 +44,7 @@ IdP's signing certificate; LWS adds no discovery mechanism on top of SAML.
 ## 1. Configure Keycloak as the SAML IdP
 
 Create a SAML client (your SP) in the realm and arrange for the assertion's `<NameID>` to carry the
-user's WebID (controlled identifier) — via the client's *Name ID format* / NameID settings. Keycloak
+user's CID URL (controlled identifier) — via the client's *Name ID format* / NameID settings. Keycloak
 signs assertions with the realm SAML signing key by default.
 
 The `<NameID>` has to be a URI: LWS core says the subject "MUST be a URI", and the verifier refuses a

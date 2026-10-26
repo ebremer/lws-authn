@@ -219,7 +219,7 @@ is needed.
   `subjectIdMatches` mismatch — and also when the breaker itself refuses the call: `requireClosedCircuit`
   throws `HostUnavailableException`, the verifier's `catch (Exception)` calls `recordFailure` again, and
   every failure pushes `windowEndsAt` another 10 s out. Five unsigned JWTs with
-  `sub=https://<this-keycloak>/realms/r/lws/cid/nope` take down verification of every hosted-WebID
+  `sub=https://<this-keycloak>/realms/r/lws/cid/nope` take down verification of every hosted CID URL
   credential for as long as any traffic arrives at least every 10 s; `iss=https://accounts.google.com/x`
   does the same to a third-party OP. Without an attacker: all self-dereferences come from Keycloak's own
   address, share one `cid-rate-limit` bucket, and the resulting `429`s count as failures. JWKS failures
@@ -292,9 +292,9 @@ is needed.
   `jose/JwsChecks.java:133` accepts `typ: at+jwt` — the RFC 9068 marker that says "this is an access
   token" — for both JWT suites, defeating the explicit typing RFC 8725 §3.11 exists for. And Keycloak
   puts `typ: JWT` in the header of access **and** ID tokens alike; only the payload `typ` claim (`Bearer`
-  vs `ID`) tells them apart, and the verifier never reads it. `LWSSubMapper` writes the WebID into
+  vs `ID`) tells them apart, and the verifier never reads it. `LWSSubMapper` writes the CID URL into
   access tokens by default (`openid/LWSSubMapper.java:75`, `:115`; `examples/lws-demo-realm.json:43`
-  sets `access.token.claim: true`), so a realm access token carries a WebID `sub`, `iss`, `azp`, `exp` —
+  sets `access.token.claim: true`), so a realm access token carries a CID URL `sub`, `iss`, `azp`, `exp` —
   everything `/lws/verify` checks. A resource server that received a user's access token can replay it
   to an authorization server that verifies through this endpoint without `client_id`, and get
   `valid: true`.
@@ -652,7 +652,7 @@ is needed.
   SAML Profiles §4.1.4.2: the Issuer's `Format` "MUST be omitted or have a value of
   `urn:oasis:names:tc:SAML:2.0:nameid-format:entity`". `NameQualifier`/`SPNameQualifier` are dropped.
   `COMPLIANCE.md`'s core table implies these are enforced.
-  **Do:** require an absolute URI for both (as `LWSSubMapper` already does for the WebID); reject an
+  **Do:** require an absolute URI for both (as `LWSSubMapper` already does for the CID URL); reject an
   Issuer `Format` other than absent or `entity`; report the NameID `Format`. Fix the tests' fixtures.
   **Done.** New checks `subjectIsUri` (any absolute URI — `https:`, `urn:`, `did:` — not just a
   fetchable URL: the SAML suite does not dereference its subject) and `issuerWellFormed` (absolute URI,
@@ -885,7 +885,7 @@ is needed.
 
 - [x] **R-29 · Follow (or explicitly refuse) redirects when dereferencing a subject.**
   `Low` · interop/docs · `S` · *verified*
-  Redirects are disabled outright (`OutboundHttp.java:137`, P0-6), so a WebID that answers `303 See Other`
+  Redirects are disabled outright (`OutboundHttp.java:137`, P0-6), so a CID URL that answers `303 See Other`
   (the httpRange-14 pattern) or redirects http→https fails as "did not return a controlled identifier
   document". Since `GuardedDnsResolver` vets every connection, following up to three redirects with
   `SsrfGuard` re-checked per hop — keeping the original `sub` as the required `id` — is safe. **Do:**
@@ -901,7 +901,7 @@ is needed.
   (a subject behind a 303 verifies; a document whose `id` is the redirect target does not). The two
   `CidDocumentReadingTest` ones fail against the previous code.
 
-- [x] **R-30 · `LWSSubMapper` trusts the WebID attribute too far.** `Low` · security · `S` · *verified (first point)*
+- [x] **R-30 · `LWSSubMapper` trusts the CID URL attribute too far.** `Low` · security · `S` · *verified (first point)*
   `openid/LWSSubMapper.java:144-199`. A value pointing into this realm's own hosted namespace for a
   *different* user (`{issuer}/lws/cid/<victim-id>`) passes `isDereferenceableUrl`, and the victim's hosted
   CID then vouches for this issuer — full impersonation, prevented today only by the `ADMIN_EDIT`
@@ -913,13 +913,13 @@ is needed.
   ID Token flag.
   **Done.** `LWSSubMapper.problem` refuses a value that is not an absolute http(s) URL, is over 255
   characters or not ASCII, or is in the realm's own URL space (issuer's scheme, host, default-port and
-  path prefix, compared case-insensitively after `normalize()`) unless it is the user's own hosted WebID;
+  path prefix, compared case-insensitively after `normalize()`) unless it is the user's own hosted CID URL;
   `sharedWithAnotherUser` refuses one any other user holds (raw or trimmed, via
-  `searchForUserByUserAttributeStream`). Each falls back to the hosted WebID with a warning, as an
+  `searchForUserByUserAttributeStream`). Each falls back to the hosted CID URL with a warning, as an
   unusable value already did. `warnIfUserEditable` reads the `UPConfig` — a declared attribute with a
   `user` edit permission, or an undeclared one under `ENABLED` — at most every ten minutes per realm and
   attribute; it warns rather than refuses, since refusing would change existing subjects, and the
-  uniqueness check already stops a user taking a WebID another holds. `CidEndpoint.documentUrl`
+  uniqueness check already stops a user taking a CID URL another holds. `CidEndpoint.documentUrl`
   percent-encodes the id as one path segment and is used by the endpoint, `ThisRealm` and the mapper.
   Userinfo's `sub` follows `id.token.claim`; the *Add to userinfo* property is gone. Tests in
   `LWSSubMapperTest`; `anotherUsersHostedDocumentIsNotASubject` describes what the previous code
@@ -1373,6 +1373,38 @@ is needed.
     docs site's `Gemfile` and `_config.yml`, and (under R-48) the scripts. The README now lists what
     "every source file" covers.
 
+- [x] **R-52 · Name the subject "CID URL", as LWS does.** `Low` · docs, configuration · `S` ·
+  *verified (`w3c/lws-protocol` `origin/main`)*
+  Core makes the subject of a credential a URI. The OpenID suite dereferences it to a controlled
+  identifier document naming an `lws:OpenIdProvider`, and the self-signed suite's subject is a CID URL
+  or a DID. The provider used a term the specifications do not: in its mapper's name, provider id and
+  attribute setting, the admin console, the server log, the demo scripts and the documentation.
+  **Done.** The mapper is *LWS CID URL Subject*, provider id `lws-cid-sub-mapper`, setting
+  `lws.cid.attribute`. `lws-demo.sh` takes `CID_ATTRIBUTE`, and the demo realm uses the new names. The
+  code's own names and comments, the documentation and this file follow. Nothing is kept under the
+  earlier names: a realm configured with an earlier build replaces its mapper, as the changelog's
+  upgrade note says, because Keycloak skips a mapper whose provider id is gone.
+
+- [x] **R-53 · The demo realm does not import: the client's description is too long for Keycloak.**
+  `High` · tests, demo · `S` · *verified (CI run 39474243754, and by hand)*
+  Keycloak keeps a client's description in a 255-character column. R-13 lengthened the demo client's to
+  268, and Keycloak now exits at startup with "Value too long for column DESCRIPTION". Since that change,
+  `docker compose up` has not started and `LwsAuthIT` has failed on every CI run, `master` included.
+  **Done.** The description is shortened to 252 characters, saying the same. `DemoRealmTest` reads the
+  demo realm and fails on any description over 255 characters, so this is caught without Docker; run
+  against the realm from before the fix, it names `$.clients[0].description (268)`.
+
+- [x] **R-54 · Two integration tests no longer matched the verifiers, unseen while R-53 kept the suite
+  from starting.** `Medium` · tests · `S` · *verified (on this branch and on `master`)*
+  With the demo realm importing again, `LwsAuthIT` ran for the first time since R-13, and two of its 33
+  tests failed, on `master` as here. `jsonLdControlledIdentifierDocumentVerifies` served a document
+  wrapped in an `@graph`, with no topmost `id`, which R-18 made both verifiers refuse
+  (`CidDocumentReadingTest.selfSignedAGraphWithNoTopmostIdIsNotTheSubjectsDocument` says so).
+  `anInvalidCredentialIsTwoHundredWithValidFalse` sent the self-signed suite no `audience`, which R-16
+  made a `400`.
+  **Done.** The fixture document keeps its aliased term, which is what that test is for, with its `id`
+  in the topmost map, and the self-signed request carries an `audience`. Neither verifier changed.
+
 ---
 
 ## Watch — upstream and blocked
@@ -1585,8 +1617,8 @@ hygiene gaps.
 > - The `cid/{userId}` endpoints honour `Accept` q-values (they were doing a substring test in a fixed
 >   order, so a client asking for JSON-LD at `q=1.0` got Turtle at `q=0.1`), answer `406` instead of
 >   serving something unasked for, and carry `Vary`, `ETag` and `Cache-Control`.
-> - The WebID user attribute must be an absolute `http(s)` URL or it is refused in favour of the hosted
->   WebID, since a `sub` nobody can dereference produces a token that looks right and is rejected
+> - The CID URL user attribute must be an absolute `http(s)` URL or it is refused in favour of the hosted
+>   CID URL, since a `sub` nobody can dereference produces a token that looks right and is rejected
 >   everywhere.
 > - 60 seconds of clock skew on `exp`/`nbf`, shared with the SAML verifier so one deployment does not
 >   apply two tolerances; the OpenID CID's service entry is named rather than a blank node; and the
@@ -1786,10 +1818,10 @@ Facts from those documents that shape the items below:
   `unmanagedAttributePolicy = "ENABLED"`. In Keycloak 26 that policy
   (`UPConfig.UnmanagedAttributePolicy` = `ENABLED | ADMIN_VIEW | ADMIN_EDIT`) lets **end users**
   manage the attribute. A user can therefore register an arbitrary public key against their own
-  hosted controlled identifier and mint credentials for that identity; and if `LWSSubMapper`'s WebID
-  attribute is likewise unmanaged, a user can set their own `sub` and impersonate any WebID.
+  hosted controlled identifier and mint credentials for that identity; and if `LWSSubMapper`'s CID URL
+  attribute is likewise unmanaged, a user can set their own `sub` and impersonate any CID URL.
   **Do:** change both to `ADMIN_EDIT`; state the requirement in `README.md` and `INSTALL.md`; make
-  `LWSSubMapper`'s help text say the WebID attribute must never be user-writable.
+  `LWSSubMapper`'s help text say the CID URL attribute must never be user-writable.
 
 - [x] **P0-3 · `/verify` endpoints are unauthenticated and drive outbound HTTP from attacker-supplied URLs.**
   `openid/resource/LWSResourceProvider.java:102-127` and
@@ -2042,15 +2074,15 @@ Facts from those documents that shape the items below:
   **Do:** emit a configurable `Cache-Control: public, max-age=…` plus a strong `ETag`, and honour
   `If-None-Match`.
 
-- [x] **P2-5 · The WebID user attribute is trimmed but never validated as an absolute URI.**
+- [x] **P2-5 · The CID URL user attribute is trimmed but never validated as an absolute URI.**
   `openid/LWSSubMapper.java:137-160`. Core §4.1 requires the subject to be a URI; a value like
   `alice@example.org` becomes a `sub` no verifier can dereference.
   **Do:** validate with `java.net.URI` (absolute, `http`/`https`); on failure log a warning and fall back
-  to the hosted WebID rather than issuing an unusable credential.
+  to the hosted CID URL rather than issuing an unusable credential.
 
 - [x] **P2-6 · Give the OpenID CID's service map an `id`.**
   `openid/cid/ControlledIdentifierDocument.java:61` uses a blank node. CID 1.0 makes service `id`
-  OPTIONAL, so this is **not** a violation — but naming it (`<webid>#openid-provider`) makes the document
+  OPTIONAL, so this is **not** a violation — but naming it (`<cid-url>#openid-provider`) makes the document
   addressable and matches what most CID consumers expect.
 
 - [x] **P2-7 · No clock-skew allowance on `exp`.** Verified: `JsonWebToken.isActive()` calls

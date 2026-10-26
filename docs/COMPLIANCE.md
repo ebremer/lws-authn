@@ -54,12 +54,12 @@ notifications, search and access grants live in `lws-server`.
 
 | Suite | Keycloak's role | Credential | How the verifier gets the key | Endpoint prefix | Token type |
 |---|---|---|---|---|---|
-| OpenID Connect | OP + CID host + verifier | ID Token (JWT), `sub` = WebID | OIDC Discovery on `iss`, found via the CID service | `/realms/{realm}/lws` | `…token-type:id_token` |
+| OpenID Connect | OP + CID host + verifier | ID Token (JWT), `sub` = CID URL | OIDC Discovery on `iss`, found via the CID service | `/realms/{realm}/lws` | `…token-type:id_token` |
 | Self-signed CID | CID host + verifier | self-issued JWT, `sub`==`iss`==`client_id`: an HTTPS URI, `did:key` or `did:web` | the `authentication` method `kid` names in the subject's CID or DID document (`JsonWebKey` or `Multikey`) | `/realms/{realm}/lws-ssi-cid` | `…token-type:jwt` |
 | SAML 2.0 | verifier | signed SAML 2.0 Response | out of band: the realm's SAML identity provider whose entity ID is the `<Issuer>`, or a certificate the caller supplies | `/realms/{realm}/lws-saml` | `…token-type:saml2` |
 
 SPI surface: three `RealmResourceProviderFactory` ids (`lws`, `lws-ssi-cid`, `lws-saml`) plus the OIDC
-`ProtocolMapper` `lws-webid-sub-mapper`.
+`ProtocolMapper` `lws-cid-sub-mapper`.
 
 ---
 
@@ -99,7 +99,7 @@ does not decode counts as one; `typ`, when present, names a JWT — not
 `sub` and `iss` present; `iss` an https URL with no query or fragment, as OpenID Connect Core §2 defines
 an Issuer Identifier (`issuerWellFormed`); `azp` present (`clientPresent`). `sub` is dereferenced over the guarded HTTP
 stack and the document must have an `id` equal to `sub` (`subjectDereferenced`, `subjectIdMatches`):
-up to three redirects are followed — a WebID answering `303 See Other`, http going to https — each
+up to three redirects are followed — a CID URL answering `303 See Other`, http going to https — each
 vetted as a new request, and the document must still describe the original `sub`;
 for a JSON document, the `id` of its **topmost map**, read from the JSON before any RDF processing (CID
 1.0: "A controlled identifier document MUST contain an `id` value in the topmost map"); for Turtle,
@@ -340,17 +340,17 @@ Each is a decision, not an oversight; each names where the reasoning lives.
 
 The residual issues that appeared in this document's July 2026 revision — DNS-rebinding SSRF,
 internal-address leakage in client-facing errors, unauthenticated verify as an amplification vector,
-user-writable WebID attributes, no `jti` cache — have been closed or given an explicit control; see
+user-writable CID URL attributes, no `jti` cache — have been closed or given an explicit control; see
 `CHANGELOG.md` and the P0–P3 bands of `TODO.md`. [Security hardening](hardening.md) describes each mechanism, and
 `SECURITY.md` says what is in scope for a vulnerability report and what is deliberate.
 
 The one that is a **deployment** responsibility rather than a code one: the realm's unmanaged attribute
-policy must be `ADMIN_EDIT`, not `ENABLED`. A user who can write their own `lws_jwk` or WebID attribute
+policy must be `ADMIN_EDIT`, not `ENABLED`. A user who can write their own `lws_jwk` or CID URL attribute
 can mint credentials for an identity they should not control. `INSTALL.md` step 9f.
 
 ## Verification
 
-`mvn clean verify` — 419 unit tests plus 33 in `LwsAuthIT` against a real Keycloak 26.8.0 container,
+`mvn clean verify` — 420 unit tests plus 33 in `LwsAuthIT` against a real Keycloak 26.8.0 container,
 and 5 that read the built JAR. Every rule the verifiers apply has a test that fails if the rule is
 deleted (R-44).
 Roughly half the integration tests assert a *rejection*, including a full third-party OpenID Provider
@@ -361,7 +361,7 @@ users and one that wrongly accepts does not.
 
 ```text
                     lws-authn (Keycloak)                 lws-server (storage)
-OpenID              issues ID Token (sub = WebID)        accepts / validates ID Token
+OpenID              issues ID Token (sub = CID URL)        accepts / validates ID Token
                     hosts CID + OpenIdProvider           CID trust + discovery + JWKS
                     POST /lws/verify
 

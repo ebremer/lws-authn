@@ -52,10 +52,10 @@ public final class RdfParsing {
     public static final String CID_CONTEXT = "https://www.w3.org/ns/cid/v1";
 
     /**
-     * The {@code Accept} header both verifiers dereference a subject with: Turtle first — the
-     * WebID/Solid norm — then JSON-LD, CID 1.0's own media type, the other RDF syntaxes, and plain JSON,
-     * which a CID document "that does not intend to use JSON-LD" may be served as. Every type here is
-     * one {@link #parse} reads, and nothing else is.
+     * The {@code Accept} header both verifiers dereference a subject with: Turtle first, the syntax
+     * this extension serves, then JSON-LD, CID 1.0's own media type, the other RDF syntaxes, and
+     * plain JSON, which a CID document "that does not intend to use JSON-LD" may be served as. Every
+     * type here is one {@link #parse} reads, and nothing else is.
      */
     public static final String ACCEPT = "text/turtle, application/ld+json;q=0.9, application/cid;q=0.9, "
             + "application/n-triples;q=0.8, application/rdf+xml;q=0.7, application/json;q=0.5";
@@ -171,7 +171,7 @@ public final class RdfParsing {
      *
      * <p>A document that declares any other content type — including another RDF syntax Jena could
      * read, see {@link #READABLE} — is <strong>refused</strong>, not guessed at. Only a document that declares nothing at all falls back to Turtle: that is the
-     * syntax the verifiers ask for first and the WebID/Solid norm, so it is the best guess available
+     * syntax the verifiers ask for first, so it is the best guess available
      * when the server offers none, and it is a guess about silence rather than a contradiction of
      * something the server actually said.</p>
      *

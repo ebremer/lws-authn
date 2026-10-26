@@ -28,8 +28,8 @@ which is also what the walkthroughs import by hand:
 | | |
 |---|---|
 | Realm | `lws-demo` |
-| Client | `lws-app`: public, *Direct access grants* on, with the **LWS WebID Subject** mapper |
-| User | `alice`, password `alice`, whose WebID is `http://localhost:8080/realms/lws-demo/lws/cid/fb147f85-59e9-4288-a907-38aa2d4a33b5` |
+| Client | `lws-app`: public, *Direct access grants* on, with the **LWS CID URL Subject** mapper |
+| User | `alice`, password `alice`, whose CID URL is `http://localhost:8080/realms/lws-demo/lws/cid/fb147f85-59e9-4288-a907-38aa2d4a33b5` |
 | User profile | Unmanaged attributes `ADMIN_EDIT`: an admin can set `lws_jwk`, the user cannot |
 
 The demo scripts find all of this already in place and go straight to minting and verifying
@@ -118,7 +118,7 @@ serving, parsing and SPARQL — run it after touching dependencies.
 
 ### Tests
 
-`mvn test` runs 419 unit tests. `mvn verify` additionally runs 5 in `ShadedJarContentsIT`, which read
+`mvn test` runs 420 unit tests. `mvn verify` additionally runs 5 in `ShadedJarContentsIT`, which read
 the built JAR and SBOM, and 33 in `LwsAuthIT`, which needs Docker and is skipped without it — unless `-Dlws.authn.requireDocker=true` is given, as CI does, and then a
 missing Docker fails the build instead of passing it untested.
 
@@ -157,7 +157,7 @@ cp target/lws-authn-*.jar "$KC_HOME/providers/"   # the one shaded JAR `mvn pack
 ```
 
 On Windows use `kc.bat`. After `kc.sh build`, the startup log lists the registered providers; you
-should see the `lws`, `lws-ssi-cid` and `lws-saml` realm resources and the `lws-webid-sub-mapper`
+should see the `lws`, `lws-ssi-cid` and `lws-saml` realm resources and the `lws-cid-sub-mapper`
 protocol mapper.
 
 For a production server — service account, database, `systemd`, TLS and the rest — follow the

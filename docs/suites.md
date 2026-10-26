@@ -15,19 +15,19 @@ same things step by step.
 
 1. **Sign-in / client.** Use any OIDC client as usual. The realm's token signing key must not be
    `none` (Keycloak's default RS256 is fine).
-2. **Add the LWS WebID Subject mapper.** *Clients → your client → Client scopes →
-   `<client>-dedicated` → Add mapper → By configuration → **LWS WebID Subject***.
-   - **WebID user attribute** *(optional)* — a user attribute holding a WebID the user already owns.
+2. **Add the LWS CID URL Subject mapper.** *Clients → your client → Client scopes →
+   `<client>-dedicated` → Add mapper → By configuration → **LWS CID URL Subject***.
+   - **CID URL user attribute** *(optional)* — a user attribute holding a CID URL the user already owns.
      When empty, the `sub` becomes the Keycloak-hosted URL `{issuer}/lws/cid/{userId}`. A value is
      used only if it is an absolute `http(s)` URL of at most 255 ASCII characters, names no URL of this
-     realm's but the user's own hosted WebID, and no other user of the realm holds it; otherwise the
-     hosted WebID is used and the server log says why. The attribute must not be user-editable — the
+     realm's but the user's own hosted CID URL, and no other user of the realm holds it; otherwise the
+     hosted CID URL is used and the server log says why. The attribute must not be user-editable — the
      mapper warns in the log if the user profile allows it.
    - **Add to ID token and userinfo** — default on. The ID Token is the LWS credential; userinfo's `sub`
      always matches it, as OIDC Core §5.3.2 requires.
    - **Add to access token** — default **off**. An access token is not an LWS credential, and one carrying
-     the WebID as its `sub` looks like one; the verifier refuses it by its type (`tokenIsIdToken`), but
-     other verifiers may not. Turn it on only if something downstream needs the WebID there.
+     the CID URL as its `sub` looks like one; the verifier refuses it by its type (`tokenIsIdToken`), but
+     other verifiers may not. Turn it on only if something downstream needs the CID URL there.
 
 ### Endpoints — `/realms/{realm}/lws`
 
@@ -135,7 +135,7 @@ band**: the verifier validates the assertion's XML signature against a certifica
 time — no CID and no discovery, so this suite uses neither Jena nor a CID endpoint.
 
 Keycloak is a full SAML 2.0 IdP; to issue LWS SAML credentials, set up a SAML client and arrange for
-the `<NameID>` to carry the user's WebID. The `<NameID>` must be a URI — an LWS subject "MUST be a URI"
+the `<NameID>` to carry the user's CID URL. The `<NameID>` must be a URI — an LWS subject "MUST be a URI"
 — so Keycloak's default username or email NameID is refused (`subjectIsUri`), and the `<Issuer>` must be
 the IdP's entity URI (`issuerWellFormed`). The realm's SAML signing certificate is published at
 `…/realms/{realm}/protocol/saml/descriptor`.

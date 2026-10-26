@@ -5,7 +5,7 @@ the W3C [Linked Web Storage (LWS)](https://www.w3.org/TR/lws10-core/) 1.0 protoc
 token bound to an identity** is used as an authentication credential — all three of its suites:
 
 - [**OpenID Connect**](https://w3c.github.io/lws-protocol/lws10-authn-openid/) — Keycloak is the
-  OpenID Provider; the ID Token's `sub` is a WebID.
+  OpenID Provider; the ID Token's `sub` is a CID URL.
 - [**Self-signed Identity (Controlled Identifiers)**](https://w3c.github.io/lws-protocol/lws10-authn-ssi-cid/) —
   an agent signs its own JWT with a key its controlled identifier document lists; the identifier is an
   HTTPS URI, a `did:key` or a `did:web`.
@@ -24,7 +24,7 @@ With Docker, from a checkout:
 
 ```bash
 docker compose up --build --wait     # Keycloak 26.8.0 + lws-authn + a demo realm, at http://localhost:8080
-bash scripts/lws-demo.sh             # issue an ID Token whose sub is a WebID, and verify it
+bash scripts/lws-demo.sh             # issue an ID Token whose sub is a CID URL, and verify it
 ```
 
 This is a development setup (admin `admin` / `admin`, plain HTTP); see

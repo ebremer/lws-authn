@@ -125,22 +125,22 @@ class VerificationMethodRulesTest {
     }
 
     /**
-     * A subject may itself carry a fragment (a Solid-style WebID); its keys are fragments of the same
+     * A subject may itself carry a fragment ({@code …/card#me}); its keys are fragments of the same
      * document, so they are in the subject's document even though their ids do not start with the
      * subject as written.
      */
     @Test
     void aSubjectWithAFragmentStillOwnsTheKeysInItsDocument() throws Exception {
-        String webId = "https://alice.example/profile/card#me";
-        String doc = "{\"id\":\"" + webId + "\",\"authentication\":["
-                + multikey("https://alice.example/profile/card#key-1", webId, "") + "]}";
-        List<VerificationMethod> methods = SelfSignedCidVerifier.collectFromJsonLd(doc, webId);
+        String cidUrl = "https://alice.example/profile/card#me";
+        String doc = "{\"id\":\"" + cidUrl + "\",\"authentication\":["
+                + multikey("https://alice.example/profile/card#key-1", cidUrl, "") + "]}";
+        List<VerificationMethod> methods = SelfSignedCidVerifier.collectFromJsonLd(doc, cidUrl);
         assertEquals(1, methods.size());
         assertSame(methods.get(0), SelfSignedCidVerifier.selectByKid(methods, "key-1"));
 
-        String foreign = "{\"id\":\"" + webId + "\",\"authentication\":["
-                + multikey("https://alice.example/other#key-1", webId, "") + "]}";
-        assertTrue(SelfSignedCidVerifier.collectFromJsonLd(foreign, webId).isEmpty());
+        String foreign = "{\"id\":\"" + cidUrl + "\",\"authentication\":["
+                + multikey("https://alice.example/other#key-1", cidUrl, "") + "]}";
+        assertTrue(SelfSignedCidVerifier.collectFromJsonLd(foreign, cidUrl).isEmpty());
     }
 
     // ------------------------------------------------------------------------------ key material

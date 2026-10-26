@@ -316,7 +316,7 @@ class CidDocumentReadingTest {
     }
 
     /**
-     * R-29. A WebID that answers {@code 303 See Other} with its document — the httpRange-14 pattern —
+     * R-29. A CID URL that answers {@code 303 See Other} with its document — the httpRange-14 pattern —
      * used to fail as "did not return a controlled identifier document".
      */
     @Test

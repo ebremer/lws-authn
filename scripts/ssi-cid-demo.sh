@@ -181,16 +181,16 @@ note "7. Dereference the controlled identifier document (publishes the key)"
 CID=$(curl -sS -H 'Accept: application/ld+json' "$KC_URL/realms/$REALM/lws-ssi-cid/cid/$USER_UUID") \
   || die "Could not fetch the controlled identifier document."
 printf '%s' "$CID" | jq . 2>/dev/null || printf '%s\n' "$CID"
-WEBID=$(printf '%s' "$CID" | json '.id // empty')
-[ -n "$WEBID" ] || die "Could not read the controlled identifier document's 'id' (the answer is above)."
+CID_URL=$(printf '%s' "$CID" | json '.id // empty')
+[ -n "$CID_URL" ] || die "Could not read the controlled identifier document's 'id' (the answer is above)."
 if [ "$(printf '%s' "$CID" | json '[.authentication[]?.publicKeyJwk] | length')" = 0 ]; then
   die "The document has no authentication key — the lws_jwk attribute was not stored (unmanaged attributes?)."
 fi
 
-note "8. Mint a self-issued ES256 JWT (sub == iss == client_id == $WEBID)"
+note "8. Mint a self-issued ES256 JWT (sub == iss == client_id == $CID_URL)"
 NOW=$(date +%s)
 HEADER=$(jq -cn --arg kid "$KID" '{alg: "ES256", kid: $kid, typ: "JWT"}')
-PAYLOAD=$(jq -cn --arg id "$WEBID" --arg aud "$AUDIENCE" --argjson now "$NOW" \
+PAYLOAD=$(jq -cn --arg id "$CID_URL" --arg aud "$AUDIENCE" --argjson now "$NOW" \
           '{sub: $id, iss: $id, client_id: $id, aud: [$aud], iat: $now, exp: ($now + 300)}')
 SIGNING_INPUT="$(b64u_str "$HEADER").$(b64u_str "$PAYLOAD")"
 
@@ -211,9 +211,9 @@ printf '%s' "$RESULT" | jq . 2>/dev/null || printf '%s\n' "$RESULT"
 
 if [ "$(printf '%s' "$RESULT" | json '.valid // false')" = true ]; then
   note "PASS"
-  echo "'$WEBID' is a working self-signed LWS identity."
+  echo "'$CID_URL' is a working self-signed LWS identity."
   echo "Present this JWT to an LWS server, e.g.:"
-  echo "    curl https://pod.example/ -H \"Authorization: Bearer \$JWT\""
+  echo "    curl https://storage.example/ -H \"Authorization: Bearer \$JWT\""
   echo "The server fetches the document above, selects the key by 'kid', and validates the signature."
 else
   die "FAIL — the credential did not validate (see errors above)."

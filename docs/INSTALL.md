@@ -70,13 +70,13 @@ You need:
 - An Ubuntu server (22.04 LTS or 24.04 LTS) with `sudo` access.
 - A JDK already installed (this guide assumes so — see [step 3](#3-verify-java)).
 - A public DNS **A/AAAA record** pointing `id.example.com` at the server (required for TLS and so
-  the LWS WebIDs this server mints are publicly dereferenceable).
+  the LWS CID URLs this server mints are publicly dereferenceable).
 - Outbound internet access (to download Keycloak and Maven dependencies).
 
-> **Why the hostname matters for LWS.** The OpenID Connect suite derives each user's WebID and the
+> **Why the hostname matters for LWS.** The OpenID Connect suite derives each user's CID URL and the
 > issuer (`iss`) from Keycloak's front-end URL, e.g.
-> `https://id.example.com/realms/{realm}/lws/cid/{userId}`. A verifier (an LWS/Solid server) fetches
-> that WebID over the network. If the hostname isn't stable and publicly resolvable, tokens minted on
+> `https://id.example.com/realms/{realm}/lws/cid/{userId}`. A verifier (an LWS server) fetches
+> that CID URL over the network. If the hostname isn't stable and publicly resolvable, tokens minted on
 > one host won't validate when the document is fetched from another. Set it correctly in
 > [step 9](#9-configure-keycloak-for-production).
 
@@ -231,7 +231,7 @@ registered — you should see the three realm-resource providers and the protoco
 lws (org.keycloak.services.resource.RealmResourceProviderFactory)
 lws-ssi-cid (org.keycloak.services.resource.RealmResourceProviderFactory)
 lws-saml (org.keycloak.services.resource.RealmResourceProviderFactory)
-lws-webid-sub-mapper (org.keycloak.protocol.ProtocolMapper)
+lws-cid-sub-mapper (org.keycloak.protocol.ProtocolMapper)
 ```
 
 From another shell on the server, confirm the OpenID endpoint is mounted (the master realm has no
@@ -271,7 +271,7 @@ db-username=keycloak
 # db-password comes from the KC_DB_PASSWORD environment variable (systemd)
 
 # ---- Hostname (CRITICAL for LWS) ----
-# The provider derives every WebID and the issuer from this URL.
+# The provider derives every CID URL and the issuer from this URL.
 hostname=https://id.example.com
 
 # ---- Reverse-proxy TLS termination (see step 12) ----
@@ -303,7 +303,7 @@ sudo chmod 640 /opt/keycloak/conf/keycloak.conf
 
 ### 9c. Plan the SSRF allow-list (important for OpenID `/verify`)
 
-The OpenID verifier dereferences URLs taken from the credential — the subject's WebID (`sub`) and the
+The OpenID verifier dereferences URLs taken from the credential — the subject's CID URL (`sub`) and the
 issuer's discovery document. A built-in SSRF guard **blocks any host that resolves to a loopback,
 private, link-local, or otherwise reserved address** (including the `169.254.169.254` cloud-metadata
 endpoint).
@@ -441,7 +441,7 @@ sudo -u keycloak /opt/keycloak/bin/kc.sh build
 ```
 
 The output re-lists the registered providers — confirm the `lws`, `lws-ssi-cid` and `lws-saml`
-resources and the `lws-webid-sub-mapper` mapper appear, exactly as in
+resources and the `lws-cid-sub-mapper` mapper appear, exactly as in
 [step 8](#8-smoke-test-in-dev-mode).
 
 ### 9f. Make user attributes admin-only (do not skip this)
@@ -451,10 +451,10 @@ Two user attributes decide **who an identity is**:
 | Attribute | What it does |
 |---|---|
 | `lws_jwk` | the public signing key published in the user's controlled identifier document — whoever holds the matching private key can sign credentials as that identity |
-| the WebID attribute (whatever you name it in the mapper, if you use one) | becomes the `sub` claim of every ID Token for that user |
+| the CID URL attribute (whatever you name it in the mapper, if you use one) | becomes the `sub` claim of every ID Token for that user |
 
 **A user who can write either one can become somebody else.** Setting their own `lws_jwk` lets them
-mint self-signed credentials for their own WebID; setting their own WebID attribute makes Keycloak
+mint self-signed credentials for their own CID URL; setting their own CID URL attribute makes Keycloak
 issue an ID Token whose `sub` is an identifier they chose. Neither is a bug in this provider — it is
 Keycloak faithfully issuing what the account says — which is exactly why the policy has to be right.
 
@@ -642,14 +642,14 @@ curl -s https://id.example.com/realms/master/.well-known/openid-configuration | 
 
 ## 13. Verify the OpenID Connect suite end-to-end
 
-This proves the `lws-oidc` suite works: a user's `sub` becomes a dereferenceable WebID, and the
+This proves the `lws-oidc` suite works: a user's `sub` becomes a dereferenceable CID URL, and the
 credential passes the provider's `/verify` endpoint (the same algorithm an LWS server runs).
 
 ### Fast path — the bundled demo script
 
 The repo ships a script that idempotently provisions a realm (`lws-demo`), a client (`lws-app`), the
-**LWS WebID Subject** mapper, and a user (`alice`) holding the `lws-verifier` role, then obtains an ID
-Token, dereferences the WebID, and runs it through `/verify`:
+**LWS CID URL Subject** mapper, and a user (`alice`) holding the `lws-verifier` role, then obtains an ID
+Token, dereferences the CID URL, and runs it through `/verify`:
 
 ```bash
 cd /tmp/lws-authn      # your clone from step 6
@@ -659,7 +659,7 @@ PASSWORD="$(openssl rand -base64 18)" \
 bash scripts/lws-demo.sh
 ```
 
-A successful run ends with **`valid: true`** and prints the WebID — that is a working LWS identity
+A successful run ends with **`valid: true`** and prints the CID URL — that is a working LWS identity
 issued by your server.
 
 `PASSWORD` is required against anything but `localhost`: without it the user's password would be
@@ -676,7 +676,7 @@ authorization-code theft vector; delete that one in any case.
 2. **Clients → Create** `lws-app` (OpenID Connect). Enable *Direct access grants* so you can fetch a
    token by script (turn it off for real apps — use the Authorization Code flow).
 3. **Clients → lws-app → Client scopes → `lws-app-dedicated` → Add mapper → By configuration → LWS
-   WebID Subject.** Leave *WebID user attribute* blank (Keycloak hosts the WebID).
+   CID URL Subject.** Leave *CID URL user attribute* blank (Keycloak hosts the CID URL).
 4. **Users → Create** `alice`; under **Credentials** set a non-temporary password.
 5. Fetch a token and verify:
 
@@ -689,7 +689,7 @@ TOKENS=$(curl -s -X POST "$BASE/protocol/openid-connect/token" \
 ID_TOKEN=$(echo "$TOKENS" | jq -r .id_token)          # the credential to verify
 CALLER=$(echo "$TOKENS" | jq -r .access_token)        # who is asking (see step 9d)
 
-# The sub is a WebID (a fetchable URL), not an opaque UUID:
+# The sub is a CID URL (a fetchable URL), not an opaque UUID:
 echo "$ID_TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq '{sub, iss}'
 
 # Run the full validation (dereference sub -> locate OpenIdProvider service -> OIDC discovery -> verify signature):
@@ -725,14 +725,14 @@ server log at `DEBUG` under that id:
 sudo journalctl -u keycloak | grep <traceId>
 ```
 
-If `subjectDereferenced` is `false`, the server couldn't fetch its own WebID — revisit the hostname
+If `subjectDereferenced` is `false`, the server couldn't fetch its own CID URL — revisit the hostname
 ([step 9b](#9b-write-keycloakconf)) and the SSRF allow-list ([step 9c](#9c-plan-the-ssrf-allow-list-important-for-openid-verify)).
 
 ---
 
 ## 14. Production checklist
 
-- **Hostname** — `hostname=https://id.example.com` is set and publicly resolvable, so WebIDs and
+- **Hostname** — `hostname=https://id.example.com` is set and publicly resolvable, so CID URLs and
   discovery are stable and dereferenceable.
 - **HTTPS everywhere** — TLS terminated at nginx (or Keycloak directly); HTTP→HTTPS redirect on.
 - **Database** — PostgreSQL, not H2; the DB password lives only in the root-only env file.
@@ -749,7 +749,7 @@ If `subjectDereferenced` is `false`, the server couldn't fetch its own WebID —
   A provider option passed to `kc.sh build` instead of `kc.sh start` is silently absent from them.
 - **User attributes are admin-only** — the realm's unmanaged attribute policy is `ADMIN_EDIT`, not
   `ENABLED` ([step 9f](#9f-make-user-attributes-admin-only-do-not-skip-this)). `lws_jwk` is the signing
-  key an identity publishes and the WebID attribute becomes a credential's `sub`; a user who can write
+  key an identity publishes and the CID URL attribute becomes a credential's `sub`; a user who can write
   either can impersonate an identity. Check it with
   `kcadm.sh get realms/<realm> --fields unmanagedAttributePolicy`.
 - **Firewall** — only `22/80/443` exposed; Keycloak's `8080` stays on loopback.
@@ -770,8 +770,8 @@ If `subjectDereferenced` is `false`, the server couldn't fetch its own WebID —
 | LWS providers not listed after `kc.sh build` | JAR not in `/opt/keycloak/providers/` or not owned by `keycloak`. Re-copy (step 7) and rebuild (step 10). |
 | Service won't start; JVM/JDK error in the log | "Latest Java" isn't accepted by Keycloak 26. Install OpenJDK 21 (step 3) and set `JAVA_HOME` in the unit (step 11b). |
 | `kc.sh` complains about H2/dev at startup | `start --optimized` ran but a build-time option changed. Re-run `kc.sh build` (step 10), then restart. |
-| WebID / discovery URLs use the wrong host or `http` | `hostname` unset/wrong, or nginx isn't forwarding `X-Forwarded-*`. Fix `keycloak.conf` (step 9b) and the proxy headers (step 12); rebuild if needed. |
-| `/lws/verify` → `subjectDereferenced: false` or a blocked-host error | The server can't reach its own WebID, or the SSRF guard blocked an internal address. Ensure the public hostname is reachable from the box, or set `LWS_AUTHN_ALLOWED_INTERNAL_HOSTS` (step 9c/11a) and restart. |
+| CID URL / discovery URLs use the wrong host or `http` | `hostname` unset/wrong, or nginx isn't forwarding `X-Forwarded-*`. Fix `keycloak.conf` (step 9b) and the proxy headers (step 12); rebuild if needed. |
+| `/lws/verify` → `subjectDereferenced: false` or a blocked-host error | The server can't reach its own CID URL, or the SSRF guard blocked an internal address. Ensure the public hostname is reachable from the box, or set `LWS_AUTHN_ALLOWED_INTERNAL_HOSTS` (step 9c/11a) and restart. |
 | `/verify` → `401` with `{"error":"invalid_token"}` and a `WWW-Authenticate` header | The **caller** is not authenticated. Since the endpoints are gated by default, pass your own access token in `Authorization` and the credential under test in the `credential` form field (step 9d). |
 | `/verify` → `200` with `"valid": false` | The request was fine; the **credential** did not verify. Read `checks` and `errors` in the body, and the server log at `DEBUG` under the response's `traceId`. This used to be a `401` — see step 9d. |
 | `/verify` or `/cid/{userId}` → `404` with `{"error":"not_found"}` | Either that user id does not exist, or the suite is disabled — check `LWS_AUTHN_ENABLED` and the realm attribute `lws.authn.<providerId>.enabled` (step 9e). |
@@ -836,9 +836,13 @@ traffic that works today. Prepare, then deploy in two steps.
    this window short, or restrict `…/verify` in nginx to your callers' addresses while it lasts.
    Restart, read the `settings in force` lines in the startup log, and run a known-good credential
    through each suite you use; anything `valid: false` lists the failed check.
-8. Remove `LWS_AUTHN_VERIFY_ACCESS` (back to `bearer`), restart, and confirm your callers get `200`s —
+8. **Replace the OpenID mapper** in each realm (R-52): add an *LWS CID URL Subject* mapper to every
+   client that had the earlier one, with the same settings, then delete the earlier one. Keycloak
+   skips a mapper whose provider id is gone, so until then that client's ID Tokens carry its opaque
+   `sub`, which no verifier accepts: do it straight after the restart.
+9. Remove `LWS_AUTHN_VERIFY_ACCESS` (back to `bearer`), restart, and confirm your callers get `200`s —
    a `401` means a caller without an access token, a `403` one without the role.
-9. Delete any `lws-demo` realm the [fast path](#fast-path--the-bundled-demo-script) created on this server.
+10. Delete any `lws-demo` realm the [fast path](#fast-path--the-bundled-demo-script) created on this server.
 
 **Uninstall**:
 

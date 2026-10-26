@@ -40,6 +40,12 @@ drafts of **19 October 2026** (`9a08ff6`), which change nothing this provider im
 > none of them is the assertion's issuer. Its signatures, `<Conditions>` and structure are also checked
 > more strictly (R-21, R-22) — see below.
 >
+> **The OpenID mapper is now *LWS CID URL Subject*, provider id `lws-cid-sub-mapper`, and its attribute
+> setting is `lws.cid.attribute`** (R-52). Keycloak skips a mapper whose provider id no longer exists, so
+> until a realm's mapper is replaced its ID Tokens carry Keycloak's opaque `sub`, which no LWS verifier
+> accepts. In each realm, add an *LWS CID URL Subject* mapper to every client that had the earlier one,
+> with the same settings, and delete the earlier mapper.
+>
 > For a server running an older build, [INSTALL §16](INSTALL.md#upgrading-a-deployment-that-predates-the-october-2026-review)
 > has a step-by-step upgrade: what to check and change first, then a deploy in `public` mode followed by
 > a switch back to `bearer`.
@@ -96,7 +102,7 @@ realm under the default `bearer` access mode, before any signature is checked.
 - **No caller can trip the circuit breaker against a healthy origin** (R-02). The breaker counted any
   non-`200`, a wrong media type or a document that did not parse — and the verifier counted the
   breaker's own refusal as one more failure, pushing the window out each time. Five credentials whose
-  `sub` named a missing path on this server's own host therefore stopped every hosted-WebID
+  `sub` named a missing path on this server's own host therefore stopped every hosted CID URL
   verification for as long as anyone kept asking. The breaker now keeps its own books inside
   `OutboundHttp.fetch`, counts only failures no path can produce (unresolvable, connection refused or
   timed out, TLS handshake failed — not a pool wait, which is this server's load), keys on scheme, host
@@ -119,8 +125,8 @@ realm under the default `bearer` access mode, before any signature is checked.
 - **An access token no longer verifies as an LWS credential** (R-05). The JWT suites accepted a `typ`
   header of `at+jwt` — RFC 9068's explicit "this is an access token" — and the OpenID verifier never
   looked at the payload's `typ`, the only thing that distinguishes a Keycloak access token (`Bearer`)
-  from an ID Token (`ID`): Keycloak writes `"typ": "JWT"` in both headers. With the WebID mapper on
-  access tokens, which was its default, a realm access token carried a WebID `sub`, `iss`, `azp` and
+  from an ID Token (`ID`): Keycloak writes `"typ": "JWT"` in both headers. With the CID URL mapper on
+  access tokens, which was its default, a realm access token carried a CID URL `sub`, `iss`, `azp` and
   `exp` — everything checked — so a resource server the user had handed one to could present it as the
   user's credential. `at+jwt` is now refused in both JWT suites, and the OpenID verifier rejects a
   payload `typ` other than `ID` (new check `tokenIsIdToken`; an absent claim, usual outside Keycloak,
@@ -183,14 +189,14 @@ realm under the default `bearer` access mode, before any signature is checked.
   brute-force protection and says in its name that it is for development; and INSTALL generates a
   password, says to delete the realm afterwards, and lists that in the production checklist. **If you
   ran the fast path on a real server, delete the `lws-demo` realm.**
-- **The WebID mapper will not make one user another's subject** (R-30). A *WebID user attribute* naming
+- **The CID URL mapper will not make one user another's subject** (R-30). A *CID URL user attribute* naming
   a URL in the realm's own namespace — `{issuer}/lws/cid/<another user's id>`, whose document lists this
   issuer as that user's OpenID provider — was used as the `sub`, and the token verified as the other
-  user; only the attribute policy being admin-only stood in the way. Such a value, a WebID another user
+  user; only the attribute policy being admin-only stood in the way. Such a value, a CID URL another user
   of the realm also holds (OIDC Core §2: a `sub` is locally unique), and one longer than 255 ASCII
-  characters are now ignored with a warning, and the hosted WebID used instead. The mapper also warns,
+  characters are now ignored with a warning, and the hosted CID URL used instead. The mapper also warns,
   at most every ten minutes, when the realm's user profile lets users edit the attribute. A user id is
-  now percent-encoded into the hosted WebID, so a user-storage id holding `/` or `#` cannot give its user
+  now percent-encoded into the hosted CID URL, so a user-storage id holding `/` or `#` cannot give its user
   an identifier for some other path; Keycloak's own UUID ids are unaffected.
 
 ### Added
@@ -207,7 +213,7 @@ realm under the default `bearer` access mode, before any signature is checked.
   endpoint uses — where it used to cost up to three loopback requests holding a worker thread each, and
   the server's own address on the SSRF allow-list. A key removed from a remote document can still
   verify for up to `http-cache-seconds`, as with any caching verifier.
-- **A subject's document may be behind a redirect** (R-29). Redirects were refused outright, so a WebID
+- **A subject's document may be behind a redirect** (R-29). Redirects were refused outright, so a CID URL
   that answers `303 See Other` with its document — the httpRange-14 pattern — or one that redirects
   http to https failed as "did not return a controlled identifier document". Dereferencing a subject,
   in both JWT suites, now follows up to three `301`/`302`/`303`/`307`/`308` redirects. Each hop is a new
@@ -255,7 +261,7 @@ realm under the default `bearer` access mode, before any signature is checked.
   development only. See [Run with Docker](build.md#run-with-docker).
 - **`examples/lws-demo-realm.json` is ready for the self-signed CID suite.** Its user profile sets
   unmanaged attributes to `ADMIN_EDIT`, so an admin can register `lws_jwk` and the user cannot. `alice`
-  has a fixed id, so her WebID is the same on every import.
+  has a fixed id, so her CID URL is the same on every import.
 - **DID subjects in the self-signed CID suite** (`/lws-ssi-cid/verify`). The subject is resolved to its
   DID document and then validated exactly as an HTTPS subject's controlled identifier document is:
   - **`did:key`** — expanded locally into the document the did:key Method v0.9 defines (a `Multikey`
@@ -317,7 +323,7 @@ realm under the default `bearer` access mode, before any signature is checked.
   must now be an absolute URI (`subjectIsUri`), and the `Issuer` an absolute URI with no `Format` or
   the `entity` one, as SAML Profiles §4.1.4.2 requires (`issuerWellFormed`). The result reports the
   `NameID`'s `Format` as `subjectFormat`. An IdP sending usernames or email addresses as `NameID` must
-  be configured to send the user's WebID instead.
+  be configured to send the user's CID URL instead.
 - **SAML `<Conditions>` are evaluated as SAML Core §2.5.1 says** (R-21). Several
   `<AudienceRestriction>`s "form a conjunction", but their audiences were pooled, so an assertion
   restricted to `[app]` *and* `[https://elsewhere.example]` verified for `app`; now every restriction must
@@ -430,17 +436,23 @@ each may reject a document that used to verify. Check your issuers' documents be
   ID Token from a provider that sets the payload `typ` to something else would now fail
   `tokenIsIdToken`; none known does.
 - **Plain `http` subjects, issuers and `jwks_uri`s are refused** unless the host is on
-  `allowed-internal-hosts` (R-07). A deployment that verified `http` WebIDs or a test OP on `http` must
+  `allowed-internal-hosts` (R-07). A deployment that verified `http` CID URLs or a test OP on `http` must
   allow-list the host or move it to https; an `iss` with a query or fragment now fails
   `issuerWellFormed`.
 
 ### Changed
 
-- **The WebID mapper no longer puts the WebID in the access token by default** (R-05). *Add to access
+- **"CID URL" throughout** (R-52). The LWS specifications make the subject of a credential a URI, which
+  the OpenID suite dereferences to a controlled identifier document: a CID URL. The provider now calls
+  it that in its mapper's name, provider id (`lws-cid-sub-mapper`) and attribute setting
+  (`lws.cid.attribute`), in the admin console and the server log, in the demo scripts (`lws-demo.sh`
+  takes `CID_ATTRIBUTE`) and in the documentation. A realm's mapper has to be replaced; see the upgrade
+  note above.
+- **The CID URL mapper no longer puts the CID URL in the access token by default** (R-05). *Add to access
   token* now defaults to off, and a mapper whose configuration never mentions it — one created over
   the admin API with only the attribute set — is off too, where "not set" used to mean on. The demo
   realm and `lws-demo.sh` set it off explicitly. Existing mappers with the switch explicitly on keep
-  it; turn it off unless something downstream needs the WebID in the access token. The ID Token and
+  it; turn it off unless something downstream needs the CID URL in the access token. The ID Token and
   userinfo are unchanged.
 - **Configuration is read in one order, and says when it is wrong** (R-35). A provider's scope now
   always comes before the system property and environment variable: a server-wide setting such as
@@ -552,7 +564,7 @@ each may reject a document that used to verify. Check your issuers' documents be
 
 ### Tests
 
-**419 unit tests, 33 in `LwsAuthIT` and 5 in `ShadedJarContentsIT`** (0.2.0 had 144 and 23). Every
+**420 unit tests, 33 in `LwsAuthIT` and 5 in `ShadedJarContentsIT`** (0.2.0 had 144 and 23). Every
 rule a verifier applies now has a test that fails when the rule is deleted (R-44), each checked by
 breaking the rule: the OpenID rules decided after a fetch, against a local server playing the provider
 and the subject's host; the self-signed CID rules at the `verify()` level, and `did:web` resolution,
@@ -679,7 +691,7 @@ incorporate by reference, and the security, conformance and robustness findings 
 - **The shaded JAR ships what it should** (P4). Libraries Keycloak already provides are no longer
   bundled unrelocated; where Jena needs a newer version it is bundled *and relocated*. This was found
   by the integration test, which caught a packaging change that broke Jena's Turtle writer.
-- A trailing-whitespace WebID attribute is trimmed before it becomes the `sub` claim.
+- A trailing-whitespace CID URL attribute is trimmed before it becomes the `sub` claim.
 
 ### Testing
 
@@ -692,7 +704,7 @@ rejects gets reported by its users, and one that wrongly accepts does not.
 ## [0.1.0] — 2026-06-14
 
 First release. All four LWS 1.0 authentication suites as Keycloak 26 providers: OpenID Connect,
-Self-signed Controlled Identifier, SAML 2.0, and self-signed `did:key` — with the WebID `sub` protocol
+Self-signed Controlled Identifier, SAML 2.0, and self-signed `did:key` — with the CID URL `sub` protocol
 mapper, hosted controlled identifier documents for the two suites that need them, and a verifier for
 each suite.
 

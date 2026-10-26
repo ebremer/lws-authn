@@ -10,7 +10,7 @@ the W3C [Linked Web Storage (LWS)](https://www.w3.org/TR/lws10-core/) 1.0 protoc
 token bound to an identity** is used as an authentication credential — all three of its suites:
 
 - [**OpenID Connect**](https://w3c.github.io/lws-protocol/lws10-authn-openid/) — Keycloak is the
-  OpenID Provider; the ID Token's `sub` is a WebID whose controlled identifier document (CID) names
+  OpenID Provider; the ID Token's `sub` is a CID URL whose controlled identifier document (CID) names
   this Keycloak as its `OpenIdProvider` service.
 - [**Self-signed Identity (Controlled Identifiers)**](https://w3c.github.io/lws-protocol/lws10-authn-ssi-cid/) —
   an agent self-signs a JWT (`sub == iss == client_id`) with a key its identifier's controlled
@@ -31,7 +31,7 @@ Keycloak's SAML library for XML signature validation.
 
 | Suite | Keycloak's role | Credential | How the verifier gets the key | Endpoint | Token type URI |
 |-------|-----------------|------------|-------------------------------|----------|----------------|
-| OpenID Connect | OP + CID host + verifier | ID Token (JWT); `sub` = WebID | OIDC Discovery on `iss` (found via the CID service) | `/realms/{realm}/lws` | `…token-type:id_token` |
+| OpenID Connect | OP + CID host + verifier | ID Token (JWT); `sub` = CID URL | OIDC Discovery on `iss` (found via the CID service) | `/realms/{realm}/lws` | `…token-type:id_token` |
 | Self-signed CID | CID host + verifier | self-issued JWT; `sub`==`iss`==`client_id`, an HTTPS URI, `did:key` or `did:web` | the `authentication` method the `kid` names, in the subject's CID or DID document (`publicKeyJwk` or `publicKeyMultibase`) | `/realms/{realm}/lws-ssi-cid` | `…token-type:jwt` |
 | SAML 2.0 | SAML IdP + verifier | signed SAML `<Response>`; subject = `<NameID>` | **out-of-band**: the realm's SAML identity provider for the issuer, or a supplied certificate | `/realms/{realm}/lws-saml` | `…token-type:saml2` |
 
@@ -43,7 +43,7 @@ The suites are independent; deploy the single JAR and use any of them.
 
 | Component | Keycloak SPI | Purpose |
 |-----------|--------------|---------|
-| `openid.LWSSubMapper` | `ProtocolMapper` (OIDC) | Sets `sub` to the user's WebID so ID Tokens are usable as LWS credentials. |
+| `openid.LWSSubMapper` | `ProtocolMapper` (OIDC) | Sets `sub` to the user's CID URL so ID Tokens are usable as LWS credentials. |
 | `openid.resource.LWSResourceProvider` | `RealmResourceProvider` (`lws`) | Serves the CID (with the `OpenIdProvider` service) and a credential verifier. |
 | `openid.verify.LWSCredentialVerifier` | — | Dereference `sub` → locate service → OIDC discovery → validate JWT. |
 

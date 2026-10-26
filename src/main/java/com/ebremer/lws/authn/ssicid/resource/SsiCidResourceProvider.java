@@ -98,8 +98,8 @@ public class SsiCidResourceProvider implements RealmResourceProvider {
      * How a user's controlled identifier document is rendered: for the endpoint, and for the verifier
      * reading one of this realm's own without fetching it (R-26), so the two cannot disagree.
      */
-    public static final CidEndpoint.DocumentRenderer DOCUMENTS = (user, issuer, webId, contentType) -> {
-        SelfSignedControlledIdentifierDocument cid = new SelfSignedControlledIdentifierDocument(webId, publishableJwks(user));
+    public static final CidEndpoint.DocumentRenderer DOCUMENTS = (user, issuer, cidUrl, contentType) -> {
+        SelfSignedControlledIdentifierDocument cid = new SelfSignedControlledIdentifierDocument(cidUrl, publishableJwks(user));
         for (String refused : cid.refusedMethodIds()) {
             log.warnf("Refusing to publish the '%s' values on user %s that share the key id of %s: they are "
                     + "different keys, and a credential naming that kid could mean either", SsiCidConstants.JWK_ATTRIBUTE,

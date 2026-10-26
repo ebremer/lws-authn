@@ -89,8 +89,8 @@ curl -s -H "Authorization: Bearer $ADMIN" "$KC/admin/realms/$REALM/users/profile
 > **Do not use `ENABLED` here.** `ENABLED` lets the *end user* manage unmanaged attributes, and
 > `lws_jwk` is the signing key their own controlled identifier document publishes. A user who can
 > write it can register any key against their identity and sign credentials for it. The same applies
-> to any attribute you point the OpenID suite's **LWS WebID Subject** mapper at: it becomes the
-> credential's `sub`, so a user who can write it can claim any WebID.
+> to any attribute you point the OpenID suite's **LWS CID URL Subject** mapper at: it becomes the
+> credential's `sub`, so a user who can write it can claim any CID URL.
 
 Only the public half of a key is ever served. A `lws_jwk` value containing `d`, `p`, `q`, `dp`, `dq`,
 `qi`, `k` or `oth`, or one whose `kty` is `oct`, is refused outright and logged — never published.
@@ -181,7 +181,7 @@ the suite requires that, so a request without one — and without a configured `
 ### 7. Present it to an LWS server
 
 ```bash
-curl https://pod.example/agent/ -H "Authorization: Bearer $JWT"
+curl https://storage.example/agent/ -H "Authorization: Bearer $JWT"
 ```
 
 The server dereferences `sub`, selects the verification method whose key matches the JWT `kid`,

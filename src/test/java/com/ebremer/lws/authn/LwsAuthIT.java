@@ -150,7 +150,7 @@ class LwsAuthIT {
     private int fixturePort;
     private final Map<String, Route> routes = new ConcurrentHashMap<>();
     private KeyPair agentKeyPair;
-    private String agentWebId;
+    private String agentCidUrl;
 
     /** One canned response. */
     private record Route(int status, String contentType, String body) {
@@ -228,16 +228,19 @@ class LwsAuthIT {
 
         fixtureServer = HttpServer.create(new InetSocketAddress("0.0.0.0", 0), 0);
         fixturePort = fixtureServer.getAddress().getPort();
-        agentWebId = "http://host.testcontainers.internal:" + fixturePort + "/cid";
+        agentCidUrl = "http://host.testcontainers.internal:" + fixturePort + "/cid";
 
-        // Deliberately not the compact spelling this provider emits: an aliased term and an @graph
-        // wrapper, both of which the old key-walking reader would have silently found nothing in.
+        // Deliberately not the compact spelling this provider emits: an aliased term, which the old
+        // key-walking reader would have silently found nothing in. Its id is in the topmost map, as a
+        // controlled identifier document's must be (R-18); the @graph this used to be wrapped in is
+        // refused since, as CidDocumentReadingTest.selfSignedAGraphWithNoTopmostIdIsNotTheSubjectsDocument
+        // asserts (R-54).
         String document = "{\"@context\":[\"https://www.w3.org/ns/cid/v1\","
                 + "{\"auth\":\"https://w3id.org/security#authenticationMethod\"}],"
-                + "\"@graph\":[{\"id\":\"" + agentWebId + "\","
-                + "\"auth\":[{\"id\":\"" + agentWebId + "#k1\",\"type\":\"JsonWebKey\","
-                + "\"controller\":\"" + agentWebId + "\","
-                + "\"publicKeyJwk\":" + jwkJson(agentKeyPair.getPublic(), Map.of()) + "}]}]}";
+                + "\"id\":\"" + agentCidUrl + "\","
+                + "\"auth\":[{\"id\":\"" + agentCidUrl + "#k1\",\"type\":\"JsonWebKey\","
+                + "\"controller\":\"" + agentCidUrl + "\","
+                + "\"publicKeyJwk\":" + jwkJson(agentKeyPair.getPublic(), Map.of()) + "}]}";
 
         routes.put("/cid", new Route(200, "application/ld+json", document));
 
@@ -282,12 +285,12 @@ class LwsAuthIT {
 
     // ----------------------------------------------------------------- the smoke flow as assertions
 
-    /** The LWS WebID Subject mapper fires: the ID Token's sub is the Keycloak-hosted WebID. */
+    /** The LWS CID URL Subject mapper fires: the ID Token's sub is the Keycloak-hosted CID URL. */
     @Test
-    void mapperSetsSubjectToWebId() throws Exception {
+    void mapperSetsSubjectToTheHostedCidUrl() throws Exception {
         String sub = claim(idToken(), "sub");
         assertTrue(sub.startsWith(base + "/realms/" + REALM + "/lws/cid/"),
-                "sub should be the Keycloak-hosted WebID, was: " + sub);
+                "sub should be the Keycloak-hosted CID URL, was: " + sub);
     }
 
     /** The OpenID CID endpoint mounts and serves RDF in multiple syntaxes (shaded Jena works). */
@@ -315,7 +318,7 @@ class LwsAuthIT {
     /**
      * R-05. A realm access token is not an LWS credential. Keycloak writes {@code "typ": "JWT"} in the
      * header of access tokens and ID Tokens alike, and only the payload's {@code typ} ({@code Bearer}
-     * here) tells them apart; with the WebID mapper on access tokens, one used to verify as the user's
+     * here) tells them apart; with the CID URL mapper on access tokens, one used to verify as the user's
      * ID Token. Rejected by the type check, whatever the mapper is configured to put in it.
      */
     @Test
@@ -327,19 +330,19 @@ class LwsAuthIT {
 
     /**
      * P2-1, and the packaging that carries it. The verifier dereferences a document served as JSON-LD
-     * by a third party, written with an aliased term inside an {@code @graph} — a shape the old
-     * key-walking reader could not see at all. Passing means Jena's JSON-LD 1.1 reader works inside
+     * by a third party, written with an aliased term — a shape the old key-walking reader could not
+     * see at all. Passing means Jena's JSON-LD 1.1 reader works inside
      * Keycloak with Titanium *relocated* and jakarta.json taken from the server, which no unit test can
      * establish: they run against the unshaded classpath.
      */
     @Test
     void jsonLdControlledIdentifierDocumentVerifies() throws Exception {
-        String jwt = mintSsiCidJwt(agentWebId, "ES256");
+        String jwt = mintSsiCidJwt(agentCidUrl, "ES256");
 
         JsonNode r = JSON.readTree(postForm(base + "/realms/" + REALM + "/lws-ssi-cid/verify",
                 Map.of("credential", jwt, "audience", "https://as.example"), accessToken()).body());
         assertTrue(r.get("valid").asBoolean(), () -> "expected valid, got: " + r);
-        assertEquals(agentWebId, r.get("subject").asText());
+        assertEquals(agentCidUrl, r.get("subject").asText());
     }
 
     /** P2-2/3/4: the CID endpoint honours q-values and carries cache headers. */
@@ -563,8 +566,12 @@ class LwsAuthIT {
      */
     @Test
     void anInvalidCredentialIsTwoHundredWithValidFalse() throws Exception {
-        Map<String, String> nonsense = Map.of("credential", "not.a.jwt");
         for (String suite : List.of("lws", "lws-ssi-cid")) {
+            // The self-signed suite must be told the audience it verifies for (R-16). Without one the
+            // request is what is wrong, not the credential, and that is a 400 (R-54).
+            Map<String, String> nonsense = suite.equals("lws-ssi-cid")
+                    ? Map.of("credential", "not.a.jwt", "audience", "https://as.example")
+                    : Map.of("credential", "not.a.jwt");
             HttpResponse<String> r = postForm(base + "/realms/" + REALM + "/" + suite + "/verify",
                     nonsense, accessToken());
             assertEquals(200, r.statusCode(), suite + " answered a rejected credential with a status: " + r.body());
