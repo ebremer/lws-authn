@@ -160,8 +160,8 @@ public class LWSCredentialVerifier {
             // An access token is not an ID Token, and must not pass for one (R-05). Keycloak puts
             // "typ": "JWT" in the header of both, so the header cannot tell them apart; the payload's own
             // "typ" claim can — "ID" for an ID Token, "Bearer" or "DPoP" for an access token, "Refresh",
-            // "Logout". With this realm's WebID mapper on the access token, an access token carried a
-            // WebID sub, iss, azp and exp: everything checked below. A resource server that was handed one
+            // "Logout". With this realm's CID URL mapper on the access token, an access token carried a
+            // CID URL sub, iss, azp and exp: everything checked below. A resource server that was handed one
             // could replay it as the user's credential. Other providers rarely set the claim, so its
             // absence is not held against a token; only a type that says it is something else is.
             String payloadType = token.getType();
@@ -379,7 +379,7 @@ public class LWSCredentialVerifier {
 
     /**
      * Dereferences the subject URL and parses the returned controlled identifier document into a Jena
-     * model. Turtle is preferred (the WebID/Solid norm and the syntax this extension serves);
+     * model. Turtle is preferred (the syntax this extension serves);
      * N-Triples and RDF/XML are parsed with Jena RIOT; JSON-LD goes through Jena's JSON-LD processor,
      * with contexts served from this JAR ({@link RdfParsing#parse}), and {@link #modelFromCompactJsonLd}
      * reads it only when its context is not one this provider bundles.

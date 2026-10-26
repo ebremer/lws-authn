@@ -199,7 +199,7 @@ public final class OutboundHttp {
 
     /**
      * The most redirects {@link #dereference} follows. Three is enough for an http→https upgrade, a
-     * trailing-slash fix and a {@code 303 See Other} from a WebID to its document, and no more.
+     * trailing-slash fix and a {@code 303 See Other} from a CID URL to its document, and no more.
      */
     public static final int MAX_REDIRECTS = 3;
 
@@ -224,7 +224,7 @@ public final class OutboundHttp {
     /**
      * GETs a subject's document, following up to {@link #MAX_REDIRECTS} redirects (R-29).
      *
-     * <p>A WebID that answers {@code 303 See Other} — the httpRange-14 pattern, an identifier for a person
+     * <p>A CID URL that answers {@code 303 See Other} — the httpRange-14 pattern, an identifier for a person
      * redirecting to the document about them — or redirects http to https used to fail as "did not return
      * a controlled identifier document". Following is safe because nothing about the target is taken on
      * trust: each hop is checked by {@link SsrfGuard} and its origin's breaker before it is requested,
@@ -353,11 +353,11 @@ public final class OutboundHttp {
      * <p>Only the first kind may count towards the breaker, because the URL is the caller's choice. A
      * breaker that counted 404s, slow or oversized bodies, or a document that would not parse let any
      * caller trip it against any origin — five credentials whose {@code sub} named a missing path on
-     * this server's own host stopped every hosted-WebID verification — and then kept it tripped. What
-     * remains is what no path can produce: the name does not resolve (to an address this deployment may
-     * reach), the connection is refused or never completes, or the TLS handshake fails. A slow or hostile
-     * server is not the breaker's to handle; the deadline, the size cap and the per-caller bound already
-     * bound what it can cost (R-01).</p>
+     * this server's own host stopped the verification of every CID URL it hosts — and then kept it
+     * tripped. What remains is what no path can produce: the name does not resolve (to an address this
+     * deployment may reach), the connection is refused or never completes, or the TLS handshake fails. A
+     * slow or hostile server is not the breaker's to handle; the deadline, the size cap and the
+     * per-caller bound already bound what it can cost (R-01).</p>
      *
      * <p>Not counted although they look like connection failures: waiting too long for a connection
      * from the pool ({@link ConnectionPoolTimeoutException}, a subclass of the connect timeout), which

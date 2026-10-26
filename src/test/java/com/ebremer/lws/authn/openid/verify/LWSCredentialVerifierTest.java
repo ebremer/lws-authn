@@ -96,7 +96,7 @@ class LWSCredentialVerifierTest {
 
     /**
      * R-05. Keycloak writes {@code "typ": "JWT"} in the header of access tokens and ID Tokens alike; the
-     * payload's own {@code typ} says which it is. With the WebID mapper on access tokens, a realm access
+     * payload's own {@code typ} says which it is. With the CID URL mapper on access tokens, a realm access
      * token carried everything else this verifier checks.
      */
     @Test

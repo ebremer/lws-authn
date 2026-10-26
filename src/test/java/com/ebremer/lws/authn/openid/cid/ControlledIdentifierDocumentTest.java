@@ -29,9 +29,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  */
 class ControlledIdentifierDocumentTest {
 
-    private static final String WEBID = "https://idp.example/realms/demo/lws/cid/2b8a5c1e-0f4d-4c7e-9a3b-6d1f0e2c4b7a";
+    private static final String CID_URL = "https://idp.example/realms/demo/lws/cid/2b8a5c1e-0f4d-4c7e-9a3b-6d1f0e2c4b7a";
     private static final String ISSUER = "https://idp.example/realms/demo";
-    private static final ControlledIdentifierDocument DOCUMENT = new ControlledIdentifierDocument(WEBID, ISSUER);
+    private static final ControlledIdentifierDocument DOCUMENT = new ControlledIdentifierDocument(CID_URL, ISSUER);
 
     /**
      * The suite: the subject's document "MUST include a service entry with type
@@ -41,12 +41,12 @@ class ControlledIdentifierDocumentTest {
     @Test
     void declaresOneOpenIdProviderServiceForTheSubject() {
         Model model = DOCUMENT.toModel();
-        Resource subject = model.createResource(WEBID);
+        Resource subject = model.createResource(CID_URL);
         List<Statement> services = model.listStatements(subject, model.createProperty(LWSConstants.DID_SERVICE),
                 (org.apache.jena.rdf.model.RDFNode) null).toList();
         assertEquals(1, services.size(), String.valueOf(services));
         Resource service = services.get(0).getResource();
-        assertEquals(WEBID + "#openid-provider", service.getURI(), "named, so it can be referred to");
+        assertEquals(CID_URL + "#openid-provider", service.getURI(), "named, so it can be referred to");
         assertTrue(service.hasProperty(RDF.type, model.createResource(LWSConstants.OPENID_PROVIDER_TYPE)));
         assertEquals(ISSUER, service.getPropertyResourceValue(
                 model.createProperty(LWSConstants.DID_SERVICE_ENDPOINT)).getURI());
@@ -62,11 +62,11 @@ class ControlledIdentifierDocumentTest {
         JsonNode json = new ObjectMapper().readTree(DOCUMENT.toJsonLd());
         assertEquals(LWSConstants.CID_CONTEXT, json.path("@context").path(0).asText());
         assertEquals(1, json.path("@context").size());
-        assertEquals(WEBID, json.path("id").asText());
-        assertEquals(WEBID, RdfParsing.topmostId(DOCUMENT.toJsonLd(), WEBID));
+        assertEquals(CID_URL, json.path("id").asText());
+        assertEquals(CID_URL, RdfParsing.topmostId(DOCUMENT.toJsonLd(), CID_URL));
         assertEquals(1, json.path("service").size());
         JsonNode service = json.path("service").path(0);
-        assertEquals(WEBID + "#openid-provider", service.path("id").asText());
+        assertEquals(CID_URL + "#openid-provider", service.path("id").asText());
         assertEquals(LWSConstants.OPENID_PROVIDER_TYPE, service.path("type").asText());
         assertEquals(ISSUER, service.path("serviceEndpoint").asText());
     }
@@ -77,7 +77,7 @@ class ControlledIdentifierDocumentTest {
      */
     @Test
     void theJsonLdMeansWhatTheModelSays() {
-        Model parsed = RdfParsing.parse(DOCUMENT.toJsonLd(), LWSConstants.JSON_LD, WEBID);
+        Model parsed = RdfParsing.parse(DOCUMENT.toJsonLd(), LWSConstants.JSON_LD, CID_URL);
         assertTrue(parsed != null && parsed.isIsomorphicWith(DOCUMENT.toModel()),
                 () -> "parsed: " + parsed + "\nmodel: " + DOCUMENT.toModel());
     }
@@ -92,7 +92,7 @@ class ControlledIdentifierDocumentTest {
         };
         for (Object[] syntax : syntaxes) {
             String body = DOCUMENT.toRdf((RDFFormat) syntax[0]);
-            Model parsed = RdfParsing.parse(body, (String) syntax[1], WEBID);
+            Model parsed = RdfParsing.parse(body, (String) syntax[1], CID_URL);
             assertTrue(parsed.isIsomorphicWith(DOCUMENT.toModel()), syntax[1] + ":\n" + body);
         }
     }
@@ -100,8 +100,8 @@ class ControlledIdentifierDocumentTest {
     /** Two subjects of one issuer get two documents, each naming its own service. */
     @Test
     void eachSubjectsServiceIsItsOwn() {
-        Model other = new ControlledIdentifierDocument(WEBID + "x", ISSUER).toModel();
-        assertTrue(other.containsResource(other.createResource(WEBID + "x#openid-provider")));
-        assertTrue(!other.containsResource(other.createResource(WEBID + "#openid-provider")));
+        Model other = new ControlledIdentifierDocument(CID_URL + "x", ISSUER).toModel();
+        assertTrue(other.containsResource(other.createResource(CID_URL + "x#openid-provider")));
+        assertTrue(!other.containsResource(other.createResource(CID_URL + "#openid-provider")));
     }
 }

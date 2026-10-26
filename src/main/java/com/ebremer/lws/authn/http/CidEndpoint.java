@@ -70,10 +70,10 @@ public final class CidEndpoint {
         /**
          * @param user        the subject
          * @param issuer      this realm's issuer URL, which some documents cite as a service
-         * @param webId       the identifier the document describes, as this endpoint derives it
+         * @param cidUrl      the identifier the document describes, as this endpoint derives it
          * @param contentType one of {@link RdfContentNegotiation#SUPPORTED}
          */
-        String render(UserModel user, String issuer, String webId, String contentType);
+        String render(UserModel user, String issuer, String cidUrl, String contentType);
     }
 
     /**
@@ -133,9 +133,9 @@ public final class CidEndpoint {
         }
 
         String issuer = ThisRealm.issuerOf(session, realm);
-        String webId = documentUrl(issuer, settings.getProviderId(), cidPath, user.getId());
+        String cidUrl = documentUrl(issuer, settings.getProviderId(), cidPath, user.getId());
 
-        String body = renderer.render(user, issuer, webId, contentType);
+        String body = renderer.render(user, issuer, cidUrl, contentType);
         return withValidators(contentType, body, ifNoneMatch, settings.getCidCacheSeconds());
     }
 

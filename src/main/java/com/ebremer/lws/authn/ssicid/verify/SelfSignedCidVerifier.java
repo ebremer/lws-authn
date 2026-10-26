@@ -995,7 +995,7 @@ public class SelfSignedCidVerifier {
      * not accepted from here. A method with no identifier is not one §3.3 can retrieve at all (R-23).</p>
      *
      * <p>Document is compared with document, not with the subject as written: a subject identifier
-     * may itself carry a fragment — a Solid-style WebID such as {@code https://alice.example/card#me}
+     * may itself carry a fragment — {@code https://alice.example/card#me}, say
      * — and its keys ({@code …/card#key-1}) are still in its document.</p>
      */
     private static boolean inSubjectsDocument(String methodId, String sub) {

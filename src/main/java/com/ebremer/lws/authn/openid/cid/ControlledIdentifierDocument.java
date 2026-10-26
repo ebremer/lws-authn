@@ -33,7 +33,7 @@ import com.ebremer.lws.authn.openid.LWSConstants;
  * <pre>
  * {
  *   "@context": ["https://www.w3.org/ns/cid/v1"],
- *   "id": "&lt;webid&gt;",
+ *   "id": "&lt;cid-url&gt;",
  *   "service": [{
  *     "type": "https://www.w3.org/ns/lws#OpenIdProvider",
  *     "serviceEndpoint": "&lt;issuer&gt;"
@@ -45,7 +45,7 @@ import com.ebremer.lws.authn.openid.LWSConstants;
  */
 public final class ControlledIdentifierDocument {
 
-    private final String id;      // the WebID; equal to the subject of the credential and to this doc's URL
+    private final String id;      // the CID URL; equal to the subject of the credential and to this doc's URL
     private final String issuer;  // the OpenID Provider issuer (the service endpoint)
 
     public ControlledIdentifierDocument(String id, String issuer) {
