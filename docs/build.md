@@ -118,7 +118,7 @@ serving, parsing and SPARQL — run it after touching dependencies.
 
 ### Tests
 
-`mvn test` runs 419 unit tests. `mvn verify` additionally runs 5 in `ShadedJarContentsIT`, which read
+`mvn test` runs 420 unit tests. `mvn verify` additionally runs 5 in `ShadedJarContentsIT`, which read
 the built JAR and SBOM, and 33 in `LwsAuthIT`, which needs Docker and is skipped without it — unless `-Dlws.authn.requireDocker=true` is given, as CI does, and then a
 missing Docker fails the build instead of passing it untested.
 

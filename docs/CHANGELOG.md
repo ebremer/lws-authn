@@ -564,7 +564,7 @@ each may reject a document that used to verify. Check your issuers' documents be
 
 ### Tests
 
-**419 unit tests, 33 in `LwsAuthIT` and 5 in `ShadedJarContentsIT`** (0.2.0 had 144 and 23). Every
+**420 unit tests, 33 in `LwsAuthIT` and 5 in `ShadedJarContentsIT`** (0.2.0 had 144 and 23). Every
 rule a verifier applies now has a test that fails when the rule is deleted (R-44), each checked by
 breaking the rule: the OpenID rules decided after a fetch, against a local server playing the provider
 and the subject's host; the self-signed CID rules at the `verify()` level, and `did:web` resolution,

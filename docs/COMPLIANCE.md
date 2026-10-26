@@ -350,7 +350,7 @@ can mint credentials for an identity they should not control. `INSTALL.md` step 
 
 ## Verification
 
-`mvn clean verify` — 419 unit tests plus 33 in `LwsAuthIT` against a real Keycloak 26.8.0 container,
+`mvn clean verify` — 420 unit tests plus 33 in `LwsAuthIT` against a real Keycloak 26.8.0 container,
 and 5 that read the built JAR. Every rule the verifiers apply has a test that fails if the rule is
 deleted (R-44).
 Roughly half the integration tests assert a *rejection*, including a full third-party OpenID Provider

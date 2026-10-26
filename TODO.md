@@ -1385,6 +1385,15 @@ is needed.
   earlier names: a realm configured with an earlier build replaces its mapper, as the changelog's
   upgrade note says, because Keycloak skips a mapper whose provider id is gone.
 
+- [x] **R-53 · The demo realm does not import: the client's description is too long for Keycloak.**
+  `High` · tests, demo · `S` · *verified (CI run 39474243754, and by hand)*
+  Keycloak keeps a client's description in a 255-character column. R-13 lengthened the demo client's to
+  268, and Keycloak now exits at startup with "Value too long for column DESCRIPTION". Since that change,
+  `docker compose up` has not started and `LwsAuthIT` has failed on every CI run, `master` included.
+  **Done.** The description is shortened to 252 characters, saying the same. `DemoRealmTest` reads the
+  demo realm and fails on any description over 255 characters, so this is caught without Docker; run
+  against the realm from before the fix, it names `$.clients[0].description (268)`.
+
 ---
 
 ## Watch — upstream and blocked

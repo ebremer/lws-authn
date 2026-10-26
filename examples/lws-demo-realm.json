@@ -31,7 +31,7 @@
     {
       "clientId": "lws-app",
       "name": "LWS demo app",
-      "description": "Public client for trying out LWS authentication, for development only. It allows only the password grant, to make the walkthroughs easy to script, and no browser flow and no redirect URIs: a public client with a wildcard redirect is an authorization-code theft vector.",
+      "description": "Public client for trying out LWS authentication, for development only. Password grant only, so the walkthroughs can be scripted; no browser flow and no redirect URIs, since a public client with a wildcard redirect is an authorization-code theft vector.",
       "enabled": true,
       "protocol": "openid-connect",
       "publicClient": true,
