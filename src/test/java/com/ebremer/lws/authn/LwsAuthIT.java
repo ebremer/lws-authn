@@ -230,14 +230,17 @@ class LwsAuthIT {
         fixturePort = fixtureServer.getAddress().getPort();
         agentCidUrl = "http://host.testcontainers.internal:" + fixturePort + "/cid";
 
-        // Deliberately not the compact spelling this provider emits: an aliased term and an @graph
-        // wrapper, both of which the old key-walking reader would have silently found nothing in.
+        // Deliberately not the compact spelling this provider emits: an aliased term, which the old
+        // key-walking reader would have silently found nothing in. Its id is in the topmost map, as a
+        // controlled identifier document's must be (R-18); the @graph this used to be wrapped in is
+        // refused since, as CidDocumentReadingTest.selfSignedAGraphWithNoTopmostIdIsNotTheSubjectsDocument
+        // asserts (R-54).
         String document = "{\"@context\":[\"https://www.w3.org/ns/cid/v1\","
                 + "{\"auth\":\"https://w3id.org/security#authenticationMethod\"}],"
-                + "\"@graph\":[{\"id\":\"" + agentCidUrl + "\","
+                + "\"id\":\"" + agentCidUrl + "\","
                 + "\"auth\":[{\"id\":\"" + agentCidUrl + "#k1\",\"type\":\"JsonWebKey\","
                 + "\"controller\":\"" + agentCidUrl + "\","
-                + "\"publicKeyJwk\":" + jwkJson(agentKeyPair.getPublic(), Map.of()) + "}]}]}";
+                + "\"publicKeyJwk\":" + jwkJson(agentKeyPair.getPublic(), Map.of()) + "}]}";
 
         routes.put("/cid", new Route(200, "application/ld+json", document));
 
@@ -327,8 +330,8 @@ class LwsAuthIT {
 
     /**
      * P2-1, and the packaging that carries it. The verifier dereferences a document served as JSON-LD
-     * by a third party, written with an aliased term inside an {@code @graph} — a shape the old
-     * key-walking reader could not see at all. Passing means Jena's JSON-LD 1.1 reader works inside
+     * by a third party, written with an aliased term — a shape the old key-walking reader could not
+     * see at all. Passing means Jena's JSON-LD 1.1 reader works inside
      * Keycloak with Titanium *relocated* and jakarta.json taken from the server, which no unit test can
      * establish: they run against the unshaded classpath.
      */
@@ -563,8 +566,12 @@ class LwsAuthIT {
      */
     @Test
     void anInvalidCredentialIsTwoHundredWithValidFalse() throws Exception {
-        Map<String, String> nonsense = Map.of("credential", "not.a.jwt");
         for (String suite : List.of("lws", "lws-ssi-cid")) {
+            // The self-signed suite must be told the audience it verifies for (R-16). Without one the
+            // request is what is wrong, not the credential, and that is a 400 (R-54).
+            Map<String, String> nonsense = suite.equals("lws-ssi-cid")
+                    ? Map.of("credential", "not.a.jwt", "audience", "https://as.example")
+                    : Map.of("credential", "not.a.jwt");
             HttpResponse<String> r = postForm(base + "/realms/" + REALM + "/" + suite + "/verify",
                     nonsense, accessToken());
             assertEquals(200, r.statusCode(), suite + " answered a rejected credential with a status: " + r.body());

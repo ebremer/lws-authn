@@ -1394,6 +1394,17 @@ is needed.
   demo realm and fails on any description over 255 characters, so this is caught without Docker; run
   against the realm from before the fix, it names `$.clients[0].description (268)`.
 
+- [x] **R-54 · Two integration tests no longer matched the verifiers, unseen while R-53 kept the suite
+  from starting.** `Medium` · tests · `S` · *verified (on this branch and on `master`)*
+  With the demo realm importing again, `LwsAuthIT` ran for the first time since R-13, and two of its 33
+  tests failed, on `master` as here. `jsonLdControlledIdentifierDocumentVerifies` served a document
+  wrapped in an `@graph`, with no topmost `id`, which R-18 made both verifiers refuse
+  (`CidDocumentReadingTest.selfSignedAGraphWithNoTopmostIdIsNotTheSubjectsDocument` says so).
+  `anInvalidCredentialIsTwoHundredWithValidFalse` sent the self-signed suite no `audience`, which R-16
+  made a `400`.
+  **Done.** The fixture document keeps its aliased term, which is what that test is for, with its `id`
+  in the topmost map, and the self-signed request carries an `audience`. Neither verifier changed.
+
 ---
 
 ## Watch — upstream and blocked
