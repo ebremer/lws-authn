@@ -222,7 +222,7 @@ if [ "$(printf '%s' "$RESULT" | json '.valid // false')" = true ]; then
   note "PASS"
   echo "'$SUB' is a working LWS identity issued by $ISS."
   echo "Present this ID Token to an LWS server, e.g.:"
-  echo "    curl https://pod.example/ -H \"Authorization: Bearer \$ID_TOKEN\""
+  echo "    curl https://storage.example/ -H \"Authorization: Bearer \$ID_TOKEN\""
   echo "The server fetches the CID URL above, sees it names this issuer as its OpenID Provider,"
   echo "validates the signature, and authenticates the request as that CID URL."
 else

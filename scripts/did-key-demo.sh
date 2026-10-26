@@ -151,7 +151,7 @@ printf '%s' "$RESULT" | jq . 2>/dev/null || printf '%s\n' "$RESULT"
 if [ "$(printf '%s' "$RESULT" | json '.valid // false')" = true ]; then
   printf '\n\033[1;36m== PASS\033[0m\n'
   echo "The did:key carries its own key, so any LWS server can verify this with no prior setup:"
-  echo "    curl https://pod.example/ -H \"Authorization: Bearer \$JWT\""
+  echo "    curl https://storage.example/ -H \"Authorization: Bearer \$JWT\""
 else
   printf '\033[1;31mFAIL — see errors above\033[0m\n' >&2; exit 1
 fi

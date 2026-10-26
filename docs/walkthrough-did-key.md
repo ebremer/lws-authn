@@ -128,7 +128,7 @@ the JWT `alg` matches the key type, validates the signature, and checks expiry a
 ## Present it to an LWS server
 
 ```bash
-curl https://pod.example/ -H "Authorization: Bearer $JWT"
+curl https://storage.example/ -H "Authorization: Bearer $JWT"
 ```
 
 Because the key is carried in the identifier, **any** LWS server can verify the credential with no

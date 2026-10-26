@@ -28,7 +28,7 @@ behaviours are covered by tests — `mvn test` for the unit tests, `mvn verify` 
     disable redirects by default too (`spi-connections-http-client-default-allow-redirects`, default
     `false`), but that is a deployment setting one flag away from letting a `302` walk past the guard —
     so the verifiers do not depend on it. Dereferencing a **subject** follows up to three redirects
-    itself (a WebID answering `303 See Other`, or http going to https), and every hop is a new request
+    itself (a CID URL answering `303 See Other`, or http going to https), and every hop is a new request
     that the guard, the scheme rule and the breaker check as they check the first; the chain shares one
     deadline, and the document must still have the original subject as its `id`. Discovery, the JWK
     set and a `did:web` document are fetched with no redirects at all.

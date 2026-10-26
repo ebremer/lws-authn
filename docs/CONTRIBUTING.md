@@ -59,7 +59,7 @@ src/main/java/com/ebremer/lws/authn/
     JsonResponses                               every non-result body, serialized not concatenated
     CidEndpoint                                 the shared cid/{userId} endpoint
   openid/                                       OpenID Connect suite
-    LWSConstants, LWSSubMapper                  vocabulary + sub→WebID protocol mapper
+    LWSConstants, LWSSubMapper                  vocabulary + sub→CID URL protocol mapper
     cid/ControlledIdentifierDocument            CID builder (OpenIdProvider service)
     resource/LWSResourceProvider(.Factory)      JAX-RS endpoints, mount id "lws"
     verify/LWSCredentialVerifier, VerificationResult

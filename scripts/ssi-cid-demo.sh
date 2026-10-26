@@ -213,7 +213,7 @@ if [ "$(printf '%s' "$RESULT" | json '.valid // false')" = true ]; then
   note "PASS"
   echo "'$CID_URL' is a working self-signed LWS identity."
   echo "Present this JWT to an LWS server, e.g.:"
-  echo "    curl https://pod.example/ -H \"Authorization: Bearer \$JWT\""
+  echo "    curl https://storage.example/ -H \"Authorization: Bearer \$JWT\""
   echo "The server fetches the document above, selects the key by 'kid', and validates the signature."
 else
   die "FAIL — the credential did not validate (see errors above)."

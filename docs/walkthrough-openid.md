@@ -7,27 +7,27 @@ nav_order: 1
 # Walkthrough: create an LWS identity with Keycloak and use it with an LWS server
 
 This guide takes you from a freshly deployed `lws-authn` provider to a working **LWS identity** — a
-dereferenceable WebID, issued credentials, and a validation you can reproduce — and explains how an
+dereferenceable CID URL, issued credentials, and a validation you can reproduce — and explains how an
 LWS (Linked Web Storage) server consumes it.
 
 ## The cast
 
 | Party | Role |
 |-------|------|
-| **You** (a user) | Need a **WebID** — a dereferenceable identity URL. |
-| **Keycloak + `lws-authn`** | Your **OpenID Provider** (`iss`). Issues the ID Token *and* hosts the document your WebID resolves to. |
+| **You** (a user) | Need a **CID URL** — a dereferenceable identity URL. |
+| **Keycloak + `lws-authn`** | Your **OpenID Provider** (`iss`). Issues the ID Token *and* hosts the document your CID URL resolves to. |
 | **A client app** | What you log into; it gets the ID Token from Keycloak over normal OIDC. |
-| **An LWS server** | The resource server (a Solid-lineage pod/storage). It is the *verifier* — it runs the same algorithm as the provider's `/verify` endpoint. |
+| **An LWS server** | The resource server (an LWS storage). It is the *verifier* — it runs the same algorithm as the provider's `/verify` endpoint. |
 
 **The idea that makes it work:** you never register Keycloak with the LWS server. The server
-establishes trust *dynamically* — it dereferences your `sub` (WebID), sees that your own document
+establishes trust *dynamically* — it dereferences your `sub` (CID URL), sees that your own document
 names this Keycloak as its `OpenIdProvider`, and only then trusts tokens from that issuer. Your
 identity is self-describing.
 
-> If you point the mapper at a **WebID user attribute**, that attribute becomes the credential's
+> If you point the mapper at a **CID URL user attribute**, that attribute becomes the credential's
 > subject — so it must not be user-writable. Keep the realm's unmanaged attribute policy at
 > `ADMIN_EDIT`, or declare the attribute in the user profile with admin-only write permission.
-> A user who can set their own `sub` can claim any WebID.
+> A user who can set their own `sub` can claim any CID URL.
 
 ---
 
@@ -53,13 +53,13 @@ checkout of the repository:
 bash scripts/lws-demo.sh
 ```
 
-It provisions a realm (`lws-demo`), a client (`lws-app`), the **LWS WebID Subject** mapper and a user
-(`alice`, or `DEMO_USER`), then obtains an ID Token, dereferences the resulting WebID, and runs the credential through
+It provisions a realm (`lws-demo`), a client (`lws-app`), the **LWS CID URL Subject** mapper and a user
+(`alice`, or `DEMO_USER`), then obtains an ID Token, dereferences the resulting CID URL, and runs the credential through
 `/verify`. Override anything via env vars, e.g. `KC_URL=https://kc.example ADMIN_PASS=… PASSWORD=… bash
 scripts/lws-demo.sh` — against anything but `localhost`, `PASSWORD` is required, since the default
 (`alice`) would be a public password on that server.
 
-A successful run ends with `valid: true` and prints the WebID — that's your LWS identity.
+A successful run ends with `valid: true` and prints the CID URL — that's your LWS identity.
 
 The rest of this document is the same thing done by hand.
 
@@ -81,7 +81,7 @@ bin/kc.sh import --file examples/lws-demo-realm.json
 #   Realm selector → Create realm → Resource file = examples/lws-demo-realm.json
 ```
 
-> The realm references the mapper provider id `lws-webid-sub-mapper`, so the provider must be deployed
+> The realm references the mapper provider id `lws-cid-sub-mapper`, so the provider must be deployed
 > **before** importing.
 
 **Or** do it in the Admin UI:
@@ -90,12 +90,12 @@ bin/kc.sh import --file examples/lws-demo-realm.json
 2. **Clients → Create** `lws-app` (OpenID Connect). For this walkthrough enable *Direct access
    grants* so you can fetch tokens with a script; leave *Standard flow* on for real apps.
 3. **Clients → lws-app → Client scopes → `lws-app-dedicated` → Add mapper → By configuration →
-   LWS WebID Subject.** Leave *WebID user attribute* blank (Keycloak-hosted WebID).
+   LWS CID URL Subject.** Leave *CID URL user attribute* blank (Keycloak-hosted CID URL).
 4. **Users → Create** `alice`, then **Credentials →** set password `alice` (not temporary).
 
 ### 2. Make Keycloak dereferenceable (for real deployments)
 
-The WebID and discovery documents must be reachable by the LWS server. Set a stable public hostname
+The CID URL and discovery documents must be reachable by the LWS server. Set a stable public hostname
 (realm **Frontend URL**, or `KC_HOSTNAME` at startup). Locally, `http://localhost:8080` is fine. The
 issuer below is assumed to be `http://localhost:8080/realms/lws-demo`.
 
@@ -114,7 +114,7 @@ The ID Token is the credential. The access token from the same login identifies 
 `/verify` in step 6, which needs a caller holding the realm role `lws-verifier` — `alice` does, in the
 demo realm.
 
-### 4. Inspect — your `sub` is a WebID
+### 4. Inspect — your `sub` is a CID URL
 
 ```bash
 echo "$ID_TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq '{sub, iss, aud, azp}'
@@ -143,7 +143,7 @@ is a URL you can fetch.
 > in a verifier's audience check. To use one, set it as the client id when you create the client; no
 > other change is needed, because `client_id`, `aud` and `azp` all follow it.
 
-### 5. Dereference the WebID (the controlled identifier document)
+### 5. Dereference the CID URL (the controlled identifier document)
 
 ```bash
 SUB=$(echo "$ID_TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq -r .sub)
@@ -194,25 +194,25 @@ A `valid: true` here means any conformant LWS server will accept the same creden
 Your client app presents the ID Token as the LWS credential on requests to the server:
 
 ```bash
-curl https://pod.example/alice/profile -H "Authorization: Bearer $ID_TOKEN"
+curl https://storage.example/alice/profile -H "Authorization: Bearer $ID_TOKEN"
 ```
 
 The server then does what step 6 did — dereferences `sub`, confirms the `OpenIdProvider` service
 equals `iss`, runs OpenID Connect Discovery, validates the signature — and authenticates the request
-**as your WebID**. Your pod's access rules (ACL/ACP) are written against that WebID, so this is now
+**as your CID URL**. Your storage's access rules are written against that CID URL, so this is now
 *your* identity on that server. No server-side configuration of Keycloak is required.
 
 ---
 
-## Bring your own WebID (instead of a Keycloak-hosted one)
+## Bring your own CID URL (instead of a Keycloak-hosted one)
 
-If you already own a WebID (e.g. on your own storage), point `sub` at it:
+If you already own a CID URL (e.g. on your own storage), point `sub` at it:
 
-1. Set a user attribute — say `lws_webid` — to your WebID URL (Users → alice → Attributes), or run
-   the script with `WEBID_ATTRIBUTE=lws_webid` after setting the attribute.
-2. In the **LWS WebID Subject** mapper, set *WebID user attribute* = `lws_webid`.
+1. Set a user attribute — say `lws_cid` — to your CID URL (Users → alice → Attributes), or run
+   the script with `CID_ATTRIBUTE=lws_cid` after setting the attribute.
+2. In the **LWS CID URL Subject** mapper, set *CID URL user attribute* = `lws_cid`.
 3. **Host the controlled identifier document yourself**, naming this Keycloak as your OpenID Provider.
-   Keycloak only serves documents for Keycloak-hosted WebIDs. The minimum your document must contain:
+   Keycloak only serves documents for Keycloak-hosted CID URLs. The minimum your document must contain:
 
    ```turtle
    <https://you.example/profile#me>
@@ -239,7 +239,7 @@ If you already own a WebID (e.g. on your own storage), point `sub` at it:
 
 ## Production checklist
 
-- **Frontend URL / hostname** — set it so `iss`, the WebID, and discovery are stable and publicly
+- **Frontend URL / hostname** — set it so `iss`, the CID URL, and discovery are stable and publicly
   dereferenceable; otherwise tokens minted on one host won't validate when fetched from another.
 - **HTTPS** — required outside localhost (`sslRequired`).
 - **Audience** — the LWS server validates `aud`. If it requires its own URL as the audience, add a
@@ -250,6 +250,5 @@ If you already own a WebID (e.g. on your own storage), point `sub` at it:
 - **Presentation & DPoP** — *how* the token is attached to LWS requests (plain `Bearer` vs a
   DPoP-bound presentation) is governed by the broader LWS HTTP messaging spec and the specific
   server, not by this authentication sub-spec, which does not mandate DPoP.
-- **Ecosystem** — LWS is an in-progress W3C effort building on Solid; concrete servers today are
-  largely Solid servers evolving toward it, and a given server may not yet implement this suite's
-  CID-based discovery.
+- **Ecosystem** — LWS is an in-progress W3C effort, and a given server may not yet implement this
+  suite's CID-based discovery.
