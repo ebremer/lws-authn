@@ -40,6 +40,12 @@ drafts of **19 October 2026** (`9a08ff6`), which change nothing this provider im
 > none of them is the assertion's issuer. Its signatures, `<Conditions>` and structure are also checked
 > more strictly (R-21, R-22) — see below.
 >
+> **The OpenID mapper is now *LWS CID URL Subject*, provider id `lws-cid-sub-mapper`, and its attribute
+> setting is `lws.cid.attribute`** (R-52). Keycloak skips a mapper whose provider id no longer exists, so
+> until a realm's mapper is replaced its ID Tokens carry Keycloak's opaque `sub`, which no LWS verifier
+> accepts. In each realm, add an *LWS CID URL Subject* mapper to every client that had the earlier one,
+> with the same settings, and delete the earlier mapper.
+>
 > For a server running an older build, [INSTALL §16](INSTALL.md#upgrading-a-deployment-that-predates-the-october-2026-review)
 > has a step-by-step upgrade: what to check and change first, then a deploy in `public` mode followed by
 > a switch back to `bearer`.
@@ -436,6 +442,12 @@ each may reject a document that used to verify. Check your issuers' documents be
 
 ### Changed
 
+- **"CID URL" throughout** (R-52). The LWS specifications make the subject of a credential a URI, which
+  the OpenID suite dereferences to a controlled identifier document: a CID URL. The provider now calls
+  it that in its mapper's name, provider id (`lws-cid-sub-mapper`) and attribute setting
+  (`lws.cid.attribute`), in the admin console and the server log, in the demo scripts (`lws-demo.sh`
+  takes `CID_ATTRIBUTE`) and in the documentation. A realm's mapper has to be replaced; see the upgrade
+  note above.
 - **The WebID mapper no longer puts the WebID in the access token by default** (R-05). *Add to access
   token* now defaults to off, and a mapper whose configuration never mentions it — one created over
   the admin API with only the attribute set — is off too, where "not set" used to mean on. The demo

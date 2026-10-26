@@ -1373,6 +1373,18 @@ is needed.
     docs site's `Gemfile` and `_config.yml`, and (under R-48) the scripts. The README now lists what
     "every source file" covers.
 
+- [x] **R-52 · Name the subject "CID URL", as LWS does.** `Low` · docs, configuration · `S` ·
+  *verified (`w3c/lws-protocol` `origin/main`)*
+  Core makes the subject of a credential a URI. The OpenID suite dereferences it to a controlled
+  identifier document naming an `lws:OpenIdProvider`, and the self-signed suite's subject is a CID URL
+  or a DID. The provider used a term the specifications do not: in its mapper's name, provider id and
+  attribute setting, the admin console, the server log, the demo scripts and the documentation.
+  **Done.** The mapper is *LWS CID URL Subject*, provider id `lws-cid-sub-mapper`, setting
+  `lws.cid.attribute`. `lws-demo.sh` takes `CID_ATTRIBUTE`, and the demo realm uses the new names. The
+  code's own names and comments, the documentation and this file follow. Nothing is kept under the
+  earlier names: a realm configured with an earlier build replaces its mapper, as the changelog's
+  upgrade note says, because Keycloak skips a mapper whose provider id is gone.
+
 ---
 
 ## Watch — upstream and blocked

@@ -33,12 +33,12 @@ import org.keycloak.representations.userprofile.config.UPConfig;
 import org.keycloak.userprofile.UserProfileProvider;
 
 /**
- * R-05. The WebID goes into the ID Token — the LWS credential — and not into the access token unless
- * someone asks for it. An access token with a WebID {@code sub} carries everything an LWS verifier that
+ * R-05. The CID URL goes into the ID Token — the LWS credential — and not into the access token unless
+ * someone asks for it. An access token with a CID URL {@code sub} carries everything an LWS verifier that
  * does not check the token's type looks at, so a party the user handed it to could present it as the
  * user's credential.
  *
- * <p>R-30. A WebID attribute is used only if it can be this user's subject and nobody else's.</p>
+ * <p>R-30. A CID URL attribute is used only if it can be this user's subject and nobody else's.</p>
  */
 class LWSSubMapperTest {
 
@@ -56,7 +56,7 @@ class LWSSubMapperTest {
     }
 
     @Test
-    void offersTheWebIdForTheIdTokenButNotTheAccessToken() {
+    void offersTheCidUrlForTheIdTokenButNotTheAccessToken() {
         assertEquals("true", defaultOf(OIDCAttributeMapperHelper.INCLUDE_IN_ID_TOKEN));
         assertEquals("false", defaultOf(OIDCAttributeMapperHelper.INCLUDE_IN_ACCESS_TOKEN));
         // Userinfo follows the ID Token; there is no switch to make them differ.
@@ -95,11 +95,11 @@ class LWSSubMapperTest {
                 });
     }
 
-    private static UserModel user(String id, String webId) {
+    private static UserModel user(String id, String cidUrl) {
         return (UserModel) Proxy.newProxyInstance(LWSSubMapperTest.class.getClassLoader(),
                 new Class<?>[]{UserModel.class}, (proxy, method, args) -> switch (method.getName()) {
                     case "getId" -> id;
-                    case "getFirstAttribute" -> "lws_webid".equals(args[0]) ? webId : null;
+                    case "getFirstAttribute" -> "lws_cid".equals(args[0]) ? cidUrl : null;
                     default -> throw new UnsupportedOperationException(method.getName());
                 });
     }
@@ -109,7 +109,7 @@ class LWSSubMapperTest {
         UserProvider users = (UserProvider) Proxy.newProxyInstance(LWSSubMapperTest.class.getClassLoader(),
                 new Class<?>[]{UserProvider.class}, (proxy, method, args) -> {
                     if ("searchForUserByUserAttributeStream".equals(method.getName())) {
-                        return holders.stream().filter(u -> args[2].equals(u.getFirstAttribute("lws_webid")));
+                        return holders.stream().filter(u -> args[2].equals(u.getFirstAttribute("lws_cid")));
                     }
                     throw new UnsupportedOperationException(method.getName());
                 });
@@ -132,7 +132,7 @@ class LWSSubMapperTest {
     }
 
     private static ProtocolMapperModel mapper(Map<String, String> extra) {
-        Map<String, String> config = new HashMap<>(Map.of(LWSSubMapper.WEBID_ATTRIBUTE, "lws_webid"));
+        Map<String, String> config = new HashMap<>(Map.of(LWSSubMapper.CID_ATTRIBUTE, "lws_cid"));
         config.putAll(extra);
         ProtocolMapperModel model = new ProtocolMapperModel();
         model.setConfig(config);
@@ -150,10 +150,10 @@ class LWSSubMapperTest {
     }
 
     @Test
-    void aWebIdTheUserAloneHoldsIsTheirSubject() {
+    void aCidUrlTheUserAloneHoldsIsTheirSubject() {
         assertEquals("https://alice.example/profile#me", subjectOf(user(ALICE, " https://alice.example/profile#me ")));
         assertEquals(HOSTED, subjectOf(user(ALICE, null)));
-        assertEquals(HOSTED, subjectOf(user(ALICE, HOSTED)), "naming one's own hosted WebID is harmless");
+        assertEquals(HOSTED, subjectOf(user(ALICE, HOSTED)), "naming one's own hosted CID URL is harmless");
     }
 
     /**
@@ -175,9 +175,9 @@ class LWSSubMapperTest {
         assertNull(LWSSubMapper.problem("https://id.example:8443/realms/demo/lws/cid/" + BOB, ISSUER, HOSTED));
     }
 
-    /** OIDC Core §2: a {@code sub} is locally unique. Two holders of one WebID would be one subject. */
+    /** OIDC Core §2: a {@code sub} is locally unique. Two holders of one CID URL would be one subject. */
     @Test
-    void aWebIdTwoUsersHoldIsNeithersSubject() {
+    void aCidUrlTwoUsersHoldIsNeithersSubject() {
         String shared = "https://shared.example/profile#me";
         assertEquals(HOSTED, subjectOf(user(ALICE, shared), user(BOB, shared)));
         assertEquals("https://alice.example/profile#me",
@@ -186,7 +186,7 @@ class LWSSubMapperTest {
 
     /** OIDC Core §2: "It MUST NOT exceed 255 ASCII characters in length." */
     @Test
-    void aWebIdMustBeAtMost255AsciiCharacters() {
+    void aCidUrlMustBeAtMost255AsciiCharacters() {
         String longest = "https://alice.example/" + "a".repeat(255 - "https://alice.example/".length());
         assertEquals(longest, subjectOf(user(ALICE, longest)));
         assertEquals(HOSTED, subjectOf(user(ALICE, longest + "a")));
@@ -194,7 +194,7 @@ class LWSSubMapperTest {
         assertEquals(HOSTED, subjectOf(user(ALICE, "urn:uuid:" + ALICE)));
     }
 
-    /** A user-storage id may hold anything; it is one path segment of the WebID, encoded as one. */
+    /** A user-storage id may hold anything; it is one path segment of the CID URL, encoded as one. */
     @Test
     void theUserIdIsEncodedAsOnePathSegment() {
         assertEquals(ISSUER + "/lws/cid/f:4b1e:alice%2Fadmin%23x%20y%C3%A9",
@@ -230,25 +230,25 @@ class LWSSubMapperTest {
     }
 
     @Test
-    void knowsWhenTheUserCanEditTheirOwnWebId() {
+    void knowsWhenTheUserCanEditTheirOwnCidUrl() {
         UPConfig unmanaged = new UPConfig();
         unmanaged.setUnmanagedAttributePolicy(UPConfig.UnmanagedAttributePolicy.ENABLED);
-        assertTrue(LWSSubMapper.userEditable(profile(unmanaged), "lws_webid"));
+        assertTrue(LWSSubMapper.userEditable(profile(unmanaged), "lws_cid"));
         unmanaged.setUnmanagedAttributePolicy(UPConfig.UnmanagedAttributePolicy.ADMIN_EDIT);
-        assertFalse(LWSSubMapper.userEditable(profile(unmanaged), "lws_webid"));
+        assertFalse(LWSSubMapper.userEditable(profile(unmanaged), "lws_cid"));
         unmanaged.setUnmanagedAttributePolicy(null);
-        assertFalse(LWSSubMapper.userEditable(profile(unmanaged), "lws_webid"));
+        assertFalse(LWSSubMapper.userEditable(profile(unmanaged), "lws_cid"));
 
         UPConfig declared = new UPConfig();
         declared.setUnmanagedAttributePolicy(UPConfig.UnmanagedAttributePolicy.ENABLED);
-        declared.addOrReplaceAttribute(new UPAttribute("lws_webid",
+        declared.addOrReplaceAttribute(new UPAttribute("lws_cid",
                 new UPAttributePermissions(Set.of("admin", "user"), Set.of("admin"))));
-        assertFalse(LWSSubMapper.userEditable(profile(declared), "lws_webid"), "declared: its own permissions decide");
-        declared.addOrReplaceAttribute(new UPAttribute("lws_webid",
+        assertFalse(LWSSubMapper.userEditable(profile(declared), "lws_cid"), "declared: its own permissions decide");
+        declared.addOrReplaceAttribute(new UPAttribute("lws_cid",
                 new UPAttributePermissions(Set.of("admin", "user"), Set.of("admin", "user"))));
-        assertTrue(LWSSubMapper.userEditable(profile(declared), "lws_webid"));
+        assertTrue(LWSSubMapper.userEditable(profile(declared), "lws_cid"));
 
-        assertFalse(LWSSubMapper.userEditable(null, "lws_webid"));
+        assertFalse(LWSSubMapper.userEditable(null, "lws_cid"));
     }
 
     /** The warning reads the profile; a profile that says "user-editable" does not change the subject. */

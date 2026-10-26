@@ -3,17 +3,17 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * LWS WebID subject mapper.
+ * LWS CID URL subject mapper.
  *
  * The LWS 1.0 OpenID Connect Authentication Suite uses an OpenID Connect ID Token as an LWS
  * authentication credential. Unlike a plain Keycloak token (whose {@code sub} is an opaque user id),
- * an LWS credential's {@code sub} MUST be a dereferenceable controlled identifier (a "WebID"): a
+ * an LWS credential's {@code sub} MUST be a dereferenceable controlled identifier (a CID URL): a
  * verifier dereferences it to a controlled identifier document and confirms it lists this issuer as
  * an {@code https://www.w3.org/ns/lws#OpenIdProvider} service.
  *
- * This protocol mapper sets {@code sub} to that WebID. By default it derives a Keycloak-hosted
+ * This protocol mapper sets {@code sub} to that CID URL. By default it derives a Keycloak-hosted
  * controlled identifier document URL ({@code {issuer}/lws/cid/{userId}}, served by
- * {@code LWSResourceProvider}); alternatively it can read a WebID the user already owns from a
+ * {@code LWSResourceProvider}); alternatively it can read a CID URL the user already owns from a
  * configurable user attribute.
  */
 package com.ebremer.lws.authn.openid;
@@ -50,7 +50,7 @@ import org.keycloak.userprofile.UserProfileProvider;
 import com.ebremer.lws.authn.http.CidEndpoint;
 
 /**
- * Sets the {@code sub} claim to the user's LWS WebID so Keycloak ID Tokens can serve as LWS
+ * Sets the {@code sub} claim to the user's LWS CID URL so Keycloak ID Tokens can serve as LWS
  * authentication credentials.
  *
  * @author Erich Bremer
@@ -60,41 +60,41 @@ public class LWSSubMapper extends AbstractOIDCProtocolMapper
 
     private static final org.jboss.logging.Logger log = org.jboss.logging.Logger.getLogger(LWSSubMapper.class);
 
-    public static final String PROVIDER_ID = "lws-webid-sub-mapper";
+    public static final String PROVIDER_ID = "lws-cid-sub-mapper";
 
-    /** Config key: name of the user attribute holding an externally-hosted WebID. */
-    public static final String WEBID_ATTRIBUTE = "lws.webid.attribute";
+    /** Config key: name of the user attribute holding an externally-hosted CID URL. */
+    public static final String CID_ATTRIBUTE = "lws.cid.attribute";
 
     private static final List<ProviderConfigProperty> CONFIG_PROPERTIES = new ArrayList<>();
 
     static {
         ProviderConfigProperty attr = new ProviderConfigProperty();
-        attr.setName(WEBID_ATTRIBUTE);
-        attr.setLabel("WebID user attribute");
+        attr.setName(CID_ATTRIBUTE);
+        attr.setLabel("CID URL user attribute");
         attr.setType(ProviderConfigProperty.STRING_TYPE);
-        attr.setHelpText("Optional. Name of the user attribute holding the user's WebID / controlled "
-                + "identifier (used as the 'sub' claim). When empty, or unset for a given user, a "
-                + "Keycloak-hosted controlled identifier document URL is derived automatically: "
+        attr.setHelpText("Optional. Name of the user attribute holding the user's CID URL, the URL of their "
+                + "controlled identifier document (used as the 'sub' claim). When empty, or unset for a given "
+                + "user, a Keycloak-hosted controlled identifier document URL is derived automatically: "
                 + "{issuer}/lws/cid/{userId}. SECURITY: this attribute becomes the credential's subject, "
-                + "so it MUST NOT be user-writable — a user who can set it can claim any WebID. If it is "
+                + "so it MUST NOT be user-writable — a user who can set it can claim any CID URL. If it is "
                 + "an unmanaged attribute, set the realm's unmanaged attribute policy to ADMIN_EDIT (not "
                 + "ENABLED); if it is declared in the user profile, give it admin-only write permission. "
                 + "A value that is not an absolute http(s) URL of at most 255 ASCII characters, that names "
                 + "another URL of this realm's, or that another user of the realm also holds, is ignored — "
-                + "with a warning in the server log — and the Keycloak-hosted WebID used instead.");
+                + "with a warning in the server log — and the Keycloak-hosted CID URL used instead.");
         CONFIG_PROPERTIES.add(attr);
 
         CONFIG_PROPERTIES.add(includeProperty(OIDCAttributeMapperHelper.INCLUDE_IN_ID_TOKEN,
-                "Add to ID token and userinfo", "Set the LWS WebID as the 'sub' claim of the ID token (the LWS "
+                "Add to ID token and userinfo", "Set the LWS CID URL as the 'sub' claim of the ID token (the LWS "
                         + "credential) and of the userinfo response. The two go together: OpenID Connect Core "
                         + "§5.3.2 requires userinfo's 'sub' to match the ID token's exactly.",
                 true));
         CONFIG_PROPERTIES.add(includeProperty(OIDCAttributeMapperHelper.INCLUDE_IN_ACCESS_TOKEN,
-                "Add to access token", "Off by default. Set the LWS WebID as the 'sub' claim of the access token. "
-                        + "An access token is not an LWS credential; with a WebID 'sub' it looks like one to a "
+                "Add to access token", "Off by default. Set the LWS CID URL as the 'sub' claim of the access token. "
+                        + "An access token is not an LWS credential; with a CID URL 'sub' it looks like one to a "
                         + "verifier that does not check the token's type, so a party the user handed an access "
                         + "token to could present it as the user's credential. Turn on only if something "
-                        + "downstream needs the WebID in the access token.",
+                        + "downstream needs the CID URL in the access token.",
                 false));
     }
 
@@ -115,12 +115,12 @@ public class LWSSubMapper extends AbstractOIDCProtocolMapper
 
     @Override
     public String getDisplayType() {
-        return "LWS WebID Subject";
+        return "LWS CID URL Subject";
     }
 
     @Override
     public String getHelpText() {
-        return "Sets the 'sub' claim to the user's LWS WebID (a dereferenceable controlled identifier) so "
+        return "Sets the 'sub' claim to the user's LWS CID URL (a dereferenceable controlled identifier) so "
                 + "ID Tokens can be used as LWS authentication credentials per the LWS 1.0 OpenID Connect "
                 + "Authentication Suite.";
     }
@@ -134,7 +134,7 @@ public class LWSSubMapper extends AbstractOIDCProtocolMapper
     public AccessToken transformAccessToken(AccessToken token, ProtocolMapperModel mappingModel, KeycloakSession session,
             UserSessionModel userSession, ClientSessionContext clientSessionCtx) {
         if (include(mappingModel, OIDCAttributeMapperHelper.INCLUDE_IN_ACCESS_TOKEN, false)) {
-            token.setSubject(resolveWebId(token, mappingModel, session, userSession));
+            token.setSubject(resolveCidUrl(token, mappingModel, session, userSession));
         }
         return token;
     }
@@ -143,7 +143,7 @@ public class LWSSubMapper extends AbstractOIDCProtocolMapper
     public IDToken transformIDToken(IDToken token, ProtocolMapperModel mappingModel, KeycloakSession session,
             UserSessionModel userSession, ClientSessionContext clientSessionCtx) {
         if (include(mappingModel, OIDCAttributeMapperHelper.INCLUDE_IN_ID_TOKEN, true)) {
-            token.setSubject(resolveWebId(token, mappingModel, session, userSession));
+            token.setSubject(resolveCidUrl(token, mappingModel, session, userSession));
         }
         return token;
     }
@@ -159,7 +159,7 @@ public class LWSSubMapper extends AbstractOIDCProtocolMapper
             UserSessionModel userSession, ClientSessionContext clientSessionCtx) {
         if (include(mappingModel, OIDCAttributeMapperHelper.INCLUDE_IN_ID_TOKEN, true)) {
             // userinfo subject is conveyed as an "other" claim, matching Keycloak's pairwise mapper
-            token.getOtherClaims().put("sub", resolveWebId(token, mappingModel, session, userSession));
+            token.getOtherClaims().put("sub", resolveCidUrl(token, mappingModel, session, userSession));
         }
         return token;
     }
@@ -167,24 +167,24 @@ public class LWSSubMapper extends AbstractOIDCProtocolMapper
     /** Longest {@code sub} OIDC Core §2 allows: "It MUST NOT exceed 255 ASCII characters in length." */
     static final int MAX_SUBJECT_LENGTH = 255;
 
-    /** How often a realm's user profile is re-read to see whether the WebID attribute is user-editable. */
+    /** How often a realm's user profile is re-read to see whether the CID URL attribute is user-editable. */
     private static final long PROFILE_CHECK_INTERVAL_MS = 10 * 60 * 1000L;
 
     private static final Map<String, Long> PROFILE_CHECKED = new ConcurrentHashMap<>();
     private static final Set<String> LONG_SUBJECT_WARNED = ConcurrentHashMap.newKeySet();
 
     /**
-     * Returns the WebID to use as {@code sub}: the configured user attribute when present and
+     * Returns the CID URL to use as {@code sub}: the configured user attribute when present and
      * acceptable, otherwise the Keycloak-hosted controlled identifier document URL for the user.
      */
-    private String resolveWebId(IDToken token, ProtocolMapperModel mappingModel, KeycloakSession session,
+    private String resolveCidUrl(IDToken token, ProtocolMapperModel mappingModel, KeycloakSession session,
             UserSessionModel userSession) {
         UserModel user = userSession.getUser();
         RealmModel realm = userSession.getRealm();
         String issuer = issuer(token, session, realm);
         String hosted = CidEndpoint.documentUrl(issuer, LWSConstants.RESOURCE_PROVIDER_ID, LWSConstants.CID_PATH,
                 user.getId());
-        String attribute = mappingModel.getConfig().get(WEBID_ATTRIBUTE);
+        String attribute = mappingModel.getConfig().get(CID_ATTRIBUTE);
         if (attribute != null && !attribute.isBlank()) {
             String value = user.getFirstAttribute(attribute);
             if (value != null && !value.isBlank()) {
@@ -196,25 +196,25 @@ public class LWSSubMapper extends AbstractOIDCProtocolMapper
                 // The failure is silent and total: the OP issues a token that looks right, and
                 // every LWS server rejects it as invalid_token with nothing to point at.
                 // A blank-after-trim value is treated as no value at all, exactly as an unset
-                // attribute already is, and falls through to the Keycloak-hosted WebID.
-                String webId = value.trim();
+                // attribute already is, and falls through to the Keycloak-hosted CID URL.
+                String cidUrl = value.trim();
                 warnIfUserEditable(session, realm, attribute);
-                // A value that cannot be used falls back to the hosted WebID, which at least works,
+                // A value that cannot be used falls back to the hosted CID URL, which at least works,
                 // and the log says why: emitting it would give a token that looks right and is refused
                 // everywhere — or, for the cases below, one that speaks for somebody else.
-                String problem = problem(webId, issuer, hosted);
+                String problem = problem(cidUrl, issuer, hosted);
                 if (problem == null) {
-                    problem = sharedWithAnotherUser(session, realm, user, attribute, value, webId);
+                    problem = sharedWithAnotherUser(session, realm, user, attribute, value, cidUrl);
                 }
                 if (problem == null) {
-                    return webId;
+                    return cidUrl;
                 }
-                log.warnf("User %s has a '%s' attribute that %s; falling back to the Keycloak-hosted WebID",
+                log.warnf("User %s has a '%s' attribute that %s; falling back to the Keycloak-hosted CID URL",
                         user.getId(), attribute, problem);
             }
         }
         if (hosted.length() > MAX_SUBJECT_LENGTH && LONG_SUBJECT_WARNED.add(realm.getId())) {
-            log.warnf("Realm %s issues hosted WebIDs longer than the %d characters OpenID Connect allows a 'sub' "
+            log.warnf("Realm %s issues hosted CID URLs longer than the %d characters OpenID Connect allows a 'sub' "
                     + "(for user %s); shorten the issuer URL or the user-storage ids",
                     realm.getName(), MAX_SUBJECT_LENGTH, user.getId());
         }
@@ -222,25 +222,25 @@ public class LWSSubMapper extends AbstractOIDCProtocolMapper
     }
 
     /**
-     * Why {@code webId} cannot be a credential's subject for this user, or {@code null} if it can (R-30).
+     * Why {@code cidUrl} cannot be a credential's subject for this user, or {@code null} if it can (R-30).
      *
      * <ul>
      *   <li>It must be an absolute {@code http}/{@code https} URL: the subject of an LWS credential MUST
      *       be a URI (core §4.1), and the OpenID suite has a verifier dereference it.</li>
      *   <li>At most 255 ASCII characters (OIDC Core §2).</li>
-     *   <li>Nothing in this realm's own URL space but the user's own hosted WebID. {@code {issuer}/lws/cid/
+     *   <li>Nothing in this realm's own URL space but the user's own hosted CID URL. {@code {issuer}/lws/cid/
      *       <another user's id>} is a document this realm serves listing this issuer as the subject's
      *       OpenID provider, so a token naming it would verify — as that other user. That was prevented
      *       only by the deployment policy keeping the attribute admin-only.</li>
      * </ul>
      *
      * @param issuer this realm's issuer URL
-     * @param hosted the user's own hosted WebID
+     * @param hosted the user's own hosted CID URL
      */
-    static String problem(String webId, String issuer, String hosted) {
+    static String problem(String cidUrl, String issuer, String hosted) {
         URI uri;
         try {
-            uri = new URI(webId);
+            uri = new URI(cidUrl);
         } catch (URISyntaxException notAUri) {
             return "is not an absolute http(s) URL";
         }
@@ -249,11 +249,11 @@ public class LWSSubMapper extends AbstractOIDCProtocolMapper
                 || !("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))) {
             return "is not an absolute http(s) URL";
         }
-        if (webId.length() > MAX_SUBJECT_LENGTH || !webId.chars().allMatch(c -> c > 0x20 && c < 0x7f)) {
+        if (cidUrl.length() > MAX_SUBJECT_LENGTH || !cidUrl.chars().allMatch(c -> c > 0x20 && c < 0x7f)) {
             return "is not at most " + MAX_SUBJECT_LENGTH + " ASCII characters, as OpenID Connect requires of 'sub'";
         }
-        if (!webId.equals(hosted) && withinRealm(uri.normalize(), issuer)) {
-            return "names a URL in this realm's own namespace other than the user's own WebID";
+        if (!cidUrl.equals(hosted) && withinRealm(uri.normalize(), issuer)) {
+            return "names a URL in this realm's own namespace other than the user's own CID URL";
         }
         return null;
     }
@@ -284,14 +284,14 @@ public class LWSSubMapper extends AbstractOIDCProtocolMapper
     }
 
     /**
-     * Why the WebID cannot be this user's because another user of the realm holds it too, or
+     * Why the CID URL cannot be this user's because another user of the realm holds it too, or
      * {@code null}. OIDC Core §2: a {@code sub} is "a locally unique and never reassigned identifier";
-     * two users given one WebID would be one subject to every verifier, each able to act as the other.
+     * two users given one CID URL would be one subject to every verifier, each able to act as the other.
      * Neither gets it until an administrator decides whose it is.
      */
     private static String sharedWithAnotherUser(KeycloakSession session, RealmModel realm, UserModel user,
-            String attribute, String value, String webId) {
-        for (String candidate : value.equals(webId) ? List.of(value) : List.of(value, webId)) {
+            String attribute, String value, String cidUrl) {
+        for (String candidate : value.equals(cidUrl) ? List.of(value) : List.of(value, cidUrl)) {
             boolean shared = session.users().searchForUserByUserAttributeStream(realm, attribute, candidate)
                     .anyMatch(other -> !user.getId().equals(other.getId()));
             if (shared) {
@@ -303,7 +303,7 @@ public class LWSSubMapper extends AbstractOIDCProtocolMapper
 
     /**
      * Warns, at most every ten minutes per realm and attribute, when the realm's user profile lets the
-     * user write the WebID attribute (R-30): a user who can write it chooses the subject of their own
+     * user write the CID URL attribute (R-30): a user who can write it chooses the subject of their own
      * credentials. Declared in the profile, that is an {@code edit} permission for {@code user};
      * undeclared, it is the unmanaged attribute policy {@code ENABLED}.
      */
@@ -317,8 +317,8 @@ public class LWSSubMapper extends AbstractOIDCProtocolMapper
         PROFILE_CHECKED.put(key, now);
         try {
             if (userEditable(session.getProvider(UserProfileProvider.class), attribute)) {
-                log.warnf("Realm %s lets users edit their own '%s' attribute, which the LWS WebID mapper makes "
-                        + "the subject of their credentials: any user can claim a WebID that trusts this issuer. "
+                log.warnf("Realm %s lets users edit their own '%s' attribute, which the LWS CID URL mapper makes "
+                        + "the subject of their credentials: any user can claim a CID URL that trusts this issuer. "
                         + "Make it admin-only (unmanaged attribute policy ADMIN_EDIT, or no 'user' edit "
                         + "permission in the user profile)", realm.getName(), attribute);
             }

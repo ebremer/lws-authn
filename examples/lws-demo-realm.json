@@ -40,12 +40,12 @@
       "fullScopeAllowed": false,
       "protocolMappers": [
         {
-          "name": "lws-webid-sub",
+          "name": "lws-cid-sub",
           "protocol": "openid-connect",
-          "protocolMapper": "lws-webid-sub-mapper",
+          "protocolMapper": "lws-cid-sub-mapper",
           "consentRequired": false,
           "config": {
-            "lws.webid.attribute": "",
+            "lws.cid.attribute": "",
             "id.token.claim": "true",
             "access.token.claim": "false",
             "userinfo.token.claim": "true"

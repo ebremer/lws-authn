@@ -8,10 +8,10 @@
 # It will, idempotently:
 #   1. log in as the Keycloak admin
 #   2. ensure a realm exists
-#   3. ensure a client exists with the "LWS WebID Subject" protocol mapper
+#   3. ensure a client exists with the "LWS CID URL Subject" protocol mapper
 #   4. ensure a user exists (with a password), holding the role that may call /verify
 #   5. obtain an ID Token for that user
-#   6. dereference the resulting WebID (the controlled identifier document)
+#   6. dereference the resulting CID URL (the controlled identifier document)
 #   7. run the credential through the provider's /verify endpoint
 #
 # Requirements: curl 7.76 or later, jq, and a running Keycloak 26.8 (26.8.0 or later) with the
@@ -29,9 +29,9 @@
 # The user is DEMO_USER, not USERNAME: Windows sets USERNAME to the login name, so under Git Bash the
 # script used to create a user named after whoever ran it.
 #
-# To use an externally-hosted WebID instead of a Keycloak-hosted one, set WEBID_ATTRIBUTE to the
-# user-attribute name that holds it (and set that attribute on the user yourself) — see the
-# walkthrough's "Bring your own WebID" section.
+# To use an externally-hosted CID URL instead of a Keycloak-hosted one, set CID_ATTRIBUTE to the
+# user-attribute name that holds it (and set that attribute on the user yourself) — see the OpenID
+# walkthrough on bringing your own CID URL.
 
 set -euo pipefail
 
@@ -42,7 +42,7 @@ DEMO_USER="${DEMO_USER:-alice}"
 PASSWORD="${PASSWORD:-}"   # required unless KC_URL is this machine; see below
 ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASS="${ADMIN_PASS:-admin}"
-WEBID_ATTRIBUTE="${WEBID_ATTRIBUTE:-}"   # empty => Keycloak hosts the WebID at {iss}/lws/cid/{userId}
+CID_ATTRIBUTE="${CID_ATTRIBUTE:-}"   # empty => Keycloak hosts the CID URL at {iss}/lws/cid/{userId}
 VERIFY_ROLE="${VERIFY_ROLE:-lws-verifier}"   # the verify endpoints' `role` setting
 
 command -v curl >/dev/null || { echo "curl is required"; exit 1; }
@@ -141,15 +141,15 @@ else
   echo "realm $REALM already exists"
 fi
 
-MAPPER=$(jq -n --arg attribute "$WEBID_ATTRIBUTE" '{
-  name: "lws-webid-sub",
+MAPPER=$(jq -n --arg attribute "$CID_ATTRIBUTE" '{
+  name: "lws-cid-sub",
   protocol: "openid-connect",
-  protocolMapper: "lws-webid-sub-mapper",
+  protocolMapper: "lws-cid-sub-mapper",
   consentRequired: false,
-  config: {"lws.webid.attribute": $attribute, "id.token.claim": "true", "access.token.claim": "false"}
+  config: {"lws.cid.attribute": $attribute, "id.token.claim": "true", "access.token.claim": "false"}
 }')
 
-note "3. Ensure client '$CLIENT_ID' with the LWS WebID Subject mapper"
+note "3. Ensure client '$CLIENT_ID' with the LWS CID URL Subject mapper"
 CLIENT_UUID=$(api --get --data-urlencode "clientId=$CLIENT_ID" "$KC_URL/admin/realms/$REALM/clients" \
               | json '.[0].id // empty')
 if [ -z "$CLIENT_UUID" ]; then
@@ -166,7 +166,7 @@ if [ -z "$CLIENT_UUID" ]; then
   echo "created client $CLIENT_ID (with LWS mapper)"
 else
   HAS=$(api "$KC_URL/admin/realms/$REALM/clients/$CLIENT_UUID/protocol-mappers/models" \
-        | json '[.[] | select(.protocolMapper=="lws-webid-sub-mapper")] | length')
+        | json '[.[] | select(.protocolMapper=="lws-cid-sub-mapper")] | length')
   if [ "$HAS" = 0 ]; then
     printf '%s' "$MAPPER" | api -X POST "$KC_URL/admin/realms/$REALM/clients/$CLIENT_UUID/protocol-mappers/models" \
         -H 'Content-Type: application/json' --data-binary @-
@@ -207,10 +207,10 @@ VERIFY_TOKEN="${VERIFY_TOKEN:-$(printf '%s' "$TOKEN_RESPONSE" | json '.access_to
 PAYLOAD=$(jwt_payload "$ID_TOKEN")
 SUB=$(printf '%s' "$PAYLOAD" | json .sub)
 ISS=$(printf '%s' "$PAYLOAD" | json .iss)
-echo "sub (WebID) = $SUB"
-echo "iss         = $ISS"
+echo "sub (CID URL) = $SUB"
+echo "iss           = $ISS"
 
-note "6. Dereference the WebID — the controlled identifier document a verifier fetches"
+note "6. Dereference the CID URL — the controlled identifier document a verifier fetches"
 curl -sS -H 'Accept: text/turtle' "$SUB" || echo "(could not fetch $SUB — is it reachable from here?)"
 echo
 
@@ -223,8 +223,8 @@ if [ "$(printf '%s' "$RESULT" | json '.valid // false')" = true ]; then
   echo "'$SUB' is a working LWS identity issued by $ISS."
   echo "Present this ID Token to an LWS server, e.g.:"
   echo "    curl https://pod.example/ -H \"Authorization: Bearer \$ID_TOKEN\""
-  echo "The server fetches the WebID above, sees it names this issuer as its OpenID Provider,"
-  echo "validates the signature, and authenticates the request as that WebID."
+  echo "The server fetches the CID URL above, sees it names this issuer as its OpenID Provider,"
+  echo "validates the signature, and authenticates the request as that CID URL."
 else
   die "FAIL — the credential did not validate (see errors above)."
 fi
