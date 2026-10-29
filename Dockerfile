@@ -33,7 +33,7 @@ RUN mvn -B -ntp -q -DskipTests package \
  && cp target/lws-authn-*.jar /lws-authn.jar
 
 # ── 2. Keycloak with the provider ───────────────────────────────────────────────────────────────
-FROM quay.io/keycloak/keycloak:26.8.0@sha256:b0f60d489d51c5d113390bdf5461d4c06e6051be026c05549f2e1e10ec352bcc
+FROM quay.io/keycloak/keycloak:26.8.1-1@sha256:a78d6b79572168cb25886b80a8b5b8d4ed4390743e3eecb810538683e209dd6b
 COPY --from=provider /lws-authn.jar /opt/keycloak/providers/lws-authn.jar
 # The demo realm, imported on first start by `--import-realm`.
 COPY examples/lws-demo-realm.json /opt/keycloak/data/import/lws-demo-realm.json
