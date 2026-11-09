@@ -10,14 +10,18 @@ nav_order: 5
 each suite enforces, which are deferred to the relying party, and what is supported. It is written for
 someone integrating against this provider, who needs to know what a `"valid": true` actually asserts.
 
-**Last reviewed:** 20 October 2026, against the specifications as they stood on 19 October 2026
-(`w3c/lws-protocol` at `9a08ff6`) and the code in this tree. No authentication requirement changed after
-the review of 6 October 2026, which was against `ef02548`: the three suites were republished on 15 October
-with wording changes only, and core's changes — RFC 9728 protected resource metadata for finding the
-authorization server (w3c/lws-protocol#256), the LWS profile for container RDF (#253) and moving
-resources (#237) — are storage and authorization-server side. Earlier reviews: 6 October (against
-`ef02548`; its findings are the R-items of `TODO.md`), 30 September (`9b03b32`), 22 September (`3ddc642`)
-and 3 September 2026.
+**Last reviewed:** 9 November 2026, against the specifications as they stood that day
+(`w3c/lws-protocol` at `db64f56`: core and the SAML suite republished as Working Drafts of 9 November
+2026) and the code in this tree. No authentication requirement changed after the review of 6 October
+2026, which was against `ef02548`. The SAML suite's edition of 9 November corrects a closing tag in its
+example (w3c/lws-protocol#298); core's editions of 23 October and 9 November change the create resource
+operation's status codes (#263) and cross-references (#281), and its authentication section is the text
+of 21 September; the OpenID and self-signed CID suites are the Working Drafts of 15 October, republished
+then with wording changes only. Since this review each suite's own examples are tests: the published
+credential, verified against the published document, is valid (see *Verification*). Earlier reviews:
+20 October (against `9a08ff6`: the suites of 15 October, core's RFC 9728 protected resource metadata,
+w3c/lws-protocol#256, and its storage changes #253 and #237), 6 October (`ef02548`; its findings are
+the R-items of `TODO.md`), 30 September (`9b03b32`), 22 September (`3ddc642`) and 3 September 2026.
 
 Item ids like **P0-3** refer to [`TODO.md`](https://github.com/ebremer/lws-authn/blob/master/TODO.md), which carries the reasoning and the history.
 Where this document says a check exists, it names the field that appears in the `checks` object of the
@@ -30,12 +34,12 @@ verify response, so a claim here can be tested against a real response.
 These are **W3C Working Drafts**, not Recommendations. Conformance here means "matches the published
 normative requirements", not a Rec-level conformance certificate — the text can still change.
 
-| Document | Latest published version, 19 October 2026 | Editor's draft, as reviewed |
+| Document | Latest published version, 9 November 2026 | Editor's draft, as reviewed |
 |---|---|---|
-| Linked Web Storage Protocol 1.0 (core) | W3C Working Draft **19 October 2026** | same text — its authentication section is unchanged since 21 September; authorization server metadata `subject_identifier_types_supported` and RFC 9728 protected resource metadata do not apply here (see *Known divergences*) |
+| Linked Web Storage Protocol 1.0 (core) | W3C Working Draft **9 November 2026** | same text — its authentication section is unchanged since 21 September; authorization server metadata `subject_identifier_types_supported` and RFC 9728 protected resource metadata do not apply here (see *Known divergences*) |
 | LWS 1.0 Authn Suite: Self-signed Identity (Controlled Identifiers) | W3C Working Draft **15 October 2026** | same text — **"designed to work with subject identifiers that use HTTPS URIs as well as DID URIs"**; worded more carefully since 21 September, no requirement changed |
 | LWS 1.0 Authn Suite: OpenID Connect | W3C Working Draft **15 October 2026** | same text — OpenID Connect's capitalisation and wording since 3 August, no requirement changed |
-| LWS 1.0 Authn Suite: SAML 2.0 | W3C Working Draft **15 October 2026** | same text — SAML's own terms since 3 August (`saml:NameID`, `saml:Issuer` and `saml:Audience` are elements, `Recipient` an attribute) and a well-formed example, no requirement changed |
+| LWS 1.0 Authn Suite: SAML 2.0 | W3C Working Draft **9 November 2026** | same text — SAML's own terms since 3 August (`saml:NameID`, `saml:Issuer` and `saml:Audience` are elements, `Recipient` an attribute) and, since 9 November, a well-formed example (its `</ds:Signature>`, #298); no requirement changed |
 | LWS 1.0 Authn Suite: Self-signed Identity using did:key | W3C Working Draft 3 August 2026; published as a **Discontinued Draft on 29 September 2026** | discontinued 18 September 2026 in favour of the self-signed CID suite, which verifies `did:key` subjects |
 | Linked Web Storage Vocabulary | W3C Group Note Draft, **14 July 2026** | 19 October 2026 (adds `lws:StorageResource`, `lws:AccessRequest`, `lws:MoveResource` with `appliesTo` and `preservesIdentifier`, and `as:Move`; `lws:OpenIdProvider`, the one term used here, is unchanged) |
 | Controlled Identifiers (CID) 1.0 | **W3C Recommendation, 15 May 2025** | — |
@@ -350,9 +354,14 @@ can mint credentials for an identity they should not control. `INSTALL.md` step 
 
 ## Verification
 
-`mvn clean verify` — 420 unit tests plus 33 in `LwsAuthIT` against a real Keycloak 26.8.0 container,
+`mvn clean verify` — 432 unit tests plus 33 in `LwsAuthIT` against a real Keycloak 26.8.0 container,
 and 5 that read the built JAR. Every rule the verifiers apply has a test that fails if the rule is
 deleted (R-44).
+Each suite's own examples are run as published (R-55): the OpenID suite's ID Token against its
+controlled identifier document, the self-signed CID suite's JWT against its document — signed with the
+key that document publishes, RFC 7515 Appendix A.3's — and the SAML suite's Response, signed. Each
+verifies; as printed, each fails only for its October 2025 dates; and each is refused for an
+authorization server it does not name.
 Roughly half the integration tests assert a *rejection*, including a full third-party OpenID Provider
 fixture broken one document at a time, because a verifier that wrongly rejects gets reported by its
 users and one that wrongly accepts does not.
