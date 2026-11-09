@@ -18,7 +18,8 @@ Brings the provider up to the LWS editor's drafts of **21 September 2026** (`w3c
 `3ddc642`). Two changes to the drafts since 0.2.0's baseline touch this provider, and implementing the
 second properly exposed four places where the self-signed CID verifier did not follow Controlled
 Identifiers 1.0 §3.3, which that suite cites normatively for selecting a key. Checked since against the
-drafts of **19 October 2026** (`9a08ff6`), which change nothing this provider implements.
+drafts of **19 October 2026** (`9a08ff6`) and the editions of **9 November 2026** (`db64f56`), which
+change nothing this provider implements.
 
 > ### If you are upgrading an existing deployment, read this section
 >
@@ -82,6 +83,16 @@ drafts of **19 October 2026** (`9a08ff6`), which change nothing this provider im
   authorization-server metadata example now spells the ID Token's token type
   `urn:ietf:params:oauth:token-type:id_token`, as the OpenID suite, RFC 8693 and this provider always
   did (#275). The comments in the verifiers that quote the suites quote the new wording.
+- **Re-reviewed against the specifications as of 9 November 2026** (`w3c/lws-protocol` at `db64f56`):
+  no normative change to authentication, so no change to the verifiers. Core and the SAML suite were
+  published as Working Drafts on 9 November 2026. The SAML suite's one change is to its example, whose
+  outer `</ds:Signature>` had been printed as a second `</ds:SignedInfo>` (#298); it is well-formed XML
+  now, and verifies once signed (see *Tests*). Core's changes since 19 October are storage-side and
+  editorial: the create resource operation's *Target Not Found*, and a status table mapping *Unknown
+  Requester*, *Not Permitted* and *Target Not Found* to 401, 403 and 404 (#263, in the Working Draft of
+  23 October), and ReSpec section references, with the IANA registrations citing core's own
+  *Authorization* section (#281). Its authentication section is the text of 21 September. The OpenID and
+  self-signed CID suites are still the Working Drafts of 15 October.
 
 ### Security
 
@@ -564,7 +575,7 @@ each may reject a document that used to verify. Check your issuers' documents be
 
 ### Tests
 
-**420 unit tests, 33 in `LwsAuthIT` and 5 in `ShadedJarContentsIT`** (0.2.0 had 144 and 23). Every
+**432 unit tests, 33 in `LwsAuthIT` and 5 in `ShadedJarContentsIT`** (0.2.0 had 144 and 23). Every
 rule a verifier applies now has a test that fails when the rule is deleted (R-44), each checked by
 breaking the rule: the OpenID rules decided after a fetch, against a local server playing the provider
 and the subject's host; the self-signed CID rules at the `verify()` level, and `did:web` resolution,
@@ -573,6 +584,13 @@ the access decisions (secret mode, the role, the rate limit's `429` without a ch
 checks. `LwsAuthIT` now mints through `SelfIssuedJwts`, verifies ES384, ES512 and all six RSA
 algorithms through Keycloak's own providers, and sends a signed SAML Response checked against a
 certificate in the request.
+
+**Each suite's own examples are tests** (R-55): the OpenID suite's ID Token and controlled identifier
+document, the self-signed CID suite's JWT and document (signed with RFC 7515 Appendix A.3's key, the
+one the example document publishes) and the SAML suite's Response, each taken as published, verify;
+as printed each fails only for its dates, and each is refused for another authorization server.
+`keycloak-crypto-default` is a test dependency so that a unit test can build an EC `JsonWebKey` the way
+Keycloak does; without Keycloak's `CryptoIntegration` it could not, which is why none had.
 
 Earlier in this cycle: 179 unit tests (from 144), 24 in `LwsAuthIT` (from 23). New: DID syntax, the did:web URL mapping against
 the method's own examples, did:key expansion against the did:key Method's worked example, the multibase

@@ -5,9 +5,10 @@ evaluation against the **W3C Linked Web Storage specifications as they stood on 
 
 - **Code reviewed:** `master` at `edda85b` (version `0.3.0-SNAPSHOT`), every file under `src/`,
   `pom.xml`, CI, Docker, scripts, the demo realm and `docs/`.
-- **Specification baseline:** `w3c/lws-protocol` at `9a08ff6` (19 October 2026), re-checked on 20
-  October 2026 — see [Specification baseline](#specification-baseline-19-october-2026). The review
-  itself was against `ef02548` (5 October 2026); nothing it relies on has changed since.
+- **Specification baseline:** `w3c/lws-protocol` at `db64f56` (9 November 2026: core and the SAML
+  suite republished that day), re-checked on 9 November 2026 — see
+  [Specification baseline](#specification-baseline-9-november-2026). The review itself was against
+  `ef02548` (5 October 2026); nothing it relies on has changed since.
 - **Tree state:** `mvn clean package` green on JDK 25 (GraalVM CE 25.0.4) — **179 unit tests, 0
   failures**. `LwsAuthIT` was **not** run (no Docker in the review environment). GitHub CI is green on
   `master` at `edda85b`; **every pull-request run since 1 October fails** (R-40).
@@ -64,18 +65,41 @@ Dependabot updates are stuck (R-40).
 
 ---
 
-## Specification baseline (19 October 2026)
+## Specification baseline (9 November 2026)
 
-| Document | Latest published version on 19 October 2026 | Editor's draft |
+| Document | Latest published version on 9 November 2026 | Editor's draft |
 |---|---|---|
-| Linked Web Storage Protocol 1.0 (core) | W3C Working Draft **19 October 2026** | `9a08ff6`; authentication text unchanged since 21 September |
+| Linked Web Storage Protocol 1.0 (core) | W3C Working Draft **9 November 2026** | `db64f56`; authentication text unchanged since 21 September |
 | LWS 1.0 Authn Suite: Self-signed Identity (Controlled Identifiers) | W3C Working Draft **15 October 2026** | same text; editorial since 21 September |
 | LWS 1.0 Authn Suite: OpenID Connect | W3C Working Draft **15 October 2026** | same text; editorial since 3 August |
-| LWS 1.0 Authn Suite: SAML 2.0 | W3C Working Draft **15 October 2026** | same text; editorial since 3 August |
+| LWS 1.0 Authn Suite: SAML 2.0 | W3C Working Draft **9 November 2026** | same text; editorial since 3 August |
 | LWS 1.0 Authn Suite: Self-signed Identity using did:key | **Discontinued Draft, 29 September 2026** | discontinued 18 September in favour of the self-signed CID suite |
 | Linked Web Storage Vocabulary | W3C Group Note Draft 14 July 2026 | `lws:OpenIdProvider` unchanged |
 | Controlled Identifiers (CID) 1.0 | W3C Recommendation, 15 May 2025 | — |
 | Decentralized Identifiers (DIDs) 1.1 | W3C Candidate Recommendation Snapshot, 5 March 2026 | context URL still answers `300` |
+
+**Re-check of 9 November 2026** (`9a08ff6..db64f56`, five commits; the published editions compared as
+rendered, the 15 October SAML and 23 October core Working Drafts against those of 9 November): no
+normative change to authentication, so no change to the verifiers. Each suite's own examples now run
+through its verifier (**R-55**).
+
+- **SAML (Working Draft of 9 November), its example only.** #298: the example's outer
+  `</ds:Signature>` closing tag had been printed as a second `</ds:SignedInfo>`, so the example of
+  15 October was not well-formed XML (#271 had fixed the rest). Nothing else in the suite changed.
+- **Core (Working Drafts of 23 October and 9 November), storage side and editorial.** #263: the create
+  resource operation's 404 rule ("MUST … unless another status code is more appropriate") becomes a
+  *Target Not Found* outcome, and the status table maps *Unknown Requester*, *Not Permitted* and *Target
+  Not Found* to 401, 403 and 404, a server MAY answer 404 for 403, and a note says creating several
+  levels of containers at once is not defined. #281: section references are ReSpec's, and the IANA
+  registrations of `lws-configuration`, `subject_token_types_supported` and
+  `subject_identifier_types_supported` cite core's own *Authorization* section, not "Section 5 of
+  LWS-Auth". #300 and #302 touch the editors' preview and CI. Core's *Authentication* section (§4.1 data
+  model, §4.2 validation, §4.3 token type identifiers) is the text of 21 September.
+- **The OpenID and self-signed CID suites** are still the Working Drafts of 15 October; nothing in them
+  has changed since.
+- **Not merged, watched:** branch `extract-oauth-profile` (5 November) moves core's *Authentication*
+  and *Authorization* sections, unchanged, into a new *LWS OAuth profile* document (`lws10-oauth`). See
+  **W-8**.
 
 **Re-check of 20 October 2026** (`ef02548..9a08ff6`, fourteen commits): no normative change to
 authentication, so no code change.
@@ -1405,6 +1429,27 @@ is needed.
   **Done.** The fixture document keeps its aliased term, which is what that test is for, with its `id`
   in the topmost map, and the self-signed request carries an `audience`. Neither verifier changed.
 
+- [x] **R-55 · No test ran the suites' own examples, and no unit test could build an EC `JsonWebKey`.**
+  `Medium` · tests · `S` · *demonstrated (9 November 2026)*
+  Checking the editions of 9 November against the code meant checking each MUST by reading, because no
+  test fed a verifier the credential and document a suite itself prints. Writing those tests showed why
+  none of the unit tests used an EC `JsonWebKey`, the key type both JWT suites' examples use: Keycloak's
+  `JWKParser` builds EC keys through `CryptoIntegration`, which Keycloak initializes at boot and a test
+  JVM never had, so the key failed with "Please init first before obtaining provider". The OpenID
+  verifier skips a key it cannot read (`jwksResolved: false`) and the self-signed verifier answers
+  "Credential could not be validated". Inside Keycloak both work (`LwsAuthIT` verifies an ES256
+  `JsonWebKey` through `/lws-ssi-cid`), so this was a hole in the unit tests, not in the provider. The
+  unit tests' EC credentials all came from `did:key` or `Multikey`, which decode without Keycloak.
+  **Done.** `keycloak-crypto-default` — Keycloak's own default `CryptoProvider` — is a test dependency,
+  and the tests that need it call `CryptoIntegration.init`. `OpenIdSpecificationExampleTest`,
+  `SelfSignedCidSpecificationExampleTest` and `SamlSpecificationExampleTest` take each suite's examples
+  as published (the 15 October OpenID and self-signed CID Working Drafts and the 9 November SAML one),
+  with only what a reader has to supply: a real signature (for the self-signed example, by RFC 7515
+  Appendix A.3's key, the one Example 2 publishes), the IDs SAML requires, current dates, and for OpenID
+  a local server standing in for the two hosts that are fetched. Each example verifies, and each fails
+  only on its dates as printed, on another authorization server, and (OpenID) on another client or
+  (SAML) on another key. Twelve tests, no verifier change.
+
 ---
 
 ## Watch — upstream and blocked
@@ -1445,12 +1490,21 @@ is needed.
   **Triggered and done 20 October 2026:** all three suites were republished on 15 October with wording
   changes only (see *Specification baseline*). The next trigger is a suite change that is not
   editorial, or a merge of #96, #152 or #200 (W-2, W-3).
+  **Triggered again and done 9 November 2026:** core and the SAML suite were republished that day, SAML
+  for a closing tag in its example (#298); nothing normative changed. Next trigger as before, or W-8.
 - [x] **W-7 · Report an upstream inconsistency.**
   Core's authorization-server metadata example lists `urn:ietf:params:oauth:token-type:id-token`
   (hyphen); the OpenID suite, core's own token-request example and RFC 8693 use `…:id_token`. The code
   uses `id_token`, correctly. File an issue on `w3c/lws-protocol` so `lws-server` does not copy the typo.
   **Fixed upstream** by w3c/lws-protocol#275 (`0e7ad18`, 15 October 2026), in core's Working Draft of
   19 October; no issue needed.
+- [ ] **W-8 · `w3c/lws-protocol` branch `extract-oauth-profile`** (`5a61ce2`, 5 November 2026; not
+  merged, no Working Draft). Moves core's *Authentication* section, unchanged, and its *Authorization*
+  section into a new *Linked Web Storage OAuth Profile 1.0* (`lws10-oauth`). The suites would then take
+  "authentication credential" and "authentication suite" from that document, "agent" still from core.
+  Nothing a verifier checks changes; if it merges, what this repository calls "core §4.1" (the
+  credential data model) becomes the OAuth profile's, in `COMPLIANCE.md`, `TODO.md` and the code
+  comments that cite it.
 
 ---
 

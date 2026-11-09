@@ -332,6 +332,17 @@
             <version>1.86</version>
             <scope>test</scope>
         </dependency>
+        <!-- Keycloak's default CryptoProvider, which the server initializes at boot. Outside Keycloak,
+             JWKParser cannot build an EC key without one ("Please init first before obtaining
+             provider"), so a unit test of an EC JsonWebKey — the key type both JWT suites' own
+             examples use — calls CryptoIntegration.init with this on the classpath. Found through
+             ServiceLoader, never named, hence in ignoredUnusedDeclaredDependencies below. -->
+        <dependency>
+            <groupId>org.keycloak</groupId>
+            <artifactId>keycloak-crypto-default</artifactId>
+            <version>${keycloak.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -516,6 +527,7 @@
                                 <ignoredUnusedDeclaredDependency>org.apache.commons:commons-compress</ignoredUnusedDeclaredDependency>
                                 <ignoredUnusedDeclaredDependency>commons-codec:commons-codec</ignoredUnusedDeclaredDependency>
                                 <ignoredUnusedDeclaredDependency>org.junit.jupiter:junit-jupiter</ignoredUnusedDeclaredDependency>
+                                <ignoredUnusedDeclaredDependency>org.keycloak:keycloak-crypto-default</ignoredUnusedDeclaredDependency>
                             </ignoredUnusedDeclaredDependencies>
                         </configuration>
                     </execution>
